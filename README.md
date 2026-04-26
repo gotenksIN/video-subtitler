@@ -1,27 +1,27 @@
 # Gemini Subtitle Aligner & Generator
 
-A Python tool that uses the Google Gemini API to align existing VTT subtitles to a video or generate new English subtitles from scratch. It splits the video into 60-second chunks and processes them concurrently to bypass API context limits and connection timeouts, then stitches them back together.
+A Python tool that uses the Google Gemini API to align existing VTT subtitles to a video or generate new English subtitles from scratch. It splits the video into chunks using FFmpeg stream-copying, processes them concurrently to avoid long API/proxy requests, and stitches the validated JSON results back into a final VTT file.
 
 ## Features
 
 - **Alignment Mode:** Pass an existing VTT file, and Gemini will fix the timestamps to perfectly match when dialogue is spoken or when editor text appears on screen.
 - **Generation Mode:** Pass just a video file, and Gemini will generate translated English subtitles with accurate timestamps from scratch.
-- **Concurrent Processing:** Splits the video into manageable chunks and processes them in parallel using multithreading for speed.
-- **Structured Outputs:** Uses Pydantic JSON schemas to enforce valid millisecond timestamps and prevent data loss.
-- **Resumable:** If an API error or timeout occurs, you can safely re-run the script and it will resume by skipping any already-processed chunks.
+- **Concurrent Processing:** Processes chunks in parallel using multiple Gemini API workers.
+- **Structured Outputs:** Uses Pydantic JSON schemas and local validation to catch malformed timestamps, dropped captions, or edited alignment text.
+- **Resumable:** Failed runs keep their work directory so a retry can skip valid completed chunks.
+- **Safe Outputs:** Writes chunk JSON and the final VTT atomically to avoid corrupting previous results.
 
 ## Prerequisites
 
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer and resolver.
-- [FFmpeg](https://ffmpeg.org/) - Must be installed and available in your system's PATH.
+- [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` must be installed and available in your system's PATH.
 
 ## Installation
 
 1. Clone this repository.
 2. Install the required dependencies using `uv`:
    ```bash
-   uv init
-   uv add google-genai pydub webvtt-py python-dotenv pydantic
+   uv sync
    ```
 3. Create a `.env` file in the root directory and add your Gemini API credentials:
    ```env
@@ -51,4 +51,14 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 ### Additional Options
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
 - `--workers`: Max concurrent API workers (default: `4`)
-- `--keep-chunks`: Keep the temporary `temp_video_chunks` directory after processing instead of deleting it (useful for debugging).
+- `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
+- `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
+- `--model`: Override `GEMINI_MODEL`.
+- `--keep-chunks`: Keep the per-input work directory under `temp_video_chunks/` after successful processing.
+
+## Notes
+
+- The script uses `-c copy` to avoid re-encoding. It parses the FFmpeg segment manifest to account for dynamic keyframe chunk durations, guaranteeing precise subtitle timestamps without the CPU overhead of re-encoding.
+- Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.
+- If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry.
+- Output VTT files are ignored by Git by default; move or rename files if you want to track specific subtitle outputs.
