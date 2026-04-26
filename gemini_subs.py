@@ -444,7 +444,7 @@ def stitch(chunk_dir, output_vtt):
         ))
 
     output_path = Path(output_vtt)
-    tmp_output = output_path.with_name(f"{output_path.name}.tmp")
+    tmp_output = output_path.with_name(f"{output_path.name}.tmp.vtt")
     final_vtt.save(str(tmp_output))
     os.replace(tmp_output, output_path)
     print(f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions.")
