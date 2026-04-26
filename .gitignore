@@ -1,0 +1,45 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+env/
+venv/
+ENV/
+
+# Environment variables (Sensitive)
+.env
+.env.local
+.env.*
+
+# Media files (Large files)
+*.mp4
+*.webm
+*.ogg
+*.mp3
+*.wav
+*.mkv
+
+# Temporary processing directories
+temp_video_chunks/
+video_chunks/
+chunks_1min/
+chunks_5min/
+chunks/
+
+# Subtitle output files
+*.vtt
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
