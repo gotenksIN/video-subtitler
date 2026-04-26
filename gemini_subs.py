@@ -196,9 +196,17 @@ def get_captions_for_chunk(vtt_path, start_sec, end_sec):
     return chunk_cues
 
 def validate_captions(captions, chunk_duration, original_cues=None):
+    seen_ids = set()
+    duplicate_ids = set()
+    for cap in captions:
+        if cap.id in seen_ids:
+            duplicate_ids.add(cap.id)
+        seen_ids.add(cap.id)
+    if duplicate_ids:
+        raise ValueError(f"Duplicate caption IDs: {sorted(duplicate_ids)}")
+
     if original_cues is not None:
         originals_by_id = {cue["id"]: cue for cue in original_cues}
-        seen_ids = {cap.id for cap in captions}
         expected_ids = set(originals_by_id)
         if seen_ids != expected_ids:
             missing = sorted(expected_ids - seen_ids)
@@ -226,7 +234,17 @@ def validate_captions(captions, chunk_duration, original_cues=None):
             "text": cap.text,
         })
 
-    return sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
+    validated = sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
+    if original_cues is None:
+        previous_end = None
+        for cap in validated:
+            start = parse_time(cap["start"])
+            end = parse_time(cap["end"])
+            if previous_end is not None and start < previous_end - 0.05:
+                raise ValueError(f"Generated captions overlap near id={cap['id']}")
+            previous_end = max(previous_end or 0, end)
+
+    return validated
 
 def load_cached_captions(out_json, chunk_duration, original_cues):
     if not os.path.exists(out_json):
@@ -275,9 +293,13 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         Your task:
         1. Fix the timestamps of these captions so they align perfectly with the video.
         2. Crucially, match the timing with WHEN THE TEXT APPEARS VISUALLY ON SCREEN (editors' flair text) OR when the dialogue is spoken.
-        3. Do NOT change the original text. Return exactly what was provided in the 'text' field.
-        4. Return a complete list of all captions, ensuring none are dropped.
-        5. Use timestamps relative to this chunk, from 00:00:00.000 to {format_time(chunk_duration)}.
+        3. Preserve every original 'id' exactly once.
+        4. Do NOT change, translate, correct, split, merge, or reorder the original text. Return exactly what was provided in the 'text' field.
+        5. Return a complete list of all captions, ensuring none are dropped.
+        6. Keep captions sorted by start time.
+        7. Use timestamps relative to this chunk, from 00:00:00.000 to {format_time(chunk_duration)}.
+
+        Return the result as a JSON object matching the required schema with a 'captions' array.
 
         Original Captions:
         {cues_json_str}
@@ -296,7 +318,15 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         Your task:
         1. Generate accurate English subtitles for the dialogue and any relevant on-screen text.
         2. Create accurate timestamps for each caption relative to the start of this chunk (ranging from 00:00:00.000 to {format_time(chunk_duration)}).
-        3. Return a complete JSON list of all generated captions with their translated 'text'.
+        3. Use natural English translations when dialogue is not English.
+        4. Do not summarize, explain, or infer missing dialogue.
+        5. Include meaningful on-screen text when it matters for understanding the video.
+        6. Ignore decorative text, logos, watermarks, and unrelated UI.
+        7. Use sequential integer IDs starting at 0.
+        8. Keep captions sorted by start time and do not overlap them.
+        9. Split long speech into readable captions.
+
+        Return the result as a JSON object matching the required schema with a 'captions' array.
         """
 
     try:
