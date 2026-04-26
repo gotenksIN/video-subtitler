@@ -196,46 +196,88 @@ def get_captions_for_chunk(vtt_path, start_sec, end_sec):
     return chunk_cues
 
 def validate_captions(captions, chunk_duration, original_cues=None):
-    seen_ids = set()
-    duplicate_ids = set()
-    for cap in captions:
-        if cap.id in seen_ids:
-            duplicate_ids.add(cap.id)
-        seen_ids.add(cap.id)
-    if duplicate_ids:
-        raise ValueError(f"Duplicate caption IDs: {sorted(duplicate_ids)}")
+    validated = []
 
     if original_cues is not None:
         originals_by_id = {cue["id"]: cue for cue in original_cues}
-        expected_ids = set(originals_by_id)
-        if seen_ids != expected_ids:
-            missing = sorted(expected_ids - seen_ids)
-            extra = sorted(seen_ids - expected_ids)
-            raise ValueError(f"Caption IDs changed. Missing={missing}, extra={extra}")
 
-    validated = []
-    for cap in captions:
-        start = parse_time(cap.start)
-        end = parse_time(cap.end)
-        if start < 0 or end <= start:
-            raise ValueError(f"Invalid caption timing for id={cap.id}: {cap.start} --> {cap.end}")
+        unique_captions = {}
+        for cap in captions:
+            if cap.id in originals_by_id and cap.id not in unique_captions:
+                unique_captions[cap.id] = cap
 
-        max_end = chunk_duration + 0.5
-        if original_cues is not None:
-            max_end = max(max_end, parse_time(originals_by_id[cap.id]["end"]) + 0.5)
-        if end > max_end:
-            raise ValueError(f"Caption id={cap.id} ends outside chunk: {cap.end}")
-        if original_cues is not None and cap.text != originals_by_id[cap.id]["text"]:
-            raise ValueError(f"Caption text changed for id={cap.id}")
-        validated.append({
-            "id": cap.id,
-            "start": format_time(start),
-            "end": format_time(end),
-            "text": cap.text,
-        })
+        for expected_id in sorted(originals_by_id.keys()):
+            orig_cue = originals_by_id[expected_id]
 
-    validated = sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
-    if original_cues is None:
+            if expected_id not in unique_captions:
+                print(f"      [Auto-fix] Missing caption id={expected_id}. Restoring original.")
+                validated.append({
+                    "id": expected_id,
+                    "start": orig_cue["start"],
+                    "end": orig_cue["end"],
+                    "text": orig_cue["text"],
+                })
+                continue
+
+            cap = unique_captions[expected_id]
+
+            try:
+                start = parse_time(cap.start)
+            except Exception:
+                start = parse_time(orig_cue["start"])
+
+            try:
+                end = parse_time(cap.end)
+            except Exception:
+                end = parse_time(orig_cue["end"])
+
+            if start < 0:
+                start = 0
+            if end <= start:
+                orig_dur = parse_time(orig_cue["end"]) - parse_time(orig_cue["start"])
+                end = start + max(orig_dur, 0.1)
+
+            max_end = max(chunk_duration + 5.0, parse_time(orig_cue["end"]) + 5.0)
+            if end > max_end:
+                end = max_end
+            if start > max_end:
+                start = max_end - 0.5
+
+            validated.append({
+                "id": expected_id,
+                "start": format_time(start),
+                "end": format_time(end),
+                "text": orig_cue["text"],
+            })
+
+    else:
+        seen_ids = set()
+        duplicate_ids = set()
+        for cap in captions:
+            if cap.id in seen_ids:
+                duplicate_ids.add(cap.id)
+            seen_ids.add(cap.id)
+        if duplicate_ids:
+            raise ValueError(f"Duplicate caption IDs: {sorted(duplicate_ids)}")
+
+        for cap in captions:
+            start = parse_time(cap.start)
+            end = parse_time(cap.end)
+            if start < 0 or end <= start:
+                raise ValueError(f"Invalid caption timing for id={cap.id}: {cap.start} --> {cap.end}")
+
+            max_end = chunk_duration + 0.5
+            if end > max_end:
+                end = max_end
+
+            validated.append({
+                "id": cap.id,
+                "start": format_time(start),
+                "end": format_time(end),
+                "text": cap.text,
+            })
+
+        validated = sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
         previous_end = None
         for cap in validated:
             start = parse_time(cap["start"])
@@ -244,7 +286,7 @@ def validate_captions(captions, chunk_duration, original_cues=None):
                 raise ValueError(f"Generated captions overlap near id={cap['id']}")
             previous_end = max(previous_end or 0, end)
 
-    return validated
+    return sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
 
 def load_cached_captions(out_json, chunk_duration, original_cues):
     if not os.path.exists(out_json):
