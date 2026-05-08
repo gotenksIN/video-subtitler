@@ -33,6 +33,9 @@ MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 
+def clamp(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
 def probe_video_format(path):
     cmd = [
         "ffprobe", "-v", "error", "-show_entries", "format=format_name",
@@ -181,18 +184,34 @@ def list_chunks(chunk_dir):
 def get_captions_for_chunk(vtt_path, start_sec, end_sec):
     vtt = webvtt.read(vtt_path)
     chunk_cues = []
+    chunk_duration = max(end_sec - start_sec, 0.0)
 
     for i, caption in enumerate(vtt):
         cap_start = parse_time(caption.start)
-        if start_sec <= cap_start < end_sec:
-            rel_start = cap_start - start_sec
-            rel_end = parse_time(caption.end) - start_sec
-            chunk_cues.append({
-                "id": i,
-                "start": format_time(rel_start),
-                "end": format_time(rel_end),
-                "text": caption.text
-            })
+        cap_end = parse_time(caption.end)
+        if cap_end <= cap_start:
+            continue
+
+        # Assign boundary captions by midpoint instead of raw start time so lines
+        # that straddle a chunk edge stay with the chunk that contains most of them.
+        midpoint = (cap_start + cap_end) / 2
+        if not (start_sec <= midpoint < end_sec):
+            continue
+
+        rel_start = clamp(cap_start - start_sec, 0.0, chunk_duration)
+        rel_end = clamp(cap_end - start_sec, 0.0, chunk_duration)
+        if rel_end <= rel_start:
+            rel_end = clamp(rel_start + 0.1, 0.1, chunk_duration)
+            if rel_end <= rel_start:
+                rel_start = clamp(chunk_duration - 0.1, 0.0, chunk_duration)
+                rel_end = chunk_duration
+
+        chunk_cues.append({
+            "id": i,
+            "start": format_time(rel_start),
+            "end": format_time(rel_end),
+            "text": caption.text
+        })
     return chunk_cues
 
 def validate_captions(captions, chunk_duration, original_cues=None):
