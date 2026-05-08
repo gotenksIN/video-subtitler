@@ -65,6 +65,7 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 - `--overlap-format`: Container for overlap clips. Default: `webm`.
 - `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
+- `--thinking-budget`: Gemini thinking token budget. Use `0` to disable or minimize thinking where the selected model supports it.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.

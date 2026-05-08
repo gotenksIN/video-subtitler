@@ -118,6 +118,7 @@ def build_manifest(args):
         "format": "stream-copy-v1",
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
+        "thinking_budget": args.thinking_budget,
         "text_mode": args.text_mode if args.vtt_file else None,
         "overlap": args.overlap,
         "overlap_format": args.overlap_format if args.overlap else None,
@@ -299,7 +300,7 @@ def collect_api_results(futures):
 
 def process_chunks(
     api_key, base_url, video_file, chunk_dir, chunks, overlap_sec, clip_ext,
-    clip_workers, api_workers, vtt_file, model_name, chunk_mime, text_mode,
+    clip_workers, api_workers, vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
@@ -311,7 +312,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, text_mode,
+                    vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
                 ): chunk["clip_name"]
                 for chunk in processing_chunks
             }
@@ -344,7 +345,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     processing_chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, text_mode,
+                    vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
                 )
             ] = processing_chunk["clip_name"]
 
@@ -505,7 +506,17 @@ def create_client(api_key, base_url):
         kwargs["http_options"] = {"base_url": base_url}
     return genai.Client(**kwargs)
 
-def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, text_mode):
+def generate_content_config(thinking_budget):
+    kwargs = {
+        "temperature": 0.0,
+        "response_mime_type": "application/json",
+        "response_schema": AlignmentResponse,
+    }
+    if thinking_budget is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
+    return types.GenerateContentConfig(**kwargs)
+
+def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, text_mode, thinking_budget):
     chunk_idx = chunk["idx"]
     clip_name = chunk["clip_name"]
     clip_start = chunk["clip_start"]
@@ -609,11 +620,7 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
                     types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
                     prompt
                 ],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    response_mime_type="application/json",
-                    response_schema=AlignmentResponse,
-                )
+                config=generate_content_config(thinking_budget)
             )
 
         parsed_response = AlignmentResponse.model_validate_json(response.text)
@@ -706,6 +713,7 @@ def main():
     parser.add_argument("--overlap-format", choices=sorted(OVERLAP_FORMATS.keys()), default="webm", help="Container to use for re-encoded overlap clips (default: webm)")
     parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
+    parser.add_argument("--thinking-budget", type=int, default=None, help="Gemini thinking token budget. Use 0 to disable/minimize thinking where supported.")
     parser.add_argument("--text-mode", choices=["preserve", "fix"], default="preserve", help="Whether alignment mode preserves original subtitle text or lets the model fix awkward translation")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
 
@@ -721,6 +729,10 @@ def main():
 
     if args.clip_workers < 0:
         print("Error: --clip-workers must be greater than or equal to 0")
+        sys.exit(1)
+
+    if args.thinking_budget is not None and args.thinking_budget < 0:
+        print("Error: --thinking-budget must be greater than or equal to 0")
         sys.exit(1)
 
     if args.overlap < 0:
@@ -779,6 +791,7 @@ def main():
             args.model,
             manifest["process_mime"],
             args.text_mode if args.vtt_file else "preserve",
+            args.thinking_budget,
         )
         if failed:
             raise RuntimeError(
