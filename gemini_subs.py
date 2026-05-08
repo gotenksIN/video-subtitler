@@ -549,8 +549,9 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         text_instruction = (
             "4. Do NOT change, translate, correct, split, merge, or reorder the original text. Return exactly what was provided in the 'text' field.\n"
             if text_mode == "preserve" else
-            "4. You may correct awkward or incorrect English, but keep each caption's meaning faithful to the spoken line or visible text.\n"
+            "4. Correct awkward or incorrect English, but keep each caption's meaning faithful to the spoken line or visible text.\n"
             "5. Do not hallucinate missing dialogue, punch up jokes, or guess uncertain names. Prefer conservative transliteration over invented wording.\n"
+            "6. Preserve native cultural terms and foods rather than over-localizing them, and keep original native nicknames.\n"
         )
         prompt = f"""
         You are an expert subtitle aligner.
@@ -588,15 +589,16 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
         2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
         3. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-        4. Preserve names and recurring terms consistently within the chunk.
+        4. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
         5. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-        6. Do not summarize, explain, or infer missing dialogue.
-        7. Include meaningful on-screen text when it matters for understanding the video.
-        8. Ignore decorative text, logos, watermarks, and unrelated UI.
-        9. Use sequential integer IDs starting at 0.
-        10. Keep captions sorted by start time and do not overlap them.
-        11. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
-        12. Split long speech into readable, natural phrases.
+        6. Preserve native cultural terms and foods rather than over-localizing them.
+        7. Do not summarize, explain, or infer missing dialogue.
+        8. Include meaningful on-screen text when it matters for understanding the video.
+        9. Ignore decorative text, logos, watermarks, and unrelated UI.
+        10. Use sequential integer IDs starting at 0.
+        11. Keep captions sorted by start time and do not overlap them.
+        12. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
+        13. Split long speech into readable, natural phrases.
 
         Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
         """
