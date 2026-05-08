@@ -108,6 +108,7 @@ def build_manifest(args):
         "chunk_dur": args.chunk_dur,
         "format": "stream-copy-v1",
         "mode": "align" if args.vtt_file else "generate",
+        "model": args.model,
         "text_mode": args.text_mode if args.vtt_file else None,
         "chunk_ext": ext,
         "chunk_mime": mime,
@@ -393,13 +394,15 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         Your task:
         1. Generate accurate English subtitles for the dialogue and any relevant on-screen text.
         2. Create accurate timestamps for each caption relative to the start of this chunk (ranging from 00:00:00.000 to {format_time(chunk_duration)}).
-        3. Use natural English translations when dialogue is not English.
-        4. Do not summarize, explain, or infer missing dialogue.
-        5. Include meaningful on-screen text when it matters for understanding the video.
-        6. Ignore decorative text, logos, watermarks, and unrelated UI.
-        7. Use sequential integer IDs starting at 0.
-        8. Keep captions sorted by start time and do not overlap them.
-        9. Split long speech into readable captions.
+        3. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
+        4. Preserve names and recurring terms consistently within the chunk.
+        5. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
+        6. Do not summarize, explain, or infer missing dialogue.
+        7. Include meaningful on-screen text when it matters for understanding the video.
+        8. Ignore decorative text, logos, watermarks, and unrelated UI.
+        9. Use sequential integer IDs starting at 0.
+        10. Keep captions sorted by start time and do not overlap them.
+        11. Split long speech into readable captions.
 
         Return the result as a JSON object matching the required schema with a 'captions' array.
         """
@@ -424,7 +427,7 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
                     prompt
                 ],
                 config=types.GenerateContentConfig(
-                    temperature=0.1,
+                    temperature=0.0,
                     response_mime_type="application/json",
                     response_schema=AlignmentResponse,
                 )
@@ -494,7 +497,7 @@ def main():
     parser.add_argument("--output", "-o", default="output_subtitles.vtt", help="Output path for the generated/aligned VTT file")
     parser.add_argument("--api-key", default=os.environ.get("GEMINI_API_KEY"), help="Gemini API Key")
     parser.add_argument("--base-url", default=os.environ.get("GEMINI_API_BASE"), help="Base URL for Gemini API (optional)")
-    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite-preview"), help="Gemini model to use")
+    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"), help="Gemini model to use")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--text-mode", choices=["preserve", "fix"], default="preserve", help="Whether alignment mode preserves original subtitle text or lets the model fix awkward translation")
