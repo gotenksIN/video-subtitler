@@ -128,7 +128,6 @@ def build_manifest(args):
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
         "thinking_budget": args.thinking_budget,
-        "text_mode": args.text_mode if args.vtt_file else None,
         "overlap": args.overlap,
         "overlap_format": args.overlap_format if args.overlap else None,
         "clip_workers": args.clip_workers if args.overlap else 0,
@@ -309,7 +308,7 @@ def collect_api_results(futures):
 
 def process_chunks(
     api_key, base_url, video_file, chunk_dir, chunks, overlap_sec, clip_ext,
-    clip_workers, api_workers, vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
+    clip_workers, api_workers, vtt_file, model_name, chunk_mime, thinking_budget,
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
@@ -321,7 +320,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
+                    vtt_file, model_name, chunk_mime, thinking_budget,
                 ): chunk["clip_name"]
                 for chunk in processing_chunks
             }
@@ -354,7 +353,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     processing_chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, text_mode, thinking_budget,
+                    vtt_file, model_name, chunk_mime, thinking_budget,
                 )
             ] = processing_chunk["clip_name"]
 
@@ -394,14 +393,8 @@ def get_captions_for_chunk(vtt_path, owner_start_sec, owner_end_sec, clip_start_
         })
     return chunk_cues
 
-def select_alignment_text(cap, orig_cue, text_mode):
-    if text_mode == "preserve":
-        return orig_cue["text"]
 
-    text = cap.text.strip()
-    return text or orig_cue["text"]
-
-def validate_captions(captions, chunk_duration, original_cues=None, text_mode="preserve"):
+def validate_captions(captions, chunk_duration, original_cues=None):
     validated = []
 
     if original_cues is not None:
@@ -453,7 +446,7 @@ def validate_captions(captions, chunk_duration, original_cues=None, text_mode="p
                 "id": expected_id,
                 "start": format_time(start),
                 "end": format_time(end),
-                "text": select_alignment_text(cap, orig_cue, text_mode),
+                "text": orig_cue["text"],
             })
 
     else:
@@ -494,14 +487,14 @@ def validate_captions(captions, chunk_duration, original_cues=None, text_mode="p
 
     return sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
 
-def load_cached_captions(out_json, chunk_duration, original_cues, text_mode="preserve"):
+def load_cached_captions(out_json, chunk_duration, original_cues):
     if not os.path.exists(out_json):
         return None
     try:
         with open(out_json, "r", encoding="utf-8") as f:
             data = json.load(f)
         response = AlignmentResponse(captions=data)
-        return validate_captions(response.captions, chunk_duration, original_cues, text_mode=text_mode)
+        return validate_captions(response.captions, chunk_duration, original_cues, )
     except Exception as e:
         print(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
@@ -525,7 +518,7 @@ def generate_content_config(thinking_budget):
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
     return types.GenerateContentConfig(**kwargs)
 
-def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, text_mode, thinking_budget):
+def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, thinking_budget):
     chunk_idx = chunk["idx"]
     clip_name = chunk["clip_name"]
     clip_start = chunk["clip_start"]
@@ -550,18 +543,11 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
             return True
 
         cues_json_str = json.dumps(original_cues, ensure_ascii=False, indent=2)
-        cached = load_cached_captions(out_json, clip_duration, original_cues, text_mode=text_mode)
+        cached = load_cached_captions(out_json, clip_duration, original_cues, )
         if cached is not None:
             print(f"Skipping {clip_name} - already processed.")
             return True
 
-        text_instruction = (
-            "4. Do NOT change, translate, correct, split, merge, or reorder the original text. Return exactly what was provided in the 'text' field.\n"
-            if text_mode == "preserve" else
-            "4. Correct awkward or incorrect English, but keep each caption's meaning faithful to the spoken line or visible text.\n"
-            "5. Do not hallucinate missing dialogue, punch up jokes, or guess uncertain names. Prefer conservative transliteration over invented wording.\n"
-            "6. Preserve native cultural terms and foods rather than over-localizing them, and keep original native nicknames.\n"
-        )
         prompt = f"""
         You are an expert subtitle aligner.
         Watch this {clip_duration:.3f}-second video clip.
@@ -574,7 +560,8 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         3. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
         4. Crucially, if a caption corresponds to visual text (editors' flair text), match the timing with EXACTLY when the text appears and disappears visually on screen.
         5. Preserve every original 'id' exactly once.
-        {text_instruction}7. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
+        6. Do NOT change, translate, correct, split, merge, or reorder the original text. Return exactly what was provided in the 'text' field.
+        7. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
         8. Keep captions sorted by start time.
         9. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
         10. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly.
@@ -642,8 +629,7 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         validated = validate_captions(
             parsed_response.captions,
             clip_duration,
-            original_cues if vtt_file else None,
-            text_mode=text_mode,
+            original_cues if vtt_file else None
         )
         atomic_write_json(out_json, validated)
 
@@ -790,7 +776,7 @@ def main():
     parser.add_argument("--api-key", default=os.environ.get("GEMINI_API_KEY"), help="Gemini API Key")
     parser.add_argument("--base-url", default=os.environ.get("GEMINI_API_BASE"), help="Base URL for Gemini API (optional)")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"), help="Gemini model to use")
-    parser.add_argument("--refine-text", action="store_true", help="Run a global text refinement pass on the final VTT after alignment/generation")
+    parser.add_argument("--disable-text-refine", action="store_true", help="Disable the global text refinement pass after alignment/generation")
     parser.add_argument("--refine-only", action="store_true", help="Skip video processing entirely; only run global text refinement on the input VTT file")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
@@ -798,7 +784,6 @@ def main():
     parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--thinking-budget", type=int, default=0, help="Gemini thinking token budget (default: 0).")
-    parser.add_argument("--text-mode", choices=["preserve", "fix"], default="preserve", help="Whether alignment mode preserves original subtitle text or lets the model fix awkward translation")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
 
     args = parser.parse_args()
@@ -844,8 +829,8 @@ def main():
 
     clip_workers = args.clip_workers or suggested_clip_workers()
 
-    if not args.vtt_file and args.text_mode != "preserve":
-        print("Warning: --text-mode is ignored in generation mode because no VTT file was provided.")
+    if not args.vtt_file:
+        print("Warning: generation mode without VTT.")
 
     if not os.path.exists(args.video_file):
         print(f"Error: Video file not found: {args.video_file}")
@@ -889,7 +874,6 @@ def main():
             args.vtt_file,
             args.model,
             manifest["process_mime"],
-            args.text_mode if args.vtt_file else "preserve",
             args.thinking_budget,
         )
         if failed:
@@ -902,7 +886,7 @@ def main():
         stitch(chunk_dir, args.output)
 
         # 4. Optional Global Refinement Pass
-        if args.refine_text:
+        if not args.disable_text_refine:
             global_refine_subtitles(
                 args.output, args.output, args.api_key, args.base_url, args.model, args.thinking_budget
             )
