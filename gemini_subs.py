@@ -147,7 +147,12 @@ def release_lock(lock_path):
 
 def clean_incomplete_split(chunk_dir):
     for name in os.listdir(chunk_dir):
-        if re.fullmatch(r"chunk_\d+\.(mp4|webm)", name) or re.fullmatch(r"context_chunk_\d+\.(mp4|webm)", name) or re.fullmatch(r"aligned_chunk_\d+\.json(\.tmp)?", name) or name == "segments.csv":
+        if (
+            re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
+            or re.fullmatch(r"context_chunk_\d+\.(mp4|webm)(\.tmp)?", name)
+            or re.fullmatch(r"aligned_chunk_\d+\.json(\.tmp)?", name)
+            or name == "segments.csv"
+        ):
             os.remove(os.path.join(chunk_dir, name))
 
 def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
@@ -242,6 +247,9 @@ def create_overlap_clip(video_file, chunk_dir, chunk_idx, clip_start, clip_end, 
     clip_path = os.path.join(chunk_dir, clip_name)
     if os.path.exists(clip_path):
         return clip_name
+    tmp_path = f"{clip_path}.tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
     duration = clip_end - clip_start
     if duration <= 0:
@@ -254,9 +262,16 @@ def create_overlap_clip(video_file, chunk_dir, chunk_idx, clip_start, clip_end, 
         "-ss", format_time(clip_start), "-t", f"{duration:.3f}",
         "-map", "0:v:0", "-map", "0:a?", "-sn",
         *overlap_codec_args(clip_ext),
-        clip_path,
+        "-f", "webm" if clip_ext == ".webm" else "mp4",
+        tmp_path,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.replace(tmp_path, clip_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     return clip_name
 
 def attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext):
@@ -270,23 +285,72 @@ def attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext):
         "clip_name": clip_name,
     }
 
-def prepare_processing_chunks(video_file, chunk_dir, chunks, overlap_sec, clip_ext, clip_workers):
+def collect_api_results(futures):
+    failed = []
+    for future in concurrent.futures.as_completed(futures):
+        chunk_name = futures[future]
+        try:
+            if not future.result():
+                failed.append(chunk_name)
+        except Exception as e:
+            print(f"ERROR processing {chunk_name}: {e}")
+            failed.append(chunk_name)
+    return failed
+
+def process_chunks(
+    api_key, base_url, video_file, chunk_dir, chunks, overlap_sec, clip_ext,
+    clip_workers, api_workers, vtt_file, model_name, chunk_mime, text_mode,
+):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
-        return [attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext) for chunk in windows]
+        processing_chunks = [attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext) for chunk in windows]
+        print(f"Processing {len(processing_chunks)} chunks using {api_workers} workers...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as executor:
+            futures = {
+                executor.submit(
+                    process_chunk,
+                    api_key, base_url,
+                    chunk, chunk_dir,
+                    vtt_file, model_name, chunk_mime, text_mode,
+                ): chunk["clip_name"]
+                for chunk in processing_chunks
+            }
+            return collect_api_results(futures)
 
-    print(f"Creating {len(windows)} overlap clips using {clip_workers} workers...")
-    prepared = [None] * len(windows)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=clip_workers) as executor:
-        futures = {
-            executor.submit(attach_overlap_clip, video_file, chunk_dir, chunk, overlap_sec, clip_ext): chunk["idx"]
+    print(
+        f"Creating {len(windows)} overlap clips using {clip_workers} workers "
+        f"and processing them using {api_workers} API workers..."
+    )
+    failed = []
+    api_futures = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=clip_workers) as clip_executor, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as api_executor:
+        clip_futures = {
+            clip_executor.submit(attach_overlap_clip, video_file, chunk_dir, chunk, overlap_sec, clip_ext): chunk
             for chunk in windows
         }
-        for future in concurrent.futures.as_completed(futures):
-            chunk_idx = futures[future]
-            prepared[chunk_idx] = future.result()
+        for future in concurrent.futures.as_completed(clip_futures):
+            chunk = clip_futures[future]
+            chunk_name = f"context_chunk_{chunk['idx']:03d}{clip_ext}"
+            try:
+                processing_chunk = future.result()
+            except Exception as e:
+                print(f"ERROR creating {chunk_name}: {e}")
+                failed.append(chunk_name)
+                continue
 
-    return prepared
+            api_futures[
+                api_executor.submit(
+                    process_chunk,
+                    api_key, base_url,
+                    processing_chunk, chunk_dir,
+                    vtt_file, model_name, chunk_mime, text_mode,
+                )
+            ] = processing_chunk["clip_name"]
+
+        failed.extend(collect_api_results(api_futures))
+
+    return failed
 
 def get_captions_for_chunk(vtt_path, owner_start_sec, owner_end_sec, clip_start_sec, clip_duration):
     vtt = webvtt.read(vtt_path)
@@ -696,42 +760,27 @@ def main():
         if not chunks:
             raise RuntimeError("No video chunks were created")
 
-        processing_chunks = prepare_processing_chunks(
+        # 2. Process chunks concurrently. Overlap runs pipeline clip creation into API calls.
+        failed = process_chunks(
+            args.api_key,
+            args.base_url,
             args.video_file,
             chunk_dir,
             chunks,
             args.overlap,
             manifest["process_ext"],
             clip_workers,
+            args.workers,
+            args.vtt_file,
+            args.model,
+            manifest["process_mime"],
+            args.text_mode if args.vtt_file else "preserve",
         )
-
-        # 2. Process chunks concurrently
-        print(f"Processing {len(processing_chunks)} chunks using {args.workers} workers...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(
-                    process_chunk,
-                    args.api_key, args.base_url,
-                    chunk, chunk_dir,
-                    args.vtt_file, args.model, manifest["process_mime"], args.text_mode if args.vtt_file else "preserve"
-                ): chunk["clip_name"]
-                for chunk in processing_chunks
-            }
-            failed = []
-            for future in concurrent.futures.as_completed(futures):
-                chunk_name = futures[future]
-                try:
-                    if not future.result():
-                        failed.append(chunk_name)
-                except Exception as e:
-                    print(f"ERROR processing {chunk_name}: {e}")
-                    failed.append(chunk_name)
-
-            if failed:
-                raise RuntimeError(
-                    f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
-                    f"Keeping {chunk_dir} so you can retry."
-                )
+        if failed:
+            raise RuntimeError(
+                f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
+                f"Keeping {chunk_dir} so you can retry."
+            )
 
         # 3. Stitch chunks together
         stitch(chunk_dir, args.output)
