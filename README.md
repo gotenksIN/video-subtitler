@@ -1,6 +1,6 @@
 # Gemini Subtitle Aligner & Generator
 
-A Python tool that uses the Google Gemini API to align existing VTT subtitles to a video or generate new English subtitles from scratch. It splits the video into chunks using FFmpeg stream-copying, processes them concurrently to avoid long API/proxy requests, and stitches the validated JSON results back into a final VTT file.
+A Python tool that uses the Google Gemini API to align existing VTT subtitles to a video or generate new English subtitles from scratch. It splits the video into chunks, adds overlapping context clips by default, processes them concurrently, and stitches the validated JSON results back into a final VTT file.
 
 ## Features
 
@@ -29,7 +29,7 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
    
    # Optional: Set a custom base URL or change the model
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3-flash-preview
+   GEMINI_MODEL=gemini-3.1-pro-preview
    ```
 
 ## Usage
@@ -47,9 +47,9 @@ If the original subtitles are mistranslated and you want Gemini to correct the E
 uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --output "fixed_output.vtt"
 ```
 
-If captions near chunk boundaries still drift, add overlap context around each chunk:
+To change the default 5-second boundary context window:
 ```bash
-uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --overlap 5 --output "fixed_output.vtt"
+uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --overlap 3 --output "fixed_output.vtt"
 ```
 
 ### Generation Mode (Creating new subtitles from scratch)
@@ -61,11 +61,11 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 ### Additional Options
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
-- `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing.
-- `--overlap-format`: Container for overlap clips. Default: `webm`.
+- `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. Default: `5`.
+- `--overlap-format`: Container for overlap clips. Default: `mp4`.
 - `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
-- `--thinking-budget`: Gemini thinking token budget. Use `0` to disable or minimize thinking where the selected model supports it.
+- `--thinking-budget`: Gemini thinking token budget. Default: `0`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.
@@ -74,9 +74,9 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 ## Notes
 
-- The script uses `-c copy` to avoid re-encoding. It parses the FFmpeg segment manifest to account for dynamic keyframe chunk durations, guaranteeing precise subtitle timestamps without the CPU overhead of re-encoding.
+- The initial split uses `-c copy`. With the default `--overlap 5`, temporary overlap clips are re-encoded so chunk boundaries can land exactly where subtitle timing needs them.
 - Alignment mode assigns captions to chunks by cue midpoint instead of raw start time, which reduces drift for lines that straddle chunk boundaries.
-- `--overlap` is the quality-first option: it re-encodes temporary context clips so chunk boundaries can land exactly where subtitle timing needs them.
+- Set `--overlap 0` to disable overlap re-encoding and process stream-copy chunks directly.
 - Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.
 - If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry.
 - Output VTT files are ignored by Git by default; move or rename files if you want to track specific subtitle outputs.
