@@ -744,6 +744,10 @@ def main():
         print(f"Error: VTT file not found: {args.vtt_file}")
         sys.exit(1)
 
+    if not args.api_key:
+        print("Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key.")
+        sys.exit(1)
+
     manifest, chunk_dir = build_manifest(args)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_path = None
