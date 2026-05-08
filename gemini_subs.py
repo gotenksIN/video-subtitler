@@ -487,12 +487,12 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         1. Fix the timestamps of these captions so they align perfectly with the video.
         2. Crucially, match the timing with WHEN THE TEXT APPEARS VISUALLY ON SCREEN (editors' flair text) OR when the dialogue is spoken.
         3. Preserve every original 'id' exactly once.
-        {text_instruction}6. Return a complete list of all captions, ensuring none are dropped.
+        {text_instruction}6. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
         7. Keep captions sorted by start time.
         8. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
-        9. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly, but do not add captions beyond the provided IDs.
+        9. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly.
 
-        Return the result as a JSON object matching the required schema with a 'captions' array.
+        Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
 
         Original Captions:
         {cues_json_str}
@@ -510,20 +510,20 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
 
         Your task:
-        1. Generate accurate English subtitles for dialogue and relevant on-screen text whose midpoint belongs inside the main chunk window.
-        2. Use the surrounding context to understand timing and meaning, but do not return captions that belong only to the context area.
-        3. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
-        4. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-        5. Preserve names and recurring terms consistently within the chunk.
-        6. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-        7. Do not summarize, explain, or infer missing dialogue.
-        8. Include meaningful on-screen text when it matters for understanding the video.
-        9. Ignore decorative text, logos, watermarks, and unrelated UI.
-        10. Use sequential integer IDs starting at 0.
-        11. Keep captions sorted by start time and do not overlap them.
-        12. Split long speech into readable captions.
+        1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
+        2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
+        3. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
+        4. Preserve names and recurring terms consistently within the chunk.
+        5. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
+        6. Do not summarize, explain, or infer missing dialogue.
+        7. Include meaningful on-screen text when it matters for understanding the video.
+        8. Ignore decorative text, logos, watermarks, and unrelated UI.
+        9. Use sequential integer IDs starting at 0.
+        10. Keep captions sorted by start time and do not overlap them.
+        11. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
+        12. Split long speech into readable, natural phrases.
 
-        Return the result as a JSON object matching the required schema with a 'captions' array.
+        Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
         """
 
     try:
