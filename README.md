@@ -26,7 +26,7 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
 3. Create a `.env` file in the root directory and add your Gemini API credentials:
    ```env
    GEMINI_API_KEY=your_api_key_here
-   
+
    # Optional: Set a custom base URL or change the model
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
    GEMINI_MODEL=gemini-3.1-pro-preview
@@ -59,7 +59,22 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 ```
 `--text-mode` is ignored in generation mode because there is no existing VTT text to preserve or fix.
 
+### Two-Stage Processing & Text Refinement
+For maximum quality, you can instruct Gemini to run a **global text refinement pass** on the final VTT. Because chunk-based processing limits context to 60 seconds, a final global pass allows the model to see the *entire* subtitle script at once, fixing inconsistent character names, over-localized memes, and continuity errors without altering the video-aligned timestamps.
+
+To automatically run the global refinement pass immediately after chunk processing:
+```bash
+uv run python gemini_subs.py "your_video.webm" --refine-text
+```
+
+If you already generated a VTT and only want to run the global text refinement pass (skipping video processing entirely):
+```bash
+uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polished_subtitles.vtt"
+```
+
 ### Additional Options
+- `--refine-text`: Run a global text refinement pass on the final VTT after alignment/generation.
+- `--refine-only`: Skip video processing entirely; only run global text refinement on the input VTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
 - `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. Default: `5`.
 - `--overlap-format`: Container for overlap clips. Default: `mp4`.

@@ -27,6 +27,15 @@ class Caption(BaseModel):
 class AlignmentResponse(BaseModel):
     captions: list[Caption]
 
+class RefinedCaption(BaseModel):
+    id: int = Field(description="The integer ID of the subtitle to change")
+    text: str = Field(description="The corrected text")
+
+class RefinementResponse(BaseModel):
+    changes: list[RefinedCaption] = Field(
+        description="List of subtitles to change. Only include ones that need changes."
+    )
+
 CHUNK_ROOT = "temp_video_chunks"
 SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
@@ -706,14 +715,83 @@ def stitch(chunk_dir, output_vtt):
     os.replace(tmp_output, output_path)
     print(f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions.")
 
+def global_refine_subtitles(input_vtt, output_vtt, api_key, base_url, model_name, thinking_budget):
+    print(f"Loading {input_vtt} for global refinement...")
+    vtt = webvtt.read(input_vtt)
+
+    script_lines = []
+    for i, caption in enumerate(vtt):
+        text = caption.text.replace('\n', ' ')
+        script_lines.append(f"[{i}] {caption.start} --> {caption.end}: {text}")
+
+    full_script = "\n".join(script_lines)
+
+    prompt = f"""
+You are an expert subtitle localization editor.
+Below is an entire subtitle script for a video.
+
+Your task is to read the whole script to understand the global context and fix:
+1. Inconsistent character names or nicknames (ensure they are uniform from start to finish).
+2. Over-localized terms (revert to native cultural terms where appropriate).
+3. Awkward grammar or unnatural phrasing.
+4. Glaring continuity errors in dialogue.
+
+DO NOT REWRITE THE ENTIRE SCRIPT. Only modify lines that genuinely need correction for consistency or natural flow. If a line is acceptable, leave it alone.
+
+Return a JSON object containing a 'changes' list with ONLY the lines you want to change. Each change must have the 'id' (found in brackets like [ID]) and the 'text' (the new, corrected text).
+Do not change the timestamps. Do not merge or split lines.
+
+Script:
+{full_script}
+"""
+
+    with create_client(api_key, base_url) as client:
+        print("Sending script to Gemini for global refinement (this may take a minute)...")
+        config_kwargs = {
+            "temperature": 0.0,
+            "response_mime_type": "application/json",
+            "response_schema": RefinementResponse,
+        }
+        if thinking_budget is not None and thinking_budget > 0:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(**config_kwargs)
+        )
+
+    try:
+        refinements = RefinementResponse.model_validate_json(response.text)
+    except Exception as e:
+        print(f"Error parsing model response: {e}")
+        print("Raw response:")
+        print(response.text)
+        sys.exit(1)
+
+    changes = refinements.changes
+    print(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")
+
+    for change in changes:
+        try:
+            if 0 <= change.id < len(vtt):
+                vtt[change.id].text = change.text
+        except ValueError:
+            pass
+
+    vtt.save(output_vtt)
+    print(f"Saved refined subtitles to {output_vtt}")
+
 def main():
     parser = argparse.ArgumentParser(description="Align or Generate VTT subtitles for a video using Gemini API.")
-    parser.add_argument("video_file", help="Path to the original video file (e.g. .webm, .mp4)")
+    parser.add_argument("video_file_or_vtt", help="Path to the original video file (OR path to input VTT if --refine-only is used)")
     parser.add_argument("vtt_file", nargs="?", default=None, help="Path to the original VTT subtitle file (optional). If omitted, generates from scratch.")
     parser.add_argument("--output", "-o", default="output_subtitles.vtt", help="Output path for the generated/aligned VTT file")
     parser.add_argument("--api-key", default=os.environ.get("GEMINI_API_KEY"), help="Gemini API Key")
     parser.add_argument("--base-url", default=os.environ.get("GEMINI_API_BASE"), help="Base URL for Gemini API (optional)")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"), help="Gemini model to use")
+    parser.add_argument("--refine-text", action="store_true", help="Run a global text refinement pass on the final VTT after alignment/generation")
+    parser.add_argument("--refine-only", action="store_true", help="Skip video processing entirely; only run global text refinement on the input VTT file")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
     parser.add_argument("--overlap-format", choices=sorted(OVERLAP_FORMATS.keys()), default="mp4", help="Container to use for re-encoded overlap clips (default: mp4)")
@@ -724,6 +802,21 @@ def main():
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
 
     args = parser.parse_args()
+
+    if args.refine_only:
+        if not os.path.exists(args.video_file_or_vtt):
+            print(f"Error: Input VTT file not found: {args.video_file_or_vtt}")
+            sys.exit(1)
+        if not args.api_key:
+            print("Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key.")
+            sys.exit(1)
+        global_refine_subtitles(
+            args.video_file_or_vtt, args.output, args.api_key, args.base_url, args.model, args.thinking_budget
+        )
+        sys.exit(0)
+
+    # Map back to video_file for standard pipeline processing
+    args.video_file = args.video_file_or_vtt
 
     if args.chunk_dur <= 0:
         print("Error: --chunk-dur must be greater than 0")
@@ -807,6 +900,13 @@ def main():
 
         # 3. Stitch chunks together
         stitch(chunk_dir, args.output)
+
+        # 4. Optional Global Refinement Pass
+        if args.refine_text:
+            global_refine_subtitles(
+                args.output, args.output, args.api_key, args.base_url, args.model, args.thinking_budget
+            )
+
         completed = True
 
     except Exception as e:
