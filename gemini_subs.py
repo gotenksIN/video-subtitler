@@ -561,12 +561,14 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
 
         Your task:
         1. Fix the timestamps of these captions so they align perfectly with the video.
-        2. Crucially, match the timing with WHEN THE TEXT APPEARS VISUALLY ON SCREEN (editors' flair text) OR when the dialogue is spoken.
-        3. Preserve every original 'id' exactly once.
-        {text_instruction}6. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
-        7. Keep captions sorted by start time.
-        8. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
-        9. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly.
+        2. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
+        3. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
+        4. Crucially, if a caption corresponds to visual text (editors' flair text), match the timing with EXACTLY when the text appears and disappears visually on screen.
+        5. Preserve every original 'id' exactly once.
+        {text_instruction}7. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
+        8. Keep captions sorted by start time.
+        9. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
+        10. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly.
 
         Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
 
@@ -588,17 +590,19 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         Your task:
         1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
         2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
-        3. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-        4. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
-        5. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-        6. Preserve native cultural terms and foods rather than over-localizing them.
-        7. Do not summarize, explain, or infer missing dialogue.
-        8. Include meaningful on-screen text when it matters for understanding the video.
-        9. Ignore decorative text, logos, watermarks, and unrelated UI.
-        10. Use sequential integer IDs starting at 0.
-        11. Keep captions sorted by start time and do not overlap them.
-        12. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
-        13. Split long speech into readable, natural phrases.
+        3. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
+        4. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
+        5. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
+        6. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
+        7. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
+        8. Preserve native cultural terms and foods rather than over-localizing them.
+        9. Do not summarize, explain, or infer missing dialogue.
+        10. Include meaningful on-screen text when it matters for understanding the video, timing it exactly to when it appears and disappears.
+        11. Ignore decorative text, logos, watermarks, and unrelated UI.
+        12. Use sequential integer IDs starting at 0.
+        13. Keep captions sorted by start time and do not overlap them.
+        14. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
+        15. Split long speech into readable, natural phrases.
 
         Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
         """
