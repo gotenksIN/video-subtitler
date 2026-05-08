@@ -28,8 +28,8 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
    GEMINI_API_KEY=your_api_key_here
    
    # Optional: Set a custom base URL or change the model
-   GEMINI_API_BASE=https://main.your-proxy-domain.com/google/vertex
-   GEMINI_MODEL=gemini-3.1-flash-lite-preview
+   GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
+   GEMINI_MODEL=gemini-3-flash-preview
    ```
 
 ## Usage
@@ -37,9 +37,14 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
 You can run the script using `uv run`.
 
 ### Alignment Mode (Fixing existing VTT timestamps)
-To fix broken timestamps in an existing VTT file (maintaining the original editor text):
+To fix broken timestamps in an existing VTT file while preserving the original text:
 ```bash
 uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --output "fixed_output.vtt"
+```
+
+If the original subtitles are mistranslated and you want Gemini to correct the English while keeping the same cue structure:
+```bash
+uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --output "fixed_output.vtt"
 ```
 
 ### Generation Mode (Creating new subtitles from scratch)
@@ -47,6 +52,7 @@ To generate completely new English subtitles from a video with no existing VTT:
 ```bash
 uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
 ```
+`--text-mode` is ignored in generation mode because there is no existing VTT text to preserve or fix.
 
 ### Additional Options
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
@@ -54,11 +60,13 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.
+- `--text-mode`: In alignment mode, either preserve the original subtitle text or let the model fix awkward translation. Choices: `preserve`, `fix`.
 - `--keep-chunks`: Keep the per-input work directory under `temp_video_chunks/` after successful processing.
 
 ## Notes
 
 - The script uses `-c copy` to avoid re-encoding. It parses the FFmpeg segment manifest to account for dynamic keyframe chunk durations, guaranteeing precise subtitle timestamps without the CPU overhead of re-encoding.
+- Alignment mode assigns captions to chunks by cue midpoint instead of raw start time, which reduces drift for lines that straddle chunk boundaries.
 - Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.
 - If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry.
 - Output VTT files are ignored by Git by default; move or rename files if you want to track specific subtitle outputs.
