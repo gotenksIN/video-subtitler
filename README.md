@@ -42,14 +42,9 @@ To fix broken timestamps in an existing VTT file while preserving the original t
 uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --output "fixed_output.vtt"
 ```
 
-If the original subtitles are mistranslated and you want Gemini to correct the English while keeping the same cue structure:
-```bash
-uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --output "fixed_output.vtt"
-```
-
 To change the default 5-second boundary context window:
 ```bash
-uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --overlap 3 --output "fixed_output.vtt"
+uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --overlap 3 --output "fixed_output.vtt"
 ```
 
 ### Generation Mode (Creating new subtitles from scratch)
@@ -57,14 +52,13 @@ To generate completely new English subtitles from a video with no existing VTT:
 ```bash
 uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
 ```
-`--text-mode` is ignored in generation mode because there is no existing VTT text to preserve or fix.
 
 ### Two-Stage Processing & Text Refinement
-For maximum quality, you can instruct Gemini to run a **global text refinement pass** on the final VTT. Because chunk-based processing limits context to 60 seconds, a final global pass allows the model to see the *entire* subtitle script at once, fixing inconsistent character names, over-localized memes, and continuity errors without altering the video-aligned timestamps.
+By default, Gemini runs a **global text refinement pass** on the final VTT after chunk processing. Because chunk-based processing limits context to 60 seconds, a final global pass allows the model to see the *entire* subtitle script at once, fixing inconsistent character names, over-localized memes, and continuity errors without altering the video-aligned timestamps.
 
-To automatically run the global refinement pass immediately after chunk processing:
+To skip the global refinement pass:
 ```bash
-uv run python gemini_subs.py "your_video.webm" --refine-text
+uv run python gemini_subs.py "your_video.webm" --disable-text-refine
 ```
 
 If you already generated a VTT and only want to run the global text refinement pass (skipping video processing entirely):
@@ -73,18 +67,17 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 ```
 
 ### Additional Options
-- `--refine-text`: Run a global text refinement pass on the final VTT after alignment/generation.
+- `--disable-text-refine`: Disable the global text refinement pass after alignment/generation.
 - `--refine-only`: Skip video processing entirely; only run global text refinement on the input VTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
 - `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. Default: `5`.
 - `--overlap-format`: Container for overlap clips. Default: `mp4`.
 - `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
-- `--thinking-budget`: Gemini thinking token budget. Default: `0`.
+- `--thinking-budget`: Gemini thinking token budget for chunk video calls. Default: `0`. The global refinement pass omits thinking config unless you pass a positive budget.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.
-- `--text-mode`: In alignment mode, either preserve the original subtitle text or let the model fix awkward translation. Choices: `preserve`, `fix`.
 - `--keep-chunks`: Keep the per-input work directory under `temp_video_chunks/` after successful processing.
 
 ## Notes
