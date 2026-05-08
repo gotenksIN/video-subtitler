@@ -783,7 +783,10 @@ Script:
         except ValueError:
             pass
 
-    vtt.save(output_vtt)
+    output_path = Path(output_vtt)
+    tmp_output = output_path.with_name(f"{output_path.name}.tmp.vtt")
+    vtt.save(str(tmp_output))
+    os.replace(tmp_output, output_path)
     print(f"Saved refined subtitles to {output_vtt}")
 
 def main():
