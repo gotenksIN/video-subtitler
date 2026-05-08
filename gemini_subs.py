@@ -477,13 +477,31 @@ def validate_captions(captions, chunk_duration, original_cues=None):
             })
 
         validated = sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
-        previous_end = None
-        for cap in validated:
-            start = parse_time(cap["start"])
-            end = parse_time(cap["end"])
-            if previous_end is not None and start < previous_end - 0.05:
-                raise ValueError(f"Generated captions overlap near id={cap['id']}")
-            previous_end = max(previous_end or 0, end)
+        
+        # Auto-heal overlaps instead of crashing
+        for i in range(1, len(validated)):
+            prev_cap = validated[i-1]
+            curr_cap = validated[i]
+            
+            prev_end = parse_time(prev_cap["end"])
+            curr_start = parse_time(curr_cap["start"])
+            
+            if curr_start < prev_end:
+                # If they overlap, adjust the previous caption's end time to match the current's start time
+                # ensuring it doesn't go below its own start time
+                prev_start = parse_time(prev_cap["start"])
+                new_prev_end = max(prev_start + 0.001, curr_start)
+                
+                # If adjusting the previous end makes the current start invalid (curr_start < prev_start), 
+                # push the current start forward instead.
+                if new_prev_end > curr_start:
+                    curr_start = new_prev_end
+                    curr_end = parse_time(curr_cap["end"])
+                    curr_end = max(curr_start + 0.001, curr_end)
+                    curr_cap["start"] = format_time(curr_start)
+                    curr_cap["end"] = format_time(curr_end)
+                
+                prev_cap["end"] = format_time(new_prev_end)
 
     return sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
 
