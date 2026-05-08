@@ -41,6 +41,7 @@ SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
+PIPELINE_VERSION = 1
 OVERLAP_FORMATS = {
     "webm": (".webm", "video/webm"),
     "mp4": (".mp4", "video/mp4"),
@@ -125,6 +126,7 @@ def build_manifest(args):
         "vtt": file_fingerprint(args.vtt_file) if args.vtt_file else None,
         "chunk_dur": args.chunk_dur,
         "format": "stream-copy-v1",
+        "pipeline_version": PIPELINE_VERSION,
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
         "thinking_budget": args.thinking_budget,
