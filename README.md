@@ -47,6 +47,11 @@ If the original subtitles are mistranslated and you want Gemini to correct the E
 uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --output "fixed_output.vtt"
 ```
 
+If captions near chunk boundaries still drift, add overlap context around each chunk:
+```bash
+uv run python gemini_subs.py "your_video.webm" "your_subtitles.vtt" --text-mode fix --overlap 5 --output "fixed_output.vtt"
+```
+
 ### Generation Mode (Creating new subtitles from scratch)
 To generate completely new English subtitles from a video with no existing VTT:
 ```bash
@@ -56,6 +61,9 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 ### Additional Options
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
+- `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing.
+- `--overlap-format`: Container for overlap clips. Default: `webm`.
+- `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
@@ -67,6 +75,7 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 - The script uses `-c copy` to avoid re-encoding. It parses the FFmpeg segment manifest to account for dynamic keyframe chunk durations, guaranteeing precise subtitle timestamps without the CPU overhead of re-encoding.
 - Alignment mode assigns captions to chunks by cue midpoint instead of raw start time, which reduces drift for lines that straddle chunk boundaries.
+- `--overlap` is the quality-first option: it re-encodes temporary context clips so chunk boundaries can land exactly where subtitle timing needs them.
 - Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.
 - If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry.
 - Output VTT files are ignored by Git by default; move or rename files if you want to track specific subtitle outputs.

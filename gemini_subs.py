@@ -32,6 +32,10 @@ SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
+OVERLAP_FORMATS = {
+    "webm": (".webm", "video/webm"),
+    "mp4": (".mp4", "video/mp4"),
+}
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
@@ -102,6 +106,11 @@ def file_fingerprint(path):
 
 def build_manifest(args):
     ext, mime = probe_video_format(args.video_file)
+    if args.overlap:
+        process_ext, process_mime = OVERLAP_FORMATS[args.overlap_format]
+    else:
+        process_ext, process_mime = ext, mime
+
     manifest = {
         "video": file_fingerprint(args.video_file),
         "vtt": file_fingerprint(args.vtt_file) if args.vtt_file else None,
@@ -110,8 +119,13 @@ def build_manifest(args):
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
         "text_mode": args.text_mode if args.vtt_file else None,
+        "overlap": args.overlap,
+        "overlap_format": args.overlap_format if args.overlap else None,
+        "clip_workers": args.clip_workers if args.overlap else 0,
         "chunk_ext": ext,
         "chunk_mime": mime,
+        "process_ext": process_ext,
+        "process_mime": process_mime,
     }
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return manifest, os.path.join(CHUNK_ROOT, digest)
@@ -133,7 +147,7 @@ def release_lock(lock_path):
 
 def clean_incomplete_split(chunk_dir):
     for name in os.listdir(chunk_dir):
-        if re.fullmatch(r"chunk_\d+\.(mp4|webm)", name) or re.fullmatch(r"aligned_chunk_\d+\.json(\.tmp)?", name) or name == "segments.csv":
+        if re.fullmatch(r"chunk_\d+\.(mp4|webm)", name) or re.fullmatch(r"context_chunk_\d+\.(mp4|webm)", name) or re.fullmatch(r"aligned_chunk_\d+\.json(\.tmp)?", name) or name == "segments.csv":
             os.remove(os.path.join(chunk_dir, name))
 
 def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
@@ -183,10 +197,100 @@ def list_chunks(chunk_dir):
                 })
     return chunks
 
-def get_captions_for_chunk(vtt_path, start_sec, end_sec):
+def get_processing_windows(chunks, overlap_sec):
+    if not chunks:
+        return []
+
+    video_end = chunks[-1]["end"]
+    windows = []
+    for chunk in chunks:
+        owner_start = chunk["start"]
+        owner_end = chunk["end"]
+        clip_start = max(0.0, owner_start - overlap_sec)
+        clip_end = min(video_end, owner_end + overlap_sec)
+        windows.append({
+            **chunk,
+            "clip_start": clip_start,
+            "clip_end": clip_end,
+            "clip_duration": clip_end - clip_start,
+            "owner_start": owner_start,
+            "owner_end": owner_end,
+            "owner_start_rel": owner_start - clip_start,
+            "owner_end_rel": owner_end - clip_start,
+        })
+    return windows
+
+def suggested_clip_workers():
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(4, cpu_count // 8 or 1))
+
+def overlap_codec_args(ext):
+    if ext == ".webm":
+        return [
+            "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-threads", "8", "-tile-columns", "2", "-row-mt", "1", "-frame-parallel", "1",
+            "-c:a", "libopus", "-b:a", "128k",
+        ]
+
+    return [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+    ]
+
+def create_overlap_clip(video_file, chunk_dir, chunk_idx, clip_start, clip_end, clip_ext):
+    clip_name = f"context_chunk_{chunk_idx:03d}{clip_ext}"
+    clip_path = os.path.join(chunk_dir, clip_name)
+    if os.path.exists(clip_path):
+        return clip_name
+
+    duration = clip_end - clip_start
+    if duration <= 0:
+        raise ValueError(f"Invalid overlap clip duration for chunk {chunk_idx}: {duration}")
+
+    print(f"Creating overlap clip {clip_name} ({format_time(clip_start)} to {format_time(clip_end)})...")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_file,
+        "-ss", format_time(clip_start), "-t", f"{duration:.3f}",
+        "-map", "0:v:0", "-map", "0:a?", "-sn",
+        *overlap_codec_args(clip_ext),
+        clip_path,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return clip_name
+
+def attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext):
+    if overlap_sec > 0:
+        clip_name = create_overlap_clip(video_file, chunk_dir, chunk["idx"], chunk["clip_start"], chunk["clip_end"], clip_ext)
+    else:
+        clip_name = chunk["name"]
+
+    return {
+        **chunk,
+        "clip_name": clip_name,
+    }
+
+def prepare_processing_chunks(video_file, chunk_dir, chunks, overlap_sec, clip_ext, clip_workers):
+    windows = get_processing_windows(chunks, overlap_sec)
+    if overlap_sec <= 0 or len(windows) <= 1:
+        return [attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext) for chunk in windows]
+
+    print(f"Creating {len(windows)} overlap clips using {clip_workers} workers...")
+    prepared = [None] * len(windows)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=clip_workers) as executor:
+        futures = {
+            executor.submit(attach_overlap_clip, video_file, chunk_dir, chunk, overlap_sec, clip_ext): chunk["idx"]
+            for chunk in windows
+        }
+        for future in concurrent.futures.as_completed(futures):
+            chunk_idx = futures[future]
+            prepared[chunk_idx] = future.result()
+
+    return prepared
+
+def get_captions_for_chunk(vtt_path, owner_start_sec, owner_end_sec, clip_start_sec, clip_duration):
     vtt = webvtt.read(vtt_path)
     chunk_cues = []
-    chunk_duration = max(end_sec - start_sec, 0.0)
 
     for i, caption in enumerate(vtt):
         cap_start = parse_time(caption.start)
@@ -197,16 +301,16 @@ def get_captions_for_chunk(vtt_path, start_sec, end_sec):
         # Assign boundary captions by midpoint instead of raw start time so lines
         # that straddle a chunk edge stay with the chunk that contains most of them.
         midpoint = (cap_start + cap_end) / 2
-        if not (start_sec <= midpoint < end_sec):
+        if not (owner_start_sec <= midpoint < owner_end_sec):
             continue
 
-        rel_start = clamp(cap_start - start_sec, 0.0, chunk_duration)
-        rel_end = clamp(cap_end - start_sec, 0.0, chunk_duration)
+        rel_start = clamp(cap_start - clip_start_sec, 0.0, clip_duration)
+        rel_end = clamp(cap_end - clip_start_sec, 0.0, clip_duration)
         if rel_end <= rel_start:
-            rel_end = clamp(rel_start + 0.1, 0.1, chunk_duration)
+            rel_end = clamp(rel_start + 0.1, 0.1, clip_duration)
             if rel_end <= rel_start:
-                rel_start = clamp(chunk_duration - 0.1, 0.0, chunk_duration)
-                rel_end = chunk_duration
+                rel_start = clamp(clip_duration - 0.1, 0.0, clip_duration)
+                rel_end = clip_duration
 
         chunk_cues.append({
             "id": i,
@@ -265,7 +369,7 @@ def validate_captions(captions, chunk_duration, original_cues=None, text_mode="p
                 orig_dur = parse_time(orig_cue["end"]) - parse_time(orig_cue["start"])
                 end = start + max(orig_dur, 0.1)
 
-            max_end = max(chunk_duration + 5.0, parse_time(orig_cue["end"]) + 5.0)
+            max_end = chunk_duration + 0.5
             if end > max_end:
                 end = max_end
             if start > max_end:
@@ -337,22 +441,34 @@ def create_client(api_key, base_url):
         kwargs["http_options"] = {"base_url": base_url}
     return genai.Client(**kwargs)
 
-def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file, start_sec, end_sec, chunk_duration, model_name, chunk_mime, text_mode):
+def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, text_mode):
+    chunk_idx = chunk["idx"]
+    clip_name = chunk["clip_name"]
+    clip_start = chunk["clip_start"]
+    clip_duration = chunk["clip_duration"]
+    owner_start_rel = chunk["owner_start_rel"]
+    owner_end_rel = chunk["owner_end_rel"]
     out_json = os.path.join(chunk_dir, f"aligned_chunk_{chunk_idx:03d}.json")
-    chunk_path = os.path.join(chunk_dir, chunk_name)
+    chunk_path = os.path.join(chunk_dir, clip_name)
 
     if vtt_file:
         # Alignment Mode
-        original_cues = get_captions_for_chunk(vtt_file, start_sec, end_sec)
+        original_cues = get_captions_for_chunk(
+            vtt_file,
+            chunk["owner_start"],
+            chunk["owner_end"],
+            clip_start,
+            clip_duration,
+        )
         if not original_cues:
-            print(f"No captions for {chunk_name}, skipping.")
+            print(f"No captions for {clip_name}, skipping.")
             atomic_write_json(out_json, [])
             return True
 
         cues_json_str = json.dumps(original_cues, ensure_ascii=False, indent=2)
-        cached = load_cached_captions(out_json, chunk_duration, original_cues, text_mode=text_mode)
+        cached = load_cached_captions(out_json, clip_duration, original_cues, text_mode=text_mode)
         if cached is not None:
-            print(f"Skipping {chunk_name} - already processed.")
+            print(f"Skipping {clip_name} - already processed.")
             return True
 
         text_instruction = (
@@ -363,8 +479,9 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         )
         prompt = f"""
         You are an expert subtitle aligner.
-        Watch this {chunk_duration:.3f}-second video chunk.
+        Watch this {clip_duration:.3f}-second video clip.
         Below is a JSON list of the original subtitles assigned to this chunk.
+        The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
 
         Your task:
         1. Fix the timestamps of these captions so they align perfectly with the video.
@@ -372,8 +489,8 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         3. Preserve every original 'id' exactly once.
         {text_instruction}6. Return a complete list of all captions, ensuring none are dropped.
         7. Keep captions sorted by start time.
-        8. Use timestamps relative to this chunk, from 00:00:00.000 to {format_time(chunk_duration)}.
-        9. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the visible audio/video in this chunk to place them correctly.
+        8. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
+        9. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly, but do not add captions beyond the provided IDs.
 
         Return the result as a JSON object matching the required schema with a 'captions' array.
 
@@ -382,27 +499,29 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         """
     else:
         # Generation Mode
-        cached = load_cached_captions(out_json, chunk_duration, None)
+        cached = load_cached_captions(out_json, clip_duration, None)
         if cached is not None:
-            print(f"Skipping {chunk_name} - already processed.")
+            print(f"Skipping {clip_name} - already processed.")
             return True
 
         prompt = f"""
         You are an expert subtitle generator and translator.
-        Watch this {chunk_duration:.3f}-second video chunk.
+        Watch this {clip_duration:.3f}-second video clip.
+        The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
 
         Your task:
-        1. Generate accurate English subtitles for the dialogue and any relevant on-screen text.
-        2. Create accurate timestamps for each caption relative to the start of this chunk (ranging from 00:00:00.000 to {format_time(chunk_duration)}).
-        3. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-        4. Preserve names and recurring terms consistently within the chunk.
-        5. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-        6. Do not summarize, explain, or infer missing dialogue.
-        7. Include meaningful on-screen text when it matters for understanding the video.
-        8. Ignore decorative text, logos, watermarks, and unrelated UI.
-        9. Use sequential integer IDs starting at 0.
-        10. Keep captions sorted by start time and do not overlap them.
-        11. Split long speech into readable captions.
+        1. Generate accurate English subtitles for dialogue and relevant on-screen text whose midpoint belongs inside the main chunk window.
+        2. Use the surrounding context to understand timing and meaning, but do not return captions that belong only to the context area.
+        3. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
+        4. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
+        5. Preserve names and recurring terms consistently within the chunk.
+        6. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
+        7. Do not summarize, explain, or infer missing dialogue.
+        8. Include meaningful on-screen text when it matters for understanding the video.
+        9. Ignore decorative text, logos, watermarks, and unrelated UI.
+        10. Use sequential integer IDs starting at 0.
+        11. Keep captions sorted by start time and do not overlap them.
+        12. Split long speech into readable captions.
 
         Return the result as a JSON object matching the required schema with a 'captions' array.
         """
@@ -412,12 +531,12 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
             video_data = f.read()
         if len(video_data) > INLINE_VIDEO_WARNING_BYTES:
             print(
-                f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
+                f"[Worker-{chunk_idx:03d}] Warning: {clip_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
                 "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
             )
 
         mode_str = "aligning" if vtt_file else "generating"
-        print(f"[Worker-{chunk_idx:03d}] {mode_str.capitalize()} {chunk_name} using Gemini API...")
+        print(f"[Worker-{chunk_idx:03d}] {mode_str.capitalize()} {clip_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
             response = client.models.generate_content(
@@ -436,38 +555,58 @@ def process_chunk(api_key, base_url, chunk_idx, chunk_name, chunk_dir, vtt_file,
         parsed_response = AlignmentResponse.model_validate_json(response.text)
         validated = validate_captions(
             parsed_response.captions,
-            chunk_duration,
+            clip_duration,
             original_cues if vtt_file else None,
             text_mode=text_mode,
         )
         atomic_write_json(out_json, validated)
 
-        print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
+        print(f"[Worker-{chunk_idx:03d}] Finished {clip_name}.")
         return True
     except Exception as e:
-        print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
+        print(f"[Worker-{chunk_idx:03d}] ERROR processing {clip_name}: {e}")
         return False
+
+def load_manifest(chunk_dir):
+    manifest_path = os.path.join(chunk_dir, MANIFEST_NAME)
+    if not os.path.exists(manifest_path):
+        return {}
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def stitch(chunk_dir, output_vtt):
     print("Stitching chunks into final VTT...")
     final_vtt = webvtt.WebVTT()
     captions_to_write = []
 
+    manifest = load_manifest(chunk_dir)
     chunks = list_chunks(chunk_dir)
-    offset_map = {c["idx"]: c["start"] for c in chunks}
+    windows = get_processing_windows(chunks, float(manifest.get("overlap") or 0.0))
+    window_map = {c["idx"]: c for c in windows}
+    filter_generated_context = manifest.get("mode") == "generate" and float(manifest.get("overlap") or 0.0) > 0
 
     json_files = sorted([f for f in os.listdir(chunk_dir) if f.startswith('aligned_chunk_') and f.endswith('.json')])
 
     for json_name in json_files:
         chunk_idx = int(json_name.replace("aligned_chunk_", "").replace(".json", ""))
-        offset_sec = offset_map.get(chunk_idx, 0.0)
+        window = window_map.get(chunk_idx)
+        if not window:
+            continue
+        offset_sec = window["clip_start"]
 
         with open(os.path.join(chunk_dir, json_name), "r") as f:
             captions = json.load(f)
 
         for cap in captions:
-            abs_start = parse_time(cap["start"]) + offset_sec
-            abs_end = parse_time(cap["end"]) + offset_sec
+            rel_start = parse_time(cap["start"])
+            rel_end = parse_time(cap["end"])
+            if filter_generated_context:
+                midpoint = (rel_start + rel_end) / 2
+                if not (window["owner_start_rel"] <= midpoint < window["owner_end_rel"]):
+                    continue
+
+            abs_start = rel_start + offset_sec
+            abs_end = rel_end + offset_sec
             if abs_end <= abs_start:
                 raise ValueError(f"Invalid caption timing in {json_name}: {cap}")
 
@@ -499,6 +638,9 @@ def main():
     parser.add_argument("--base-url", default=os.environ.get("GEMINI_API_BASE"), help="Base URL for Gemini API (optional)")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"), help="Gemini model to use")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
+    parser.add_argument("--overlap", type=float, default=0.0, help="Seconds of context to add before and after each chunk (default: 0)")
+    parser.add_argument("--overlap-format", choices=sorted(OVERLAP_FORMATS.keys()), default="webm", help="Container to use for re-encoded overlap clips (default: webm)")
+    parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--text-mode", choices=["preserve", "fix"], default="preserve", help="Whether alignment mode preserves original subtitle text or lets the model fix awkward translation")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
@@ -512,6 +654,20 @@ def main():
     if args.workers <= 0:
         print("Error: --workers must be greater than 0")
         sys.exit(1)
+
+    if args.clip_workers < 0:
+        print("Error: --clip-workers must be greater than or equal to 0")
+        sys.exit(1)
+
+    if args.overlap < 0:
+        print("Error: --overlap must be greater than or equal to 0")
+        sys.exit(1)
+
+    if args.overlap >= args.chunk_dur:
+        print("Error: --overlap must be smaller than --chunk-dur")
+        sys.exit(1)
+
+    clip_workers = args.clip_workers or suggested_clip_workers()
 
     if not args.vtt_file and args.text_mode != "preserve":
         print("Warning: --text-mode is ignored in generation mode because no VTT file was provided.")
@@ -540,18 +696,26 @@ def main():
         if not chunks:
             raise RuntimeError("No video chunks were created")
 
+        processing_chunks = prepare_processing_chunks(
+            args.video_file,
+            chunk_dir,
+            chunks,
+            args.overlap,
+            manifest["process_ext"],
+            clip_workers,
+        )
+
         # 2. Process chunks concurrently
-        print(f"Processing {len(chunks)} chunks using {args.workers} workers...")
+        print(f"Processing {len(processing_chunks)} chunks using {args.workers} workers...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {
                 executor.submit(
                     process_chunk,
                     args.api_key, args.base_url,
-                    chunk["idx"], chunk["name"], chunk_dir,
-                    args.vtt_file, chunk["start"], chunk["end"],
-                    chunk["duration"], args.model, manifest["chunk_mime"], args.text_mode if args.vtt_file else "preserve"
-                ): chunk["name"]
-                for chunk in chunks
+                    chunk, chunk_dir,
+                    args.vtt_file, args.model, manifest["process_mime"], args.text_mode if args.vtt_file else "preserve"
+                ): chunk["clip_name"]
+                for chunk in processing_chunks
             }
             failed = []
             for future in concurrent.futures.as_completed(futures):
