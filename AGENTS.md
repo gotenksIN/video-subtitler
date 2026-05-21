@@ -41,8 +41,24 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 - Uses the modern `google-genai` (>= 2.0.0) SDK, NOT the legacy `google-generativeai` package.
 - Uses `uv` for dependency management (`uv run`). 
 - Schema uses strictly typed Pydantic models.
+- Prefer the Python standard library for tests and small utilities unless a new dependency clearly pays for itself.
 
 ### 5. Code Style
 - Keep `gemini_subs.py` as a single, focused file unless it grows completely unmanageable.
 - Avoid adding heavy dependencies (like `moviepy`) when a simple `subprocess` FFmpeg call suffices. 
 - Use atomic writes (`.tmp` file renaming) for all final file outputs to prevent corruption on user interrupt.
+
+### 6. Helper Scripts
+- `subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
+- `yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
+- Keep shell scripts compatible with `shellcheck` and explicit about required arguments.
+
+### 7. Validation
+- Run `shellcheck subtitle.sh yt-dl.sh` after changing shell scripts.
+- Run `uv run python -m compileall -q .` after Python changes.
+- Run `uv run python -m unittest discover -s tests` after code or validation logic changes.
+- Run `uv run gemini_subs.py --help` after CLI argument changes.
+
+### 8. Git Workflow
+- When the user requests per-task commits, commit each discrete task before starting the next one.
+- Before committing, inspect `git status`, `git diff`, and recent commits; stage only files that belong to the current task.
