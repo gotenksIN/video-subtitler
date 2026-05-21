@@ -15,6 +15,7 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
 
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer and resolver.
 - [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` must be installed and available in your system's PATH.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional, only needed for the YouTube download helper.
 
 ## Installation
 
@@ -35,6 +36,20 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
 ## Usage
 
 You can run the script using `uv run`.
+
+### Helper Scripts
+
+Download a YouTube video as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable:
+```bash
+./yt-dl.sh "https://youtube.com/watch?v=..."
+```
+
+Generate subtitles for a local video using the repository's preferred worker settings:
+```bash
+./subtitle.sh "your_video.webm"
+```
+
+The subtitle helper writes to `your_video.webm.vtt`.
 
 ### Alignment Mode (Fixing existing VTT timestamps)
 To fix broken timestamps in an existing VTT file while preserving the original text:
