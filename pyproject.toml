@@ -1,7 +1,7 @@
 [project]
-name = "transcript"
+name = "video-subtitler"
 version = "0.1.0"
-description = "Add your description here"
+description = "Gemini-powered CLI for aligning or generating VTT subtitles from video."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
