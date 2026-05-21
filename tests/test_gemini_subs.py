@@ -1,6 +1,14 @@
 import unittest
 
-from gemini_subs import Caption, format_time, parse_time, validate_captions
+from gemini_subs import (
+    Caption,
+    default_chunk_thinking_level,
+    format_time,
+    generate_content_config,
+    parse_time,
+    validate_captions,
+    validate_thinking_level_for_model,
+)
 
 
 class TimeHelpersTest(unittest.TestCase):
@@ -71,6 +79,25 @@ class CaptionValidationTest(unittest.TestCase):
         self.assertEqual(validated[0]["start"], "00:00:00.100")
         self.assertEqual(validated[0]["text"], "Original text")
         self.assertEqual(validated[1], original_cues[1])
+
+
+class ThinkingConfigTest(unittest.TestCase):
+    def test_default_chunk_thinking_level_uses_minimal_for_flash(self):
+        self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "minimal")
+        self.assertEqual(default_chunk_thinking_level("gemini-3.1-pro-preview"), "low")
+
+    def test_generate_content_config_sets_thinking_level(self):
+        config = generate_content_config("low")
+
+        self.assertIsNotNone(config.thinking_config)
+        self.assertEqual(config.thinking_config.thinking_level.value, "LOW")
+        self.assertIsNone(config.thinking_config.thinking_budget)
+
+    def test_minimal_thinking_level_is_flash_only(self):
+        validate_thinking_level_for_model("gemini-3.5-flash", "minimal")
+
+        with self.assertRaisesRegex(ValueError, "Flash models"):
+            validate_thinking_level_for_model("gemini-3.1-pro-preview", "minimal")
 
 
 if __name__ == "__main__":

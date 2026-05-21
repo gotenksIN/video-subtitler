@@ -41,7 +41,9 @@ SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+REFINEMENT_THINKING_LEVEL = "high"
 OVERLAP_FORMATS = {
     "webm": (".webm", "video/webm"),
     "mp4": (".mp4", "video/mp4"),
@@ -129,7 +131,7 @@ def build_manifest(args):
         "pipeline_version": PIPELINE_VERSION,
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
-        "thinking_budget": args.thinking_budget,
+        "chunk_thinking_level": args.chunk_thinking_level,
         "overlap": args.overlap,
         "overlap_format": args.overlap_format if args.overlap else None,
         "clip_workers": args.clip_workers if args.overlap else 0,
@@ -310,7 +312,7 @@ def collect_api_results(futures):
 
 def process_chunks(
     api_key, base_url, video_file, chunk_dir, chunks, overlap_sec, clip_ext,
-    clip_workers, api_workers, vtt_file, model_name, chunk_mime, thinking_budget,
+    clip_workers, api_workers, vtt_file, model_name, chunk_mime, thinking_level,
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
@@ -322,7 +324,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, thinking_budget,
+                    vtt_file, model_name, chunk_mime, thinking_level,
                 ): chunk["clip_name"]
                 for chunk in processing_chunks
             }
@@ -355,7 +357,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     processing_chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, thinking_budget,
+                    vtt_file, model_name, chunk_mime, thinking_level,
                 )
             ] = processing_chunk["clip_name"]
 
@@ -528,17 +530,24 @@ def create_client(api_key, base_url):
         kwargs["http_options"] = {"base_url": base_url}
     return genai.Client(**kwargs)
 
-def generate_content_config(thinking_budget):
+def default_chunk_thinking_level(model_name):
+    return "minimal" if "flash" in model_name.lower() else "low"
+
+def validate_thinking_level_for_model(model_name, thinking_level):
+    if thinking_level == "minimal" and "flash" not in model_name.lower():
+        raise ValueError("--thinking-level minimal is only supported by Flash models. Use low, medium, or high for this model.")
+
+def generate_content_config(thinking_level):
     kwargs = {
         "temperature": 0.0,
         "response_mime_type": "application/json",
         "response_schema": AlignmentResponse,
     }
-    if thinking_budget is not None:
-        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
+    if thinking_level is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level.upper())
     return types.GenerateContentConfig(**kwargs)
 
-def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, thinking_budget):
+def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, thinking_level):
     chunk_idx = chunk["idx"]
     clip_name = chunk["clip_name"]
     clip_start = chunk["clip_start"]
@@ -642,7 +651,7 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
                     types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
                     prompt
                 ],
-                config=generate_content_config(thinking_budget)
+                config=generate_content_config(thinking_level)
             )
 
         parsed_response = AlignmentResponse.model_validate_json(response.text)
@@ -721,7 +730,7 @@ def stitch(chunk_dir, output_vtt):
     os.replace(tmp_output, output_path)
     print(f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions.")
 
-def global_refine_subtitles(input_vtt, output_vtt, api_key, base_url, model_name, thinking_budget):
+def global_refine_subtitles(input_vtt, output_vtt, api_key, base_url, model_name, thinking_level):
     print(f"Loading {input_vtt} for global refinement...")
     vtt = webvtt.read(input_vtt)
 
@@ -758,8 +767,8 @@ Script:
             "response_mime_type": "application/json",
             "response_schema": RefinementResponse,
         }
-        if thinking_budget is not None and thinking_budget > 0:
-            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
+        if thinking_level is not None:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level.upper())
 
         response = client.models.generate_content(
             model=model_name,
@@ -806,7 +815,7 @@ def main():
     parser.add_argument("--overlap-format", choices=sorted(OVERLAP_FORMATS.keys()), default="mp4", help="Container to use for re-encoded overlap clips (default: mp4)")
     parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
-    parser.add_argument("--thinking-budget", type=int, default=0, help="Gemini thinking token budget (default: 0).")
+    parser.add_argument("--thinking-level", choices=THINKING_LEVELS, default=None, help="Chunk Gemini thinking level. Default: minimal for Flash models, low otherwise.")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
 
     args = parser.parse_args()
@@ -819,12 +828,13 @@ def main():
             print("Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key.")
             sys.exit(1)
         global_refine_subtitles(
-            args.video_file_or_vtt, args.output, args.api_key, args.base_url, args.model, args.thinking_budget
+            args.video_file_or_vtt, args.output, args.api_key, args.base_url, args.model, REFINEMENT_THINKING_LEVEL
         )
         sys.exit(0)
 
     # Map back to video_file for standard pipeline processing
     args.video_file = args.video_file_or_vtt
+    args.chunk_thinking_level = args.thinking_level or default_chunk_thinking_level(args.model)
 
     if args.chunk_dur <= 0:
         print("Error: --chunk-dur must be greater than 0")
@@ -838,8 +848,10 @@ def main():
         print("Error: --clip-workers must be greater than or equal to 0")
         sys.exit(1)
 
-    if args.thinking_budget is not None and args.thinking_budget < 0:
-        print("Error: --thinking-budget must be greater than or equal to 0")
+    try:
+        validate_thinking_level_for_model(args.model, args.chunk_thinking_level)
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
     if args.overlap < 0:
@@ -897,7 +909,7 @@ def main():
             args.vtt_file,
             args.model,
             manifest["process_mime"],
-            args.thinking_budget,
+            args.chunk_thinking_level,
         )
         if failed:
             raise RuntimeError(
@@ -911,7 +923,7 @@ def main():
         # 4. Optional Global Refinement Pass
         if not args.disable_text_refine:
             global_refine_subtitles(
-                args.output, args.output, args.api_key, args.base_url, args.model, args.thinking_budget
+                args.output, args.output, args.api_key, args.base_url, args.model, REFINEMENT_THINKING_LEVEL
             )
 
         completed = True

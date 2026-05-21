@@ -89,7 +89,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--overlap-format`: Container for overlap clips. Default: `mp4`.
 - `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
-- `--thinking-budget`: Gemini thinking token budget for chunk video calls. Default: `0`. The global refinement pass omits thinking config unless you pass a positive budget.
+- `--thinking-level`: Gemini thinking level for chunk video calls. Default: `minimal` for Flash models, `low` otherwise. The global refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.

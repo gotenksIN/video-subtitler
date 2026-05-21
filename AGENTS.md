@@ -19,7 +19,8 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 - Chunk duration: `60`
 - Overlap: `5`
 - Overlap format: `mp4`
-- Thinking budget: `0` for chunk video calls
+- Chunk thinking level: `minimal` for Flash models, `low` otherwise
+- Global refinement thinking level: `high`
 - Global refinement: enabled by default
 
 ## Strict Rules & Semantics
