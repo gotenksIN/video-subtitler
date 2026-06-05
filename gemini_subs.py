@@ -41,7 +41,7 @@ SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 REFINEMENT_THINKING_LEVEL = "high"
 OVERLAP_FORMATS = {
@@ -645,7 +645,7 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
         print(f"[Worker-{chunk_idx:03d}] {mode_str.capitalize()} {clip_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
-            response = client.models.generate_content(
+            response_stream = client.models.generate_content_stream(
                 model=model_name,
                 contents=[
                     types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
@@ -653,8 +653,12 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
                 ],
                 config=generate_content_config(thinking_level)
             )
+            full_json_text = ""
+            for chunk in response_stream:
+                if chunk.text:
+                    full_json_text += chunk.text
 
-        parsed_response = AlignmentResponse.model_validate_json(response.text)
+        parsed_response = AlignmentResponse.model_validate_json(full_json_text)
         validated = validate_captions(
             parsed_response.captions,
             clip_duration,
@@ -770,14 +774,18 @@ Script:
         if thinking_level is not None:
             config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level.upper())
 
-        response = client.models.generate_content(
+        response_stream = client.models.generate_content_stream(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(**config_kwargs)
         )
+        full_json_text = ""
+        for chunk in response_stream:
+            if chunk.text:
+                full_json_text += chunk.text
 
     try:
-        refinements = RefinementResponse.model_validate_json(response.text)
+        refinements = RefinementResponse.model_validate_json(full_json_text)
     except Exception as e:
         print(f"Error parsing model response: {e}")
         print("Raw response:")
