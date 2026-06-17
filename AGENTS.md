@@ -43,6 +43,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 - Uses `uv` for dependency management (`uv run`). 
 - Schema uses strictly typed Pydantic models.
 - Prefer the Python standard library for tests and small utilities unless a new dependency clearly pays for itself.
+- For system dependencies (like FFmpeg/FFprobe), explicitly recommend and document headless/X11-free GPL static builds (from BtbN/FFmpeg-Builds) in environments like WSL or Ubuntu Server to avoid pulling in graphical dependencies.
 
 ### 5. Code Style
 - Keep `gemini_subs.py` as a single, focused file unless it grows completely unmanageable.
