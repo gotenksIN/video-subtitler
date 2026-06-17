@@ -13,7 +13,7 @@ fi
 URL="$1"
 OUTPUT="${2:-%(title)s}.webm"
 
-yt-dlp \
+uvx yt-dlp \
     --format "bestvideo[vcodec^=vp9]+bestaudio/best[ext=webm]" \
     --merge-output-format webm \
     --output "$OUTPUT" \

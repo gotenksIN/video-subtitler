@@ -15,7 +15,7 @@ A Python tool that uses the Google Gemini API to align existing VTT subtitles to
 
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer and resolver.
 - [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` must be installed and available in your system's PATH.
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional, only needed for the YouTube download helper.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional, run automatically on-demand via `uvx` (no manual installation needed).
 
 ## Installation
 
