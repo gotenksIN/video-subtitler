@@ -54,13 +54,16 @@ def clamp(value, minimum, maximum):
 
 def probe_video_format(path):
     cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=format_name",
+        "ffprobe", "-v", "error", "-show_entries",
+        "format=format_name:stream=codec_name",
         "-of", "default=noprint_wrappers=1:nokey=1", path
     ]
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         fmt = result.stdout.strip().lower()
         if "webm" in fmt or "matroska" in fmt:
+            if "h264" in fmt:
+                return ".mp4", "video/mp4"
             return ".webm", "video/webm"
         elif "mp4" in fmt or "mov" in fmt:
             return ".mp4", "video/mp4"
@@ -250,7 +253,7 @@ def overlap_codec_args(ext):
         ]
 
     return [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-b:v", "0", "-threads", "8",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
     ]

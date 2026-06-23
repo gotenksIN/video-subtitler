@@ -1,11 +1,14 @@
 import unittest
+from unittest.mock import patch
 
 from gemini_subs import (
     Caption,
     default_chunk_thinking_level,
     format_time,
     generate_content_config,
+    overlap_codec_args,
     parse_time,
+    probe_video_format,
     validate_captions,
     validate_thinking_level_for_model,
 )
@@ -98,6 +101,31 @@ class ThinkingConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Flash models"):
             validate_thinking_level_for_model("gemini-3.1-pro-preview", "minimal")
+
+
+class VideoFormatTest(unittest.TestCase):
+    def test_h264_mkv_uses_mp4_chunks(self):
+        probe_output = "h264\naac\nsubrip\nmatroska,webm\n"
+
+        with patch("gemini_subs.subprocess.run") as run:
+            run.return_value.stdout = probe_output
+
+            ext, mime = probe_video_format("input.mkv")
+
+        self.assertEqual(ext, ".mp4")
+        self.assertEqual(mime, "video/mp4")
+
+    def test_mp4_overlap_uses_x264_flags_matching_vp9_quality(self):
+        args = overlap_codec_args(".mp4")
+
+        self.assertIn("libx264", args)
+        self.assertIn("-crf", args)
+        self.assertIn("32", args)
+        self.assertIn("-b:v", args)
+        self.assertIn("0", args)
+        self.assertIn("-threads", args)
+        self.assertIn("8", args)
+        self.assertIn("+faststart", args)
 
 
 if __name__ == "__main__":
