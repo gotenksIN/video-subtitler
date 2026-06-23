@@ -14,13 +14,9 @@ A Python tool that uses the Google Gemini API to generate new English subtitles 
 
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer and resolver.
 - [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` must be installed and available in your system's PATH.
-  - **Headless / X11-Free Installation (WSL/Ubuntu Server):** To avoid installing heavy X11/GUI dependencies, install a pre-compiled GPL static build from the official [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) repository directly into your local user binary directory:
+  - **Headless / X11-Free Installation (WSL/Ubuntu Server):** To avoid installing heavy X11/GUI dependencies, install or upgrade a pre-compiled GPL static build from the official [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) repository directly into your local user binary directory:
     ```bash
-    mkdir -p ~/.local/bin
-    wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
-    tar -xf ffmpeg-master-latest-linux64-gpl.tar.xz
-    cp ffmpeg-master-latest-linux64-gpl/bin/ffmpeg ffmpeg-master-latest-linux64-gpl/bin/ffprobe ~/.local/bin/
-    rm -rf ffmpeg-master-latest-linux64-gpl*
+    ./ffmpeg.sh
     ```
     Ensure `~/.local/bin` is in your `PATH` (by adding `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` or `~/.zshrc`).
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional, run automatically on-demand via `uvx` (no manual installation needed).
@@ -50,6 +46,11 @@ You can run the script using `uv run`.
 Download a YouTube video as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable:
 ```bash
 ./yt-dl.sh "https://youtube.com/watch?v=..."
+```
+
+Install or upgrade the latest BtbN GPL static FFmpeg build into `~/.local/bin`:
+```bash
+./ffmpeg.sh
 ```
 
 Generate subtitles for a local video using the repository's preferred worker settings:
