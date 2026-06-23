@@ -24,7 +24,7 @@ class Caption(BaseModel):
     end: str = Field(description="End time in HH:MM:SS.mmm format")
     text: str = Field(description="The subtitle text")
 
-class AlignmentResponse(BaseModel):
+class SubtitleResponse(BaseModel):
     captions: list[Caption]
 
 class RefinedCaption(BaseModel):
@@ -123,10 +123,9 @@ def build_manifest(args):
 
     manifest = {
         "video": file_fingerprint(args.video_file),
-        "vtt": file_fingerprint(args.vtt_file) if args.vtt_file else None,
         "chunk_dur": args.chunk_dur,
         "format": "stream-copy-v1",
-        "mode": "align" if args.vtt_file else "generate",
+        "mode": "generate",
         "model": args.model,
         "chunk_thinking_level": args.chunk_thinking_level,
         "overlap": args.overlap,
@@ -159,7 +158,7 @@ def clean_incomplete_split(chunk_dir):
         if (
             re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
             or re.fullmatch(r"context_chunk_\d+\.(mp4|webm)(\.tmp)?", name)
-            or re.fullmatch(r"aligned_chunk_\d+\.json(\.tmp)?", name)
+            or re.fullmatch(r"subtitle_chunk_\d+\.json(\.tmp)?", name)
             or name == "segments.csv"
         ):
             os.remove(os.path.join(chunk_dir, name))
@@ -327,7 +326,7 @@ def collect_api_results(futures):
 
 def process_chunks(
     api_key, base_url, video_file, chunk_dir, chunks, overlap_sec, clip_ext,
-    clip_workers, api_workers, vtt_file, model_name, chunk_mime, thinking_level,
+    clip_workers, api_workers, model_name, chunk_mime, thinking_level,
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
@@ -339,7 +338,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, thinking_level,
+                    model_name, chunk_mime, thinking_level,
                 ): chunk["clip_name"]
                 for chunk in processing_chunks
             }
@@ -372,7 +371,7 @@ def process_chunks(
                     process_chunk,
                     api_key, base_url,
                     processing_chunk, chunk_dir,
-                    vtt_file, model_name, chunk_mime, thinking_level,
+                    model_name, chunk_mime, thinking_level,
                 )
             ] = processing_chunk["clip_name"]
 
@@ -380,120 +379,34 @@ def process_chunks(
 
     return failed
 
-def get_captions_for_chunk(vtt_path, owner_start_sec, owner_end_sec, clip_start_sec, clip_duration):
-    vtt = webvtt.read(vtt_path)
-    chunk_cues = []
-
-    for i, caption in enumerate(vtt):
-        cap_start = parse_time(caption.start)
-        cap_end = parse_time(caption.end)
-        if cap_end <= cap_start:
-            continue
-
-        # Assign boundary captions by midpoint instead of raw start time so lines
-        # that straddle a chunk edge stay with the chunk that contains most of them.
-        midpoint = (cap_start + cap_end) / 2
-        if not (owner_start_sec <= midpoint < owner_end_sec):
-            continue
-
-        rel_start = clamp(cap_start - clip_start_sec, 0.0, clip_duration)
-        rel_end = clamp(cap_end - clip_start_sec, 0.0, clip_duration)
-        if rel_end <= rel_start:
-            rel_end = clamp(rel_start + 0.1, 0.1, clip_duration)
-            if rel_end <= rel_start:
-                rel_start = clamp(clip_duration - 0.1, 0.0, clip_duration)
-                rel_end = clip_duration
-
-        chunk_cues.append({
-            "id": i,
-            "start": format_time(rel_start),
-            "end": format_time(rel_end),
-            "text": caption.text
-        })
-    return chunk_cues
-
-
-def validate_captions(captions, chunk_duration, original_cues=None):
+def validate_captions(captions, chunk_duration):
     validated = []
 
-    if original_cues is not None:
-        originals_by_id = {cue["id"]: cue for cue in original_cues}
+    seen_ids = set()
+    duplicate_ids = set()
+    for cap in captions:
+        if cap.id in seen_ids:
+            duplicate_ids.add(cap.id)
+        seen_ids.add(cap.id)
+    if duplicate_ids:
+        raise ValueError(f"Duplicate caption IDs: {sorted(duplicate_ids)}")
 
-        unique_captions = {}
-        for cap in captions:
-            if cap.id in originals_by_id and cap.id not in unique_captions:
-                unique_captions[cap.id] = cap
+    for cap in captions:
+        start = parse_time(cap.start)
+        end = parse_time(cap.end)
+        if start < 0 or end <= start:
+            raise ValueError(f"Invalid caption timing for id={cap.id}: {cap.start} --> {cap.end}")
 
-        for expected_id in sorted(originals_by_id.keys()):
-            orig_cue = originals_by_id[expected_id]
+        max_end = chunk_duration + 0.5
+        if end > max_end:
+            end = max_end
 
-            if expected_id not in unique_captions:
-                print(f"      [Auto-fix] Missing caption id={expected_id}. Restoring original.")
-                validated.append({
-                    "id": expected_id,
-                    "start": orig_cue["start"],
-                    "end": orig_cue["end"],
-                    "text": orig_cue["text"],
-                })
-                continue
-
-            cap = unique_captions[expected_id]
-
-            try:
-                start = parse_time(cap.start)
-            except Exception:
-                start = parse_time(orig_cue["start"])
-
-            try:
-                end = parse_time(cap.end)
-            except Exception:
-                end = parse_time(orig_cue["end"])
-
-            if start < 0:
-                start = 0
-            if end <= start:
-                orig_dur = parse_time(orig_cue["end"]) - parse_time(orig_cue["start"])
-                end = start + max(orig_dur, 0.1)
-
-            max_end = chunk_duration + 0.5
-            if end > max_end:
-                end = max_end
-            if start > max_end:
-                start = max_end - 0.5
-
-            validated.append({
-                "id": expected_id,
-                "start": format_time(start),
-                "end": format_time(end),
-                "text": orig_cue["text"],
-            })
-
-    else:
-        seen_ids = set()
-        duplicate_ids = set()
-        for cap in captions:
-            if cap.id in seen_ids:
-                duplicate_ids.add(cap.id)
-            seen_ids.add(cap.id)
-        if duplicate_ids:
-            raise ValueError(f"Duplicate caption IDs: {sorted(duplicate_ids)}")
-
-        for cap in captions:
-            start = parse_time(cap.start)
-            end = parse_time(cap.end)
-            if start < 0 or end <= start:
-                raise ValueError(f"Invalid caption timing for id={cap.id}: {cap.start} --> {cap.end}")
-
-            max_end = chunk_duration + 0.5
-            if end > max_end:
-                end = max_end
-
-            validated.append({
-                "id": cap.id,
-                "start": format_time(start),
-                "end": format_time(end),
-                "text": cap.text,
-            })
+        validated.append({
+            "id": cap.id,
+            "start": format_time(start),
+            "end": format_time(end),
+            "text": cap.text,
+        })
 
     validated = sorted(validated, key=lambda item: (parse_time(item["start"]), item["id"]))
     
@@ -524,14 +437,14 @@ def validate_captions(captions, chunk_duration, original_cues=None):
 
     return validated
 
-def load_cached_captions(out_json, chunk_duration, original_cues):
+def load_cached_captions(out_json, chunk_duration):
     if not os.path.exists(out_json):
         return None
     try:
         with open(out_json, "r", encoding="utf-8") as f:
             data = json.load(f)
-        response = AlignmentResponse(captions=data)
-        return validate_captions(response.captions, chunk_duration, original_cues, )
+        response = SubtitleResponse(captions=data)
+        return validate_captions(response.captions, chunk_duration)
     except Exception as e:
         print(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
@@ -556,96 +469,51 @@ def generate_content_config(thinking_level):
     kwargs = {
         "temperature": 0.0,
         "response_mime_type": "application/json",
-        "response_schema": AlignmentResponse,
+        "response_schema": SubtitleResponse,
     }
     if thinking_level is not None:
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level.upper())
     return types.GenerateContentConfig(**kwargs)
 
-def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chunk_mime, thinking_level):
+def process_chunk(api_key, base_url, chunk, chunk_dir, model_name, chunk_mime, thinking_level):
     chunk_idx = chunk["idx"]
     clip_name = chunk["clip_name"]
     clip_start = chunk["clip_start"]
     clip_duration = chunk["clip_duration"]
     owner_start_rel = chunk["owner_start_rel"]
     owner_end_rel = chunk["owner_end_rel"]
-    out_json = os.path.join(chunk_dir, f"aligned_chunk_{chunk_idx:03d}.json")
+    out_json = os.path.join(chunk_dir, f"subtitle_chunk_{chunk_idx:03d}.json")
     chunk_path = os.path.join(chunk_dir, clip_name)
 
-    if vtt_file:
-        # Alignment Mode
-        original_cues = get_captions_for_chunk(
-            vtt_file,
-            chunk["owner_start"],
-            chunk["owner_end"],
-            clip_start,
-            clip_duration,
-        )
-        if not original_cues:
-            print(f"No captions for {clip_name}, skipping.")
-            atomic_write_json(out_json, [])
-            return True
+    cached = load_cached_captions(out_json, clip_duration)
+    if cached is not None:
+        print(f"Skipping {clip_name} - already processed.")
+        return True
 
-        cues_json_str = json.dumps(original_cues, ensure_ascii=False, indent=2)
-        cached = load_cached_captions(out_json, clip_duration, original_cues, )
-        if cached is not None:
-            print(f"Skipping {clip_name} - already processed.")
-            return True
+    prompt = f"""
+    You are an expert subtitle generator and translator.
+    Watch this {clip_duration:.3f}-second video clip.
+    The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
 
-        prompt = f"""
-        You are an expert subtitle aligner.
-        Watch this {clip_duration:.3f}-second video clip.
-        Below is a JSON list of the original subtitles assigned to this chunk.
-        The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
+    Your task:
+    1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
+    2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
+    3. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
+    4. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
+    5. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
+    6. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
+    7. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
+    8. Preserve native cultural terms and foods rather than over-localizing them.
+    9. Do not summarize, explain, or infer missing dialogue.
+    10. Include meaningful on-screen text when it matters for understanding the video, timing it exactly to when it appears and disappears.
+    11. Ignore decorative text, logos, watermarks, and unrelated UI.
+    12. Use sequential integer IDs starting at 0.
+    13. Keep captions sorted by start time and do not overlap them.
+    14. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
+    15. Split long speech into readable, natural phrases.
 
-        Your task:
-        1. Fix the timestamps of these captions so they align perfectly with the video.
-        2. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
-        3. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
-        4. Crucially, if a caption corresponds to visual text (editors' flair text), match the timing with EXACTLY when the text appears and disappears visually on screen.
-        5. Preserve every original 'id' exactly once.
-        6. Do NOT change, translate, correct, split, merge, or reorder the original text. Return exactly what was provided in the 'text' field.
-        7. Return a complete list of all captions, ensuring none are dropped. ALL provided IDs MUST be returned, even if your corrected timing places them in the context window.
-        8. Keep captions sorted by start time.
-        9. Use timestamps relative to this full clip, from 00:00:00.000 to {format_time(clip_duration)}.
-        10. Some captions were assigned by midpoint because they may straddle chunk boundaries. Use the context video to place them correctly.
-
-        Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
-
-        Original Captions:
-        {cues_json_str}
-        """
-    else:
-        # Generation Mode
-        cached = load_cached_captions(out_json, clip_duration, None)
-        if cached is not None:
-            print(f"Skipping {clip_name} - already processed.")
-            return True
-
-        prompt = f"""
-        You are an expert subtitle generator and translator.
-        Watch this {clip_duration:.3f}-second video clip.
-        The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
-
-        Your task:
-        1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
-        2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
-        3. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
-        4. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
-        5. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-        6. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
-        7. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-        8. Preserve native cultural terms and foods rather than over-localizing them.
-        9. Do not summarize, explain, or infer missing dialogue.
-        10. Include meaningful on-screen text when it matters for understanding the video, timing it exactly to when it appears and disappears.
-        11. Ignore decorative text, logos, watermarks, and unrelated UI.
-        12. Use sequential integer IDs starting at 0.
-        13. Keep captions sorted by start time and do not overlap them.
-        14. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
-        15. Split long speech into readable, natural phrases.
-
-        Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
-        """
+    Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
+    """
 
     try:
         with open(chunk_path, "rb") as f:
@@ -656,8 +524,7 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
                 "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
             )
 
-        mode_str = "aligning" if vtt_file else "generating"
-        print(f"[Worker-{chunk_idx:03d}] {mode_str.capitalize()} {clip_name} using Gemini API...")
+        print(f"[Worker-{chunk_idx:03d}] Generating {clip_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
             response_stream = client.models.generate_content_stream(
@@ -673,12 +540,8 @@ def process_chunk(api_key, base_url, chunk, chunk_dir, vtt_file, model_name, chu
                 if chunk.text:
                     full_json_text += chunk.text
 
-        parsed_response = AlignmentResponse.model_validate_json(full_json_text)
-        validated = validate_captions(
-            parsed_response.captions,
-            clip_duration,
-            original_cues if vtt_file else None
-        )
+        parsed_response = SubtitleResponse.model_validate_json(full_json_text)
+        validated = validate_captions(parsed_response.captions, clip_duration)
         atomic_write_json(out_json, validated)
 
         print(f"[Worker-{chunk_idx:03d}] Finished {clip_name}.")
@@ -705,10 +568,10 @@ def stitch(chunk_dir, output_vtt):
     window_map = {c["idx"]: c for c in windows}
     filter_generated_context = manifest.get("mode") == "generate" and float(manifest.get("overlap") or 0.0) > 0
 
-    json_files = sorted([f for f in os.listdir(chunk_dir) if f.startswith('aligned_chunk_') and f.endswith('.json')])
+    json_files = sorted([f for f in os.listdir(chunk_dir) if f.startswith('subtitle_chunk_') and f.endswith('.json')])
 
     for json_name in json_files:
-        chunk_idx = int(json_name.replace("aligned_chunk_", "").replace(".json", ""))
+        chunk_idx = int(json_name.replace("subtitle_chunk_", "").replace(".json", ""))
         window = window_map.get(chunk_idx)
         if not window:
             continue
@@ -824,14 +687,13 @@ Script:
     print(f"Saved refined subtitles to {output_vtt}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Align or Generate VTT subtitles for a video using Gemini API.")
+    parser = argparse.ArgumentParser(description="Generate VTT subtitles for a video using Gemini API.")
     parser.add_argument("video_file_or_vtt", help="Path to the original video file (OR path to input VTT if --refine-only is used)")
-    parser.add_argument("vtt_file", nargs="?", default=None, help="Path to the original VTT subtitle file (optional). If omitted, generates from scratch.")
-    parser.add_argument("--output", "-o", default="output_subtitles.vtt", help="Output path for the generated/aligned VTT file")
+    parser.add_argument("--output", "-o", default="output_subtitles.vtt", help="Output path for the generated VTT file")
     parser.add_argument("--api-key", default=os.environ.get("GEMINI_API_KEY"), help="Gemini API Key")
     parser.add_argument("--base-url", default=os.environ.get("GEMINI_API_BASE"), help="Base URL for Gemini API (optional)")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"), help="Gemini model to use")
-    parser.add_argument("--disable-text-refine", action="store_true", help="Disable the global text refinement pass after alignment/generation")
+    parser.add_argument("--disable-text-refine", action="store_true", help="Disable the global text refinement pass after generation")
     parser.add_argument("--refine-only", action="store_true", help="Skip video processing entirely; only run global text refinement on the input VTT file")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
@@ -880,15 +742,8 @@ def main():
 
     clip_workers = suggested_clip_workers()
 
-    if not args.vtt_file:
-        print("Warning: generation mode without VTT.")
-
     if not os.path.exists(args.video_file):
         print(f"Error: Video file not found: {args.video_file}")
-        sys.exit(1)
-
-    if args.vtt_file and not os.path.exists(args.vtt_file):
-        print(f"Error: VTT file not found: {args.vtt_file}")
         sys.exit(1)
 
     if not args.api_key:
@@ -922,7 +777,6 @@ def main():
             manifest["process_ext"],
             clip_workers,
             args.workers,
-            args.vtt_file,
             args.model,
             manifest["process_mime"],
             args.chunk_thinking_level,

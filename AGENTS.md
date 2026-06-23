@@ -3,15 +3,15 @@
 This file provides critical context, architectural decisions, and strict rules for any AI assistant working on this repository. Read this before making changes to ensure consistency and prevent regressions.
 
 ## Goal
-A high-performance Python CLI tool that uses the Google Gemini API to either align existing VTT subtitles to a video (fixing timings) or generate completely new English subtitles from scratch. It optimizes for end-to-end throughput and high-quality syllable-level timing.
+A high-performance Python CLI tool that uses the Google Gemini API to generate completely new English subtitles from scratch. It optimizes for end-to-end throughput and high-quality syllable-level timing.
 
 ## Architecture
 1. **Chunking**: FFmpeg stream-copies the video into chunks (default 60s) to bypass Gemini inline video limits and proxy timeouts.
 2. **Context Overlaps**: Temporary clips are re-encoded (default 5s overlap) to give the model context across chunk boundaries, preserving the input codec family for VP9, H.264, and HEVC/H.265.
 3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.1-pro-preview` by default).
-4. **Structured Output**: Uses `google-genai` SDK and Pydantic schemas (`AlignmentResponse`) to guarantee valid JSON returns.
+4. **Structured Output**: Uses `google-genai` SDK and Pydantic schemas (`SubtitleResponse`) to guarantee valid JSON returns.
 5. **Stitching & Healing**: Validates timestamps, auto-heals any overlapping cues by nudging boundaries, and stitches chunks back into a final `.vtt`.
-6. **Global Refinement**: A second, full-script Gemini pass (`RefinementResponse`) fixes character names, continuity, and grammar without altering the aligned timestamps. Saves atomically to prevent corruption.
+6. **Global Refinement**: A second, full-script Gemini pass (`RefinementResponse`) fixes character names, continuity, and grammar without altering the generated timestamps. Saves atomically to prevent corruption.
 
 ## Current Defaults
 - Model: `gemini-3.1-pro-preview`

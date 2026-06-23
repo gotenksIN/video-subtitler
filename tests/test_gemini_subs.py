@@ -55,38 +55,6 @@ class CaptionValidationTest(unittest.TestCase):
         self.assertEqual(validated[1]["start"], "00:00:02.000")
         self.assertEqual(validated[1]["end"], "00:00:02.500")
 
-    def test_alignment_restores_missing_cues_and_preserves_text(self):
-        original_cues = [
-            {
-                "id": 0,
-                "start": "00:00:00.000",
-                "end": "00:00:01.000",
-                "text": "Original text",
-            },
-            {
-                "id": 1,
-                "start": "00:00:01.500",
-                "end": "00:00:02.000",
-                "text": "Missing cue",
-            },
-        ]
-        captions = [
-            Caption(
-                id=0,
-                start="00:00:00.100",
-                end="00:00:01.100",
-                text="Model tried to edit this",
-            )
-        ]
-
-        validated = validate_captions(captions, chunk_duration=3.0, original_cues=original_cues)
-
-        self.assertEqual(len(validated), 2)
-        self.assertEqual(validated[0]["start"], "00:00:00.100")
-        self.assertEqual(validated[0]["text"], "Original text")
-        self.assertEqual(validated[1], original_cues[1])
-
-
 class ThinkingConfigTest(unittest.TestCase):
     def test_default_chunk_thinking_level_uses_minimal_for_flash(self):
         self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "minimal")
@@ -146,7 +114,6 @@ class VideoFormatTest(unittest.TestCase):
     def test_manifest_stores_video_codec(self):
         args = SimpleNamespace(
             video_file="input.mkv",
-            vtt_file=None,
             chunk_dur=60,
             model="gemini-3.1-pro-preview",
             chunk_thinking_level="low",
@@ -166,7 +133,6 @@ class VideoFormatTest(unittest.TestCase):
     def test_vp9_manifest_uses_webm_overlap_clips(self):
         args = SimpleNamespace(
             video_file="input.webm",
-            vtt_file=None,
             chunk_dur=60,
             model="gemini-3.1-pro-preview",
             chunk_thinking_level="low",
