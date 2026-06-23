@@ -130,7 +130,6 @@ def build_manifest(args):
         "model": args.model,
         "chunk_thinking_level": args.chunk_thinking_level,
         "overlap": args.overlap,
-        "clip_workers": args.clip_workers if args.overlap else 0,
         "chunk_ext": ext,
         "chunk_mime": mime,
         "process_ext": process_ext,
@@ -836,7 +835,6 @@ def main():
     parser.add_argument("--refine-only", action="store_true", help="Skip video processing entirely; only run global text refinement on the input VTT file")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
-    parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--thinking-level", choices=THINKING_LEVELS, default=None, help="Chunk Gemini thinking level. Default: minimal for Flash models, low otherwise.")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
@@ -867,10 +865,6 @@ def main():
         print("Error: --workers must be greater than 0")
         sys.exit(1)
 
-    if args.clip_workers < 0:
-        print("Error: --clip-workers must be greater than or equal to 0")
-        sys.exit(1)
-
     try:
         validate_thinking_level_for_model(args.model, args.chunk_thinking_level)
     except ValueError as e:
@@ -885,7 +879,7 @@ def main():
         print("Error: --overlap must be smaller than --chunk-dur")
         sys.exit(1)
 
-    clip_workers = args.clip_workers or suggested_clip_workers()
+    clip_workers = suggested_clip_workers()
 
     if not args.vtt_file:
         print("Warning: generation mode without VTT.")

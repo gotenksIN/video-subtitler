@@ -151,7 +151,6 @@ class VideoFormatTest(unittest.TestCase):
             model="gemini-3.1-pro-preview",
             chunk_thinking_level="low",
             overlap=5,
-            clip_workers=3,
         )
 
         with (
@@ -172,7 +171,6 @@ class VideoFormatTest(unittest.TestCase):
             model="gemini-3.1-pro-preview",
             chunk_thinking_level="low",
             overlap=5,
-            clip_workers=3,
         )
 
         with (

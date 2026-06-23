@@ -102,7 +102,6 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--refine-only`: Skip video processing entirely; only run global text refinement on the input VTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
 - `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. The clip container and video encoder are derived from the input codec. Default: `5`.
-- `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
 - `--thinking-level`: Gemini thinking level for chunk video calls. Default: `minimal` for Flash models, `low` otherwise. The global refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
