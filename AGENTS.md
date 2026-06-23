@@ -52,11 +52,10 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 ### 6. Helper Scripts
 - `subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
 - `yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
-- `embed-subs.sh` embeds VTT subtitles into a video as a soft subtitle track using `ffmpeg -c copy` (no re-encode).
 - Keep shell scripts compatible with `shellcheck` and explicit about required arguments.
 
 ### 7. Validation
-- Run `shellcheck subtitle.sh yt-dl.sh embed-subs.sh` after changing shell scripts.
+- Run `shellcheck subtitle.sh yt-dl.sh` after changing shell scripts.
 - Run `uv run python -m compileall -q .` after Python changes.
 - Run `uv run python -m unittest discover -s tests` after code or validation logic changes.
 - Run `uv run gemini_subs.py --help` after CLI argument changes.

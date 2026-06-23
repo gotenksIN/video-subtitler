@@ -59,13 +59,6 @@ Generate subtitles for a local video using the repository's preferred worker set
 
 The subtitle helper writes to `your_video.webm.vtt`.
 
-Embed subtitles into a video as a soft subtitle track (uses `-c copy` to avoid re-encoding):
-```bash
-./embed-subs.sh "your_video.webm" "your_video.webm.vtt"
-```
-
-By default this writes to `your_video.subs.webm`. You can pass an optional third argument to specify a custom output filename.
-
 ### Generation Mode (Creating new subtitles from scratch)
 To generate completely new English subtitles from a video with no existing VTT:
 ```bash
