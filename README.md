@@ -60,6 +60,13 @@ Generate subtitles for a local video using the repository's preferred worker set
 
 The subtitle helper writes to `your_video.webm.vtt`.
 
+Benchmark local overlap clip generation and Gemini processing for a sample clip:
+```bash
+./benchmark.py "your_video.webm"
+```
+
+The benchmark makes a real Gemini API request and reports FFmpeg time, Gemini time, and a suggested `--workers` value for `subtitle.sh`.
+
 ### Generation Mode (Creating new subtitles from scratch)
 To generate completely new English subtitles from a video with no existing VTT:
 ```bash
@@ -109,4 +116,5 @@ uv run ruff format --check .
 uv run python -m compileall -q .
 uv run python -m unittest discover -s tests
 uv run gemini_subs.py --help
+./benchmark.py --help
 ```

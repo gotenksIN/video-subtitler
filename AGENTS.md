@@ -54,6 +54,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 - `subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
 - `yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
 - `ffmpeg.sh` installs or upgrades the latest BtbN GPL static FFmpeg build into `~/.local/bin` for linux64 and linuxarm64 hosts. It always downloads the current `latest` archive.
+- `benchmark.py` times one overlap clip generation and one real Gemini request, then suggests a `subtitle.sh` worker count.
 - Keep shell scripts compatible with `shellcheck` and explicit about required arguments.
 
 ### 7. Validation
@@ -62,6 +63,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 - Run `uv run python -m compileall -q .` after Python changes.
 - Run `uv run python -m unittest discover -s tests` after code or validation logic changes.
 - Run `uv run gemini_subs.py --help` after CLI argument changes.
+- Run `./benchmark.py --help` after benchmark CLI changes.
 
 ### 8. Git Workflow
 - When the user requests per-task commits, commit each discrete task before starting the next one.
