@@ -8,9 +8,12 @@ import tempfile
 import time
 from pathlib import Path
 
-from google.genai import types
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
-from gemini_subs import (
+from google.genai import types  # noqa: E402
+
+from gemini_subs import (  # noqa: E402
     SubtitleResponse,
     create_client,
     default_chunk_thinking_level,
@@ -186,7 +189,7 @@ def print_summary(
     print(f"  Captions returned: {caption_count}")
     print()
     print("Worker guidance")
-    print(f"  Suggested subtitle.sh workers: {workers}")
+    print(f"  Suggested scripts/subtitle.sh workers: {workers}")
     print(
         "  Rationale: ceil(Gemini seconds / FFmpeg seconds), so API processing "
         "keeps pace with local clip generation."

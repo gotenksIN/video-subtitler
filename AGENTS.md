@@ -51,19 +51,20 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 - Use atomic writes (`.tmp` file renaming) for all final file outputs to prevent corruption on user interrupt.
 
 ### 6. Helper Scripts
-- `subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
-- `yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
-- `ffmpeg.sh` installs or upgrades the latest BtbN GPL static FFmpeg build into `~/.local/bin` for linux64 and linuxarm64 hosts. It always downloads the current `latest` archive.
-- `benchmark.py` times one overlap clip generation and one real Gemini request, then suggests a `subtitle.sh` worker count.
+- Helper scripts live in `scripts/` and must be directly executable as `./scripts/<name>` from the repo root.
+- `scripts/subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
+- `scripts/yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
+- `scripts/ffmpeg.sh` installs or upgrades the latest BtbN GPL static FFmpeg build into `~/.local/bin` for linux64 and linuxarm64 hosts. It always downloads the current `latest` archive.
+- `scripts/benchmark.py` times one overlap clip generation and one real Gemini request, then suggests a `scripts/subtitle.sh` worker count.
 - Keep shell scripts compatible with `shellcheck` and explicit about required arguments.
 
 ### 7. Validation
-- Run `shellcheck subtitle.sh yt-dl.sh ffmpeg.sh` after changing shell scripts.
+- Run `shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh` after changing shell scripts.
 - Run `uv run ruff check .` and `uv run ruff format --check .` after Python or formatting changes.
 - Run `uv run python -m compileall -q .` after Python changes.
 - Run `uv run python -m unittest discover -s tests` after code or validation logic changes.
 - Run `uv run gemini_subs.py --help` after CLI argument changes.
-- Run `./benchmark.py --help` after benchmark CLI changes.
+- Run `./scripts/benchmark.py --help` after benchmark CLI changes.
 
 ### 8. Git Workflow
 - When the user requests per-task commits, commit each discrete task before starting the next one.

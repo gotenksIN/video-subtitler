@@ -16,7 +16,7 @@ A Python CLI that uses the Google Gemini API to generate new English subtitles f
 - [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` must be installed and available in your system's PATH.
   - **Headless / X11-Free Installation (WSL/Ubuntu Server):** To avoid installing heavy X11/GUI dependencies, install or upgrade a pre-compiled GPL static build from the official [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) repository directly into your local user binary directory:
     ```bash
-    ./ffmpeg.sh
+    ./scripts/ffmpeg.sh
     ```
     Ensure `~/.local/bin` is in your `PATH` (by adding `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` or `~/.zshrc`).
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional, run automatically on-demand via `uvx` (no manual installation needed).
@@ -45,27 +45,27 @@ You can run the script using `uv run`.
 
 Install or upgrade the latest BtbN GPL static FFmpeg build into `~/.local/bin`:
 ```bash
-./ffmpeg.sh
+./scripts/ffmpeg.sh
 ```
 
 Download a YouTube video as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable:
 ```bash
-./yt-dl.sh "https://youtube.com/watch?v=..."
+./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
 ```
 
 Generate subtitles for a local video using the repository's preferred worker settings:
 ```bash
-./subtitle.sh "your_video.webm"
+./scripts/subtitle.sh "your_video.webm"
 ```
 
 The subtitle helper writes to `your_video.webm.vtt`.
 
 Benchmark local overlap clip generation and Gemini processing for a sample clip:
 ```bash
-./benchmark.py "your_video.webm"
+./scripts/benchmark.py "your_video.webm"
 ```
 
-The benchmark makes a real Gemini API request and reports FFmpeg time, Gemini time, and a suggested `--workers` value for `subtitle.sh`.
+The benchmark makes a real Gemini API request and reports FFmpeg time, Gemini time, and a suggested `--workers` value for `scripts/subtitle.sh`.
 
 ### Generation Mode (Creating new subtitles from scratch)
 To generate completely new English subtitles from a video with no existing VTT:
@@ -110,11 +110,11 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 ## Development Checks
 
 ```bash
-shellcheck subtitle.sh yt-dl.sh ffmpeg.sh
+shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh
 uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall -q .
 uv run python -m unittest discover -s tests
 uv run gemini_subs.py --help
-./benchmark.py --help
+./scripts/benchmark.py --help
 ```
