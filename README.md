@@ -1,13 +1,13 @@
 # Gemini Subtitle Generator
 
-A Python tool that uses the Google Gemini API to generate new English subtitles from scratch. It splits the video into chunks, adds overlapping context clips by default, processes them concurrently, and stitches the validated JSON results back into a final VTT file.
+A Python CLI that uses the Google Gemini API to generate new English subtitles from scratch. It splits video into chunks, adds overlapping context clips by default, processes them concurrently, stitches validated JSON results into a final VTT file, and optionally runs a full-script text refinement pass.
 
 ## Features
 
-- **Generation Mode:** Pass just a video file, and Gemini will generate translated English subtitles with accurate timestamps from scratch.
+- **Generation Mode:** Pass a video file, and Gemini generates English subtitles with accurate timestamps from scratch.
 - **Concurrent Processing:** Processes chunks in parallel using multiple Gemini API workers.
-- **Structured Outputs:** Uses Pydantic JSON schemas and local validation to catch malformed timestamps or dropped captions.
-- **Resumable:** Failed runs keep their work directory so a retry can skip valid completed chunks.
+- **Structured Outputs:** Uses Pydantic JSON schemas and local validation to catch malformed timestamps, duplicate IDs, and invalid chunk output.
+- **Resumable Failures:** Failed runs keep their work directory so a retry can skip valid completed chunks. Successful runs clean up temporary chunks.
 - **Safe Outputs:** Writes chunk JSON and the final VTT atomically to avoid corrupting previous results.
 
 ## Prerequisites
@@ -43,14 +43,14 @@ You can run the script using `uv run`.
 
 ### Helper Scripts
 
-Download a YouTube video as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable:
-```bash
-./yt-dl.sh "https://youtube.com/watch?v=..."
-```
-
 Install or upgrade the latest BtbN GPL static FFmpeg build into `~/.local/bin`:
 ```bash
 ./ffmpeg.sh
+```
+
+Download a YouTube video as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable:
+```bash
+./yt-dl.sh "https://youtube.com/watch?v=..."
 ```
 
 Generate subtitles for a local video using the repository's preferred worker settings:
@@ -93,8 +93,20 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 ## Notes
 
 - The initial split uses `-c copy`. Supported input codecs are VP9, H.264, and HEVC/H.265. VP9 chunks use WebM, while H.264 and HEVC chunks use MP4.
+- AV1 input is rejected early because the processing pipeline currently supports VP9, H.264, and HEVC/H.265 only.
 - With the default `--overlap 5`, temporary overlap clips are re-encoded with the same video codec family as the input so chunk boundaries can land exactly where subtitle timing needs them.
 - Set `--overlap 0` to disable overlap re-encoding and process stream-copy chunks directly.
 - Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.
-- If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry.
+- If any chunk fails validation or API processing, stitching is aborted and the work directory is kept for retry. Successful runs remove their temporary work directory.
 - Output VTT files are ignored by Git by default; move or rename files if you want to track specific subtitle outputs.
+
+## Development Checks
+
+```bash
+shellcheck subtitle.sh yt-dl.sh ffmpeg.sh
+uv run ruff check .
+uv run ruff format --check .
+uv run python -m compileall -q .
+uv run python -m unittest discover -s tests
+uv run gemini_subs.py --help
+```

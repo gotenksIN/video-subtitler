@@ -8,7 +8,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 ## Architecture
 1. **Chunking**: FFmpeg stream-copies the video into chunks (default 60s) to bypass Gemini inline video limits and proxy timeouts.
 2. **Context Overlaps**: Temporary clips are re-encoded (default 5s overlap) to give the model context across chunk boundaries, preserving the input codec family for VP9, H.264, and HEVC/H.265.
-3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.1-pro-preview` by default).
+3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.1-pro-preview` by default). Overlap clip creation is auto-sized from CPU count.
 4. **Structured Output**: Uses `google-genai` SDK and Pydantic schemas (`SubtitleResponse`) to guarantee valid JSON returns.
 5. **Stitching & Healing**: Validates timestamps, auto-heals any overlapping cues by nudging boundaries, and stitches chunks back into a final `.vtt`.
 6. **Global Refinement**: A second, full-script Gemini pass (`RefinementResponse`) fixes character names, continuity, and grammar without altering the generated timestamps. Saves atomically to prevent corruption.
@@ -35,12 +35,13 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 - Do not summarize, explain, or infer missing dialogue.
 
 ### 3. State & Caching
-- **Resumability**: The script writes a `manifest.json` tracking inputs, derived codec/overlap settings, and model configs. Failed runs keep the chunk directory to resume instantly.
+- **Resumability**: The script writes a `manifest.json` tracking inputs, derived codec/overlap settings, and model configs. Failed runs keep the chunk directory to resume instantly; successful runs remove temporary chunks.
 
 ### 4. SDK & Dependencies
 - Uses the modern `google-genai` (>= 2.0.0) SDK, NOT the legacy `google-generativeai` package.
 - Uses `uv` for dependency management (`uv run`). 
 - Schema uses strictly typed Pydantic models.
+- Uses Ruff for formatting and lint checks.
 - Prefer the Python standard library for tests and small utilities unless a new dependency clearly pays for itself.
 - For system dependencies (like FFmpeg/FFprobe), explicitly recommend and document headless/X11-free GPL static builds (from BtbN/FFmpeg-Builds) in environments like WSL or Ubuntu Server to avoid pulling in graphical dependencies.
 
@@ -52,11 +53,12 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 ### 6. Helper Scripts
 - `subtitle.sh` is the preferred local wrapper for generating subtitles with the repository's tuned worker settings.
 - `yt-dl.sh` downloads YouTube videos as best available VP9 video plus best audio, falling back to best WebM when VP9 is unavailable.
-- `ffmpeg.sh` installs or upgrades the latest BtbN GPL static FFmpeg build into `~/.local/bin`.
+- `ffmpeg.sh` installs or upgrades the latest BtbN GPL static FFmpeg build into `~/.local/bin` for linux64 and linuxarm64 hosts. It always downloads the current `latest` archive.
 - Keep shell scripts compatible with `shellcheck` and explicit about required arguments.
 
 ### 7. Validation
 - Run `shellcheck subtitle.sh yt-dl.sh ffmpeg.sh` after changing shell scripts.
+- Run `uv run ruff check .` and `uv run ruff format --check .` after Python or formatting changes.
 - Run `uv run python -m compileall -q .` after Python changes.
 - Run `uv run python -m unittest discover -s tests` after code or validation logic changes.
 - Run `uv run gemini_subs.py --help` after CLI argument changes.
