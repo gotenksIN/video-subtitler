@@ -55,6 +55,7 @@ class CaptionValidationTest(unittest.TestCase):
         self.assertEqual(validated[1]["start"], "00:00:02.000")
         self.assertEqual(validated[1]["end"], "00:00:02.500")
 
+
 class ThinkingConfigTest(unittest.TestCase):
     def test_default_chunk_thinking_level_uses_minimal_for_flash(self):
         self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "minimal")
@@ -121,8 +122,14 @@ class VideoFormatTest(unittest.TestCase):
         )
 
         with (
-            patch("gemini_subs.probe_video_format", return_value=(".mp4", "video/mp4", "hevc")),
-            patch("gemini_subs.file_fingerprint", return_value={"path": "input.mkv", "size": 1, "mtime_ns": 2}),
+            patch(
+                "gemini_subs.probe_video_format",
+                return_value=(".mp4", "video/mp4", "hevc"),
+            ),
+            patch(
+                "gemini_subs.file_fingerprint",
+                return_value={"path": "input.mkv", "size": 1, "mtime_ns": 2},
+            ),
         ):
             manifest, _chunk_dir = build_manifest(args)
 
@@ -140,8 +147,14 @@ class VideoFormatTest(unittest.TestCase):
         )
 
         with (
-            patch("gemini_subs.probe_video_format", return_value=(".webm", "video/webm", "vp9")),
-            patch("gemini_subs.file_fingerprint", return_value={"path": "input.webm", "size": 1, "mtime_ns": 2}),
+            patch(
+                "gemini_subs.probe_video_format",
+                return_value=(".webm", "video/webm", "vp9"),
+            ),
+            patch(
+                "gemini_subs.file_fingerprint",
+                return_value={"path": "input.webm", "size": 1, "mtime_ns": 2},
+            ),
         ):
             manifest, _chunk_dir = build_manifest(args)
 
