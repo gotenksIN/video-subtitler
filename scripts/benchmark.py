@@ -103,6 +103,8 @@ def run_ffmpeg(video_file, clip_path, start, duration, ext, codec):
     for raw_line in process.stdout:
         key, sep, value = raw_line.strip().partition("=")
         if sep and key == "out_time_ms":
+            if not value.isdecimal():
+                continue
             elapsed = max(0.0, int(value) / 1_000_000)
             percent = min(100.0, elapsed / duration * 100)
             print(
