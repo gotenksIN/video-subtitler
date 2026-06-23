@@ -837,7 +837,6 @@ def main():
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--thinking-level", choices=THINKING_LEVELS, default=None, help="Chunk Gemini thinking level. Default: minimal for Flash models, low otherwise.")
-    parser.add_argument("--keep-chunks", action="store_true", help="Keep the per-input work directory after successful processing")
 
     args = parser.parse_args()
 
@@ -951,7 +950,7 @@ def main():
     finally:
         release_lock(lock_path)
         # 4. Cleanup
-        if completed and not args.keep_chunks and os.path.exists(chunk_dir):
+        if completed and os.path.exists(chunk_dir):
             print(f"Cleaning up temporary directory: {chunk_dir}")
             shutil.rmtree(chunk_dir)
 

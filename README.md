@@ -107,7 +107,6 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL`.
-- `--keep-chunks`: Keep the per-input work directory under `temp_video_chunks/` after successful processing.
 
 ## Notes
 
