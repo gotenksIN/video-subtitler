@@ -101,8 +101,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--disable-text-refine`: Disable the global text refinement pass after alignment/generation.
 - `--refine-only`: Skip video processing entirely; only run global text refinement on the input VTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`)
-- `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. Default: `5`.
-- `--overlap-format`: Container for overlap clips. Default: `mp4`.
+- `--overlap`: Seconds of extra context to include before and after each chunk. This creates temporary re-encoded overlap clips for better boundary timing. The clip container and video encoder are derived from the input codec. Default: `5`.
 - `--clip-workers`: Number of overlap clip encodes to run in parallel. `0` uses an automatic value.
 - `--workers`: Max concurrent API workers (default: `4`)
 - `--thinking-level`: Gemini thinking level for chunk video calls. Default: `minimal` for Flash models, `low` otherwise. The global refinement pass always uses `high`.
@@ -113,7 +112,8 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 
 ## Notes
 
-- The initial split uses `-c copy`. With the default `--overlap 5`, temporary overlap clips are re-encoded so chunk boundaries can land exactly where subtitle timing needs them.
+- The initial split uses `-c copy`. Supported input codecs are VP9, H.264, and HEVC/H.265. VP9 chunks use WebM, while H.264 and HEVC chunks use MP4.
+- With the default `--overlap 5`, temporary overlap clips are re-encoded with the same video codec family as the input so chunk boundaries can land exactly where subtitle timing needs them.
 - Alignment mode assigns captions to chunks by cue midpoint instead of raw start time, which reduces drift for lines that straddle chunk boundaries.
 - Set `--overlap 0` to disable overlap re-encoding and process stream-copy chunks directly.
 - Gemini's inline video guidance recommends keeping requests below 20 MB; reduce `--chunk-dur` if chunk uploads fail.

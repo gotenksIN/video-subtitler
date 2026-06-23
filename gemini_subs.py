@@ -43,11 +43,6 @@ LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 REFINEMENT_THINKING_LEVEL = "high"
-OVERLAP_FORMATS = {
-    "webm": (".webm", "video/webm"),
-    "mp4": (".mp4", "video/mp4"),
-}
-
 def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
@@ -61,9 +56,11 @@ def probe_video_format(path):
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         fmt = result.stdout.strip().lower()
         if "vp9" in fmt:
-            return ".webm", "video/webm"
+            return ".webm", "video/webm", "vp9"
         if "h264" in fmt:
-            return ".mp4", "video/mp4"
+            return ".mp4", "video/mp4", "h264"
+        if "hevc" in fmt or "h265" in fmt:
+            return ".mp4", "video/mp4", "hevc"
         raise RuntimeError(f"Video format not supported: {path}")
     except RuntimeError:
         raise
@@ -118,9 +115,9 @@ def file_fingerprint(path):
     }
 
 def build_manifest(args):
-    ext, mime = probe_video_format(args.video_file)
+    ext, mime, video_codec = probe_video_format(args.video_file)
     if args.overlap:
-        process_ext, process_mime = OVERLAP_FORMATS[args.overlap_format]
+        process_ext, process_mime = ext, mime
     else:
         process_ext, process_mime = ext, mime
 
@@ -133,12 +130,12 @@ def build_manifest(args):
         "model": args.model,
         "chunk_thinking_level": args.chunk_thinking_level,
         "overlap": args.overlap,
-        "overlap_format": args.overlap_format if args.overlap else None,
         "clip_workers": args.clip_workers if args.overlap else 0,
         "chunk_ext": ext,
         "chunk_mime": mime,
         "process_ext": process_ext,
         "process_mime": process_mime,
+        "video_codec": video_codec,
     }
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return manifest, os.path.join(CHUNK_ROOT, digest)
@@ -242,16 +239,29 @@ def suggested_clip_workers():
     cpu_count = os.cpu_count() or 1
     return max(1, min(4, cpu_count // 8 or 1))
 
-def overlap_codec_args(ext):
-    if ext == ".webm":
+def overlap_codec_args(ext, codec):
+    if codec == "vp9":
+        if ext != ".webm":
+            raise ValueError("VP9 input requires WebM overlap clips")
         return [
             "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-threads", "8", "-tile-columns", "2", "-row-mt", "1", "-frame-parallel", "1",
             "-c:a", "libopus", "-b:a", "128k",
         ]
 
-    if ext == ".mp4":
+    if codec == "h264":
+        if ext != ".mp4":
+            raise ValueError("H.264 input requires MP4 overlap clips")
         return [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-b:v", "0", "-threads", "8",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+        ]
+
+    if codec == "hevc":
+        if ext != ".mp4":
+            raise ValueError("HEVC input requires MP4 overlap clips")
+        return [
+            "-c:v", "libx265", "-preset", "veryfast", "-crf", "32", "-threads", "8",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
         ]
@@ -271,13 +281,16 @@ def create_overlap_clip(video_file, chunk_dir, chunk_idx, clip_start, clip_end, 
     if duration <= 0:
         raise ValueError(f"Invalid overlap clip duration for chunk {chunk_idx}: {duration}")
 
+    manifest = load_manifest(chunk_dir)
+    video_codec = manifest.get("video_codec")
+
     print(f"Creating overlap clip {clip_name} ({format_time(clip_start)} to {format_time(clip_end)})...")
     cmd = [
         "ffmpeg", "-y",
         "-i", video_file,
         "-ss", format_time(clip_start), "-t", f"{duration:.3f}",
         "-map", "0:v:0", "-map", "0:a?", "-sn",
-        *overlap_codec_args(clip_ext),
+        *overlap_codec_args(clip_ext, video_codec),
         "-f", "webm" if clip_ext == ".webm" else "mp4",
         tmp_path,
     ]
@@ -823,7 +836,6 @@ def main():
     parser.add_argument("--refine-only", action="store_true", help="Skip video processing entirely; only run global text refinement on the input VTT file")
     parser.add_argument("--chunk-dur", type=int, default=60, help="Chunk duration in seconds (default: 60)")
     parser.add_argument("--overlap", type=float, default=5.0, help="Seconds of context to add before and after each chunk (default: 5)")
-    parser.add_argument("--overlap-format", choices=sorted(OVERLAP_FORMATS.keys()), default="mp4", help="Container to use for re-encoded overlap clips (default: mp4)")
     parser.add_argument("--clip-workers", type=int, default=0, help="Parallel overlap clip encode workers. 0 means auto.")
     parser.add_argument("--workers", type=int, default=4, help="Max concurrent API workers")
     parser.add_argument("--thinking-level", choices=THINKING_LEVELS, default=None, help="Chunk Gemini thinking level. Default: minimal for Flash models, low otherwise.")

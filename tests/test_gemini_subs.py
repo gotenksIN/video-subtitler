@@ -1,8 +1,10 @@
 import unittest
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from gemini_subs import (
+    build_manifest,
     Caption,
     default_chunk_thinking_level,
     format_time,
@@ -111,10 +113,11 @@ class VideoFormatTest(unittest.TestCase):
         with patch("gemini_subs.subprocess.run") as run:
             run.return_value.stdout = probe_output
 
-            ext, mime = probe_video_format("input.webm")
+            ext, mime, codec = probe_video_format("input.webm")
 
         self.assertEqual(ext, ".webm")
         self.assertEqual(mime, "video/webm")
+        self.assertEqual(codec, "vp9")
 
     def test_h264_mkv_uses_mp4_chunks(self):
         probe_output = "h264\naac\nsubrip\nmatroska,webm\n"
@@ -122,10 +125,66 @@ class VideoFormatTest(unittest.TestCase):
         with patch("gemini_subs.subprocess.run") as run:
             run.return_value.stdout = probe_output
 
-            ext, mime = probe_video_format("input.mkv")
+            ext, mime, codec = probe_video_format("input.mkv")
 
         self.assertEqual(ext, ".mp4")
         self.assertEqual(mime, "video/mp4")
+        self.assertEqual(codec, "h264")
+
+    def test_hevc_mkv_uses_mp4_chunks_and_hevc_codec(self):
+        probe_output = "hevc\naac\nsubrip\nsubrip\nmatroska,webm\n"
+
+        with patch("gemini_subs.subprocess.run") as run:
+            run.return_value.stdout = probe_output
+
+            ext, mime, codec = probe_video_format("input.mkv")
+
+        self.assertEqual(ext, ".mp4")
+        self.assertEqual(mime, "video/mp4")
+        self.assertEqual(codec, "hevc")
+
+    def test_manifest_stores_video_codec(self):
+        args = SimpleNamespace(
+            video_file="input.mkv",
+            vtt_file=None,
+            chunk_dur=60,
+            model="gemini-3.1-pro-preview",
+            chunk_thinking_level="low",
+            overlap=5,
+            clip_workers=3,
+        )
+
+        with (
+            patch("gemini_subs.probe_video_format", return_value=(".mp4", "video/mp4", "hevc")),
+            patch("gemini_subs.file_fingerprint", return_value={"path": "input.mkv", "size": 1, "mtime_ns": 2}),
+        ):
+            manifest, _chunk_dir = build_manifest(args)
+
+        self.assertEqual(manifest["video_codec"], "hevc")
+        self.assertEqual(manifest["process_ext"], ".mp4")
+        self.assertEqual(manifest["process_mime"], "video/mp4")
+
+    def test_vp9_manifest_uses_webm_overlap_clips(self):
+        args = SimpleNamespace(
+            video_file="input.webm",
+            vtt_file=None,
+            chunk_dur=60,
+            model="gemini-3.1-pro-preview",
+            chunk_thinking_level="low",
+            overlap=5,
+            clip_workers=3,
+        )
+
+        with (
+            patch("gemini_subs.probe_video_format", return_value=(".webm", "video/webm", "vp9")),
+            patch("gemini_subs.file_fingerprint", return_value={"path": "input.webm", "size": 1, "mtime_ns": 2}),
+        ):
+            manifest, _chunk_dir = build_manifest(args)
+
+        self.assertEqual(manifest["video_codec"], "vp9")
+        self.assertEqual(manifest["process_ext"], ".webm")
+        self.assertEqual(manifest["process_mime"], "video/webm")
+        self.assertNotIn("overlap_format", manifest)
 
     def test_unsupported_video_codec_fails_early(self):
         probe_output = "av1\nopus\nmatroska,webm\n"
@@ -144,7 +203,7 @@ class VideoFormatTest(unittest.TestCase):
                 probe_video_format("input.mkv")
 
     def test_mp4_overlap_uses_x264_flags_matching_vp9_quality(self):
-        args = overlap_codec_args(".mp4")
+        args = overlap_codec_args(".mp4", "h264")
 
         self.assertIn("libx264", args)
         self.assertIn("-crf", args)
@@ -155,9 +214,27 @@ class VideoFormatTest(unittest.TestCase):
         self.assertIn("8", args)
         self.assertIn("+faststart", args)
 
+    def test_mp4_overlap_uses_x265_for_hevc(self):
+        args = overlap_codec_args(".mp4", "hevc")
+
+        self.assertIn("libx265", args)
+        self.assertIn("-crf", args)
+        self.assertIn("32", args)
+        self.assertIn("-threads", args)
+        self.assertIn("8", args)
+        self.assertIn("+faststart", args)
+
     def test_unsupported_overlap_format_fails_early(self):
-        with self.assertRaisesRegex(ValueError, "Overlap format not supported"):
-            overlap_codec_args(".mkv")
+        with self.assertRaisesRegex(ValueError, "requires MP4 overlap clips"):
+            overlap_codec_args(".mkv", "h264")
+
+    def test_incompatible_overlap_format_fails_early(self):
+        with self.assertRaisesRegex(ValueError, "requires MP4 overlap clips"):
+            overlap_codec_args(".webm", "hevc")
+
+    def test_vp9_requires_webm_overlap_clips(self):
+        with self.assertRaisesRegex(ValueError, "requires WebM overlap clips"):
+            overlap_codec_args(".mp4", "vp9")
 
 
 if __name__ == "__main__":

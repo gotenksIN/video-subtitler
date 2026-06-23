@@ -7,7 +7,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 
 ## Architecture
 1. **Chunking**: FFmpeg stream-copies the video into chunks (default 60s) to bypass Gemini inline video limits and proxy timeouts.
-2. **Context Overlaps**: Temporary clips are re-encoded (default 5s overlap) to give the model context across chunk boundaries, ensuring accurate midpoint boundary assignments.
+2. **Context Overlaps**: Temporary clips are re-encoded (default 5s overlap) to give the model context across chunk boundaries, preserving the input codec family for VP9, H.264, and HEVC/H.265.
 3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.1-pro-preview` by default).
 4. **Structured Output**: Uses `google-genai` SDK and Pydantic schemas (`AlignmentResponse`) to guarantee valid JSON returns.
 5. **Stitching & Healing**: Validates timestamps, auto-heals any overlapping cues by nudging boundaries, and stitches chunks back into a final `.vtt`.
@@ -18,7 +18,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 - Common base URL: `https://main.your-proxy-domain.com/google/v1beta`
 - Chunk duration: `60`
 - Overlap: `5`
-- Overlap format: `mp4`
+- Overlap format: derived from input codec (`webm` for VP9, `mp4` for H.264 and HEVC/H.265)
 - Chunk thinking level: `minimal` for Flash models, `low` otherwise
 - Global refinement thinking level: `high`
 - Global refinement: enabled by default
@@ -35,7 +35,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 - Do not summarize, explain, or infer missing dialogue.
 
 ### 3. State & Caching
-- **Resumability**: The script writes a `manifest.json` tracking inputs, overlap settings, and model configs. Failed runs keep the chunk directory to resume instantly.
+- **Resumability**: The script writes a `manifest.json` tracking inputs, derived codec/overlap settings, and model configs. Failed runs keep the chunk directory to resume instantly.
 
 ### 4. SDK & Dependencies
 - Uses the modern `google-genai` (>= 2.0.0) SDK, NOT the legacy `google-generativeai` package.
