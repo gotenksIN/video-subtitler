@@ -60,16 +60,15 @@ def probe_video_format(path):
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         fmt = result.stdout.strip().lower()
-        if "webm" in fmt or "matroska" in fmt:
-            if "h264" in fmt:
-                return ".mp4", "video/mp4"
+        if "vp9" in fmt:
             return ".webm", "video/webm"
-        elif "mp4" in fmt or "mov" in fmt:
+        if "h264" in fmt:
             return ".mp4", "video/mp4"
-        else:
-            return ".mp4", "video/mp4"
-    except Exception:
-        return ".mp4", "video/mp4"
+        raise RuntimeError(f"Video format not supported: {path}")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Failed to probe video format: {e}")
 
 def parse_time(time_str):
     value = str(time_str).strip().replace(",", ".")
@@ -250,11 +249,14 @@ def overlap_codec_args(ext):
             "-c:a", "libopus", "-b:a", "128k",
         ]
 
-    return [
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-b:v", "0", "-threads", "8",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-    ]
+    if ext == ".mp4":
+        return [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-b:v", "0", "-threads", "8",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+        ]
+
+    raise ValueError(f"Overlap format not supported: {ext}")
 
 def create_overlap_clip(video_file, chunk_dir, chunk_idx, clip_start, clip_end, clip_ext):
     clip_name = f"context_chunk_{chunk_idx:03d}{clip_ext}"

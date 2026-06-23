@@ -1,4 +1,5 @@
 import unittest
+import subprocess
 from unittest.mock import patch
 
 from gemini_subs import (
@@ -104,6 +105,17 @@ class ThinkingConfigTest(unittest.TestCase):
 
 
 class VideoFormatTest(unittest.TestCase):
+    def test_vp9_webm_uses_webm_chunks(self):
+        probe_output = "vp9\nopus\nmatroska,webm\n"
+
+        with patch("gemini_subs.subprocess.run") as run:
+            run.return_value.stdout = probe_output
+
+            ext, mime = probe_video_format("input.webm")
+
+        self.assertEqual(ext, ".webm")
+        self.assertEqual(mime, "video/webm")
+
     def test_h264_mkv_uses_mp4_chunks(self):
         probe_output = "h264\naac\nsubrip\nmatroska,webm\n"
 
@@ -114,6 +126,22 @@ class VideoFormatTest(unittest.TestCase):
 
         self.assertEqual(ext, ".mp4")
         self.assertEqual(mime, "video/mp4")
+
+    def test_unsupported_video_codec_fails_early(self):
+        probe_output = "av1\nopus\nmatroska,webm\n"
+
+        with patch("gemini_subs.subprocess.run") as run:
+            run.return_value.stdout = probe_output
+
+            with self.assertRaisesRegex(RuntimeError, "Video format not supported"):
+                probe_video_format("input.mkv")
+
+    def test_ffprobe_failure_fails_early(self):
+        with patch("gemini_subs.subprocess.run") as run:
+            run.side_effect = subprocess.CalledProcessError(1, ["ffprobe"])
+
+            with self.assertRaisesRegex(RuntimeError, "Failed to probe video format"):
+                probe_video_format("input.mkv")
 
     def test_mp4_overlap_uses_x264_flags_matching_vp9_quality(self):
         args = overlap_codec_args(".mp4")
@@ -126,6 +154,10 @@ class VideoFormatTest(unittest.TestCase):
         self.assertIn("-threads", args)
         self.assertIn("8", args)
         self.assertIn("+faststart", args)
+
+    def test_unsupported_overlap_format_fails_early(self):
+        with self.assertRaisesRegex(ValueError, "Overlap format not supported"):
+            overlap_codec_args(".mkv")
 
 
 if __name__ == "__main__":
