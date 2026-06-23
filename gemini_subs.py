@@ -41,7 +41,6 @@ SPLIT_COMPLETE_MARKER = ".split_complete"
 MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
-PIPELINE_VERSION = 3
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 REFINEMENT_THINKING_LEVEL = "high"
 OVERLAP_FORMATS = {
@@ -131,7 +130,6 @@ def build_manifest(args):
         "vtt": file_fingerprint(args.vtt_file) if args.vtt_file else None,
         "chunk_dur": args.chunk_dur,
         "format": "stream-copy-v1",
-        "pipeline_version": PIPELINE_VERSION,
         "mode": "align" if args.vtt_file else "generate",
         "model": args.model,
         "chunk_thinking_level": args.chunk_thinking_level,

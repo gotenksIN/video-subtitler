@@ -36,7 +36,6 @@ A high-performance Python CLI tool that uses the Google Gemini API to either ali
 
 ### 3. State & Caching
 - **Resumability**: The script writes a `manifest.json` tracking inputs, overlap settings, and model configs. Failed runs keep the chunk directory to resume instantly.
-- **Cache Invalidation**: `PIPELINE_VERSION` is hardcoded in `gemini_subs.py`. **You must increment `PIPELINE_VERSION`** whenever you change prompts, validation logic, or alignment rules so stale cached JSON chunks are invalidated.
 
 ### 4. SDK & Dependencies
 - Uses the modern `google-genai` (>= 2.0.0) SDK, NOT the legacy `google-generativeai` package.
