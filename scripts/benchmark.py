@@ -21,6 +21,7 @@ from gemini_subs import (  # noqa: E402
     generate_content_config,
     overlap_codec_args,
     probe_video_format,
+    suggested_clip_workers,
     validate_captions,
     validate_thinking_level_for_model,
 )
@@ -160,10 +161,10 @@ def benchmark_gemini(args, clip_path, mime_type):
     return time.perf_counter() - started, len(parsed.captions)
 
 
-def recommended_workers(ffmpeg_seconds, api_seconds):
+def recommended_workers(ffmpeg_seconds, api_seconds, clip_workers):
     if ffmpeg_seconds <= 0:
         return 1
-    return max(1, math.ceil(api_seconds / ffmpeg_seconds))
+    return max(1, math.ceil(clip_workers * api_seconds / ffmpeg_seconds))
 
 
 def print_summary(
@@ -177,7 +178,8 @@ def print_summary(
     caption_count,
 ):
     clip_size_mb = clip_path.stat().st_size / 1024 / 1024
-    workers = recommended_workers(ffmpeg_seconds, api_seconds)
+    clip_workers = suggested_clip_workers()
+    workers = recommended_workers(ffmpeg_seconds, api_seconds, clip_workers)
 
     print()
     print("Benchmark results")
@@ -191,10 +193,11 @@ def print_summary(
     print(f"  Captions returned: {caption_count}")
     print()
     print("Worker guidance")
+    print(f"  Default clip workers: {clip_workers}")
     print(f"  Suggested scripts/subtitle.sh workers: {workers}")
     print(
-        "  Rationale: ceil(Gemini seconds / FFmpeg seconds), so API processing "
-        "keeps pace with local clip generation."
+        "  Rationale: ceil(default clip workers * Gemini seconds / FFmpeg seconds), "
+        "so API processing keeps pace with local clip generation throughput."
     )
 
 
