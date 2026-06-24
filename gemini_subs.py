@@ -282,7 +282,7 @@ def get_processing_windows(chunks, overlap_sec):
 
 def suggested_clip_workers():
     cpu_count = os.cpu_count() or 1
-    return max(1, min(4, cpu_count // 8 or 1))
+    return max(1, cpu_count // 8 or 1)
 
 
 def overlap_codec_args(ext, codec):
