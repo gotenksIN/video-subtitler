@@ -186,7 +186,6 @@ def print_summary(
     print(f"  Source: {video_file}")
     print(f"  Codec: {codec}")
     print(f"  Clip container: {ext} ({mime_type})")
-    print("  Clip path: temporary file removed after benchmark")
     print(f"  Clip size: {clip_size_mb:.1f} MB")
     print(f"  FFmpeg clip generation: {ffmpeg_seconds:.2f}s")
     print(f"  Gemini processing: {api_seconds:.2f}s")
