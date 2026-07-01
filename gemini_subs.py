@@ -619,7 +619,7 @@ def create_client(api_key, base_url):
 
 
 def default_chunk_thinking_level(model_name):
-    return "minimal" if "flash" in model_name.lower() else "low"
+    return "high"
 
 
 def validate_thinking_level_for_model(model_name, thinking_level):
@@ -902,7 +902,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"),
+        default=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
         help="Gemini model to use",
     )
     parser.add_argument(
@@ -934,7 +934,10 @@ def main():
         "--thinking-level",
         choices=THINKING_LEVELS,
         default=None,
-        help="Chunk Gemini thinking level. Default: minimal for Flash models, low otherwise.",
+        help=(
+            "Chunk Gemini thinking level. Default: high. "
+            "Lowest supported: minimal for Flash models, low otherwise."
+        ),
     )
 
     args = parser.parse_args()

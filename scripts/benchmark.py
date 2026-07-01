@@ -56,14 +56,17 @@ def parse_args():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview"),
+        default=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
         help="Gemini model to use",
     )
     parser.add_argument(
         "--thinking-level",
         choices=("minimal", "low", "medium", "high"),
         default=None,
-        help="Gemini thinking level. Default: minimal for Flash models, low otherwise.",
+        help=(
+            "Gemini thinking level. Default: high. "
+            "Lowest supported: minimal for Flash models, low otherwise."
+        ),
     )
     return parser.parse_args()
 

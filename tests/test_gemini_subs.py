@@ -57,9 +57,9 @@ class CaptionValidationTest(unittest.TestCase):
 
 
 class ThinkingConfigTest(unittest.TestCase):
-    def test_default_chunk_thinking_level_uses_minimal_for_flash(self):
-        self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "minimal")
-        self.assertEqual(default_chunk_thinking_level("gemini-3.1-pro-preview"), "low")
+    def test_default_chunk_thinking_level_returns_high(self):
+        self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "high")
+        self.assertEqual(default_chunk_thinking_level("gemini-3.1-pro-preview"), "high")
 
     def test_generate_content_config_sets_thinking_level(self):
         config = generate_content_config("low")
