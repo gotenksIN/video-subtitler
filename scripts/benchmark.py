@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from google.genai import types  # noqa: E402
 
 from gemini_subs import (  # noqa: E402
+    DEFAULT_CHUNK_MODEL,
     SubtitleResponse,
     create_client,
     default_chunk_thinking_level,
@@ -56,7 +57,7 @@ def parse_args():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+        default=os.environ.get("GEMINI_MODEL", DEFAULT_CHUNK_MODEL),
         help="Gemini model to use",
     )
     parser.add_argument(

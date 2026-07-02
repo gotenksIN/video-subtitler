@@ -14,7 +14,8 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 6. **Global Refinement**: A second, full-script Gemini pass (`RefinementResponse`) fixes character names, continuity, and grammar without altering the generated timestamps. Saves atomically to prevent corruption.
 
 ## Current Defaults
-- Model: `gemini-3.5-flash`
+- Chunk model: `gemini-3.5-flash`
+- Global refinement model: `gemini-3.1-pro-preview`
 - Common base URL: `https://main.your-proxy-domain.com/google/v1beta`
 - Chunk duration: `60`
 - Overlap: `5`

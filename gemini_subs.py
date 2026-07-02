@@ -47,6 +47,8 @@ MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
+DEFAULT_CHUNK_MODEL = "gemini-3.5-flash"
+DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 REFINEMENT_THINKING_LEVEL = "high"
 
 
@@ -902,8 +904,13 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
-        help="Gemini model to use",
+        default=os.environ.get("GEMINI_MODEL", DEFAULT_CHUNK_MODEL),
+        help="Gemini model to use for chunk video generation",
+    )
+    parser.add_argument(
+        "--refine-model",
+        default=os.environ.get("GEMINI_REFINE_MODEL", DEFAULT_REFINE_MODEL),
+        help="Gemini model to use for the global refinement pass",
     )
     parser.add_argument(
         "--disable-text-refine",
@@ -956,7 +963,7 @@ def main():
             args.output,
             args.api_key,
             args.base_url,
-            args.model,
+            args.refine_model or args.model,
             REFINEMENT_THINKING_LEVEL,
         )
         sys.exit(0)
@@ -1048,7 +1055,7 @@ def main():
                 args.output,
                 args.api_key,
                 args.base_url,
-                args.model,
+                args.refine_model or args.model,
                 REFINEMENT_THINKING_LEVEL,
             )
 
