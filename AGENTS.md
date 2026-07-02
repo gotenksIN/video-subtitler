@@ -71,3 +71,6 @@ Run only the validation commands relevant to the files changed in the current ta
 ### 8. Git Workflow
 - When the user requests per-task commits, commit each discrete task before starting the next one.
 - Before committing, inspect `git status`, `git diff`, and recent commits; stage only files that belong to the current task.
+- Use concise, technical commit messages that explain why the change was made.
+- Keep commit subject lines at or under 72 characters.
+- Wrap commit body text at 72 characters per line, following GitHub display conventions.
