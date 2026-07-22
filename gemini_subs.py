@@ -195,7 +195,13 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
     atomic_write_json(os.path.join(chunk_dir, MANIFEST_NAME), manifest)
 
     complete_marker = os.path.join(chunk_dir, SPLIT_COMPLETE_MARKER)
-    if os.path.exists(complete_marker) and list_chunks(chunk_dir):
+    chunks = list_chunks(chunk_dir)
+    split_is_valid = chunks and all(
+        os.path.isfile(path := os.path.join(chunk_dir, chunk["name"]))
+        and os.path.getsize(path) > 0
+        for chunk in chunks
+    )
+    if os.path.exists(complete_marker) and split_is_valid:
         print("Chunks already exist, skipping splitting.")
         return
 
