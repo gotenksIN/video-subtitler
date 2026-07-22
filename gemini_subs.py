@@ -373,7 +373,29 @@ def create_overlap_clip(
     clip_name = f"context_chunk_{chunk_idx:03d}{clip_ext}"
     clip_path = os.path.join(chunk_dir, clip_name)
     if os.path.exists(clip_path):
-        return clip_name
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                clip_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        try:
+            cached_duration = float(probe.stdout.strip())
+        except ValueError:
+            cached_duration = 0.0
+        if probe.returncode == 0 and cached_duration > 0:
+            return clip_name
+        os.remove(clip_path)
     tmp_path = f"{clip_path}.tmp"
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
