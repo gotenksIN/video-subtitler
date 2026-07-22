@@ -1,208 +1,716 @@
-import unittest
+import argparse
+import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
-from gemini_subs import (
-    build_manifest,
-    build_generation_prompt,
-    build_refinement_prompt,
-    Caption,
-    DEFAULT_CHUNK_MODEL,
-    default_chunk_thinking_level,
-    format_time,
-    generate_content_config,
-    overlap_codec_args,
-    parse_time,
-    probe_video_format,
-    validate_captions,
-    validate_thinking_level_for_model,
+import pytest
+import webvtt
+
+import gemini_subs
+
+
+def caption(caption_id, start, end, text="Text"):
+    return gemini_subs.Caption(id=caption_id, start=start, end=end, text=text)
+
+
+def manifest(overlap=0, codec="h264"):
+    ext = ".webm" if codec == "vp9" else ".mp4"
+    return {
+        "mode": "generate",
+        "overlap": overlap,
+        "chunk_ext": ext,
+        "process_ext": ext,
+        "process_mime": "video/webm" if ext == ".webm" else "video/mp4",
+        "video_codec": codec,
+    }
+
+
+def write_chunk_layout(directory, rows, overlap=0):
+    Path(directory, gemini_subs.MANIFEST_NAME).write_text(
+        json.dumps(manifest(overlap)), encoding="utf-8"
+    )
+    Path(directory, "segments.csv").write_text(
+        "".join(f"{name},{start},{end}\n" for name, start, end in rows),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("1", 1), ("02:03.25", 123.25), ("01:02:03,004", 3723.004)],
 )
+def test_parse_time_accepts_supported_shapes(value, expected):
+    assert gemini_subs.parse_time(value) == expected
 
 
-class TimeHelpersTest(unittest.TestCase):
-    def test_parse_time_accepts_common_timestamp_shapes(self):
-        self.assertAlmostEqual(parse_time("01:02:03.456"), 3723.456)
-        self.assertAlmostEqual(parse_time("02:03.456"), 123.456)
-        self.assertAlmostEqual(parse_time("3,5"), 3.5)
-
-    def test_format_time_rounds_to_milliseconds(self):
-        self.assertEqual(format_time(3723.4564), "01:02:03.456")
-        self.assertEqual(format_time(3723.4566), "01:02:03.457")
-
-    def test_format_time_rejects_negative_values(self):
-        with self.assertRaisesRegex(ValueError, "Negative timestamp"):
-            format_time(-0.001)
+def test_parse_time_rejects_too_many_components():
+    with pytest.raises(ValueError, match="Invalid timestamp"):
+        gemini_subs.parse_time("1:2:3:4")
 
 
-class CaptionValidationTest(unittest.TestCase):
-    def test_generation_rejects_duplicate_ids(self):
-        captions = [
-            Caption(id=1, start="00:00:00.000", end="00:00:01.000", text="First"),
-            Caption(id=1, start="00:00:01.500", end="00:00:02.000", text="Second"),
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0, "00:00:00.000"),
+        (3661.2346, "01:01:01.235"),
+        (59.9996, "00:01:00.000"),
+    ],
+)
+def test_format_time_rounds_and_carries(seconds, expected):
+    assert gemini_subs.format_time(seconds) == expected
+
+
+def test_format_time_rejects_negative_values():
+    with pytest.raises(ValueError, match="Negative timestamp"):
+        gemini_subs.format_time(-0.001)
+
+
+def test_processing_windows_clip_at_video_edges():
+    chunks = [
+        {"idx": 0, "name": "chunk_000.mp4", "start": 0.0, "end": 10.0},
+        {"idx": 1, "name": "chunk_001.mp4", "start": 10.0, "end": 18.0},
+    ]
+
+    windows = gemini_subs.get_processing_windows(chunks, 2.0)
+
+    assert (windows[0]["clip_start"], windows[0]["clip_end"]) == (0.0, 12.0)
+    assert (windows[1]["clip_start"], windows[1]["clip_end"]) == (8.0, 18.0)
+    assert (windows[1]["owner_start_rel"], windows[1]["owner_end_rel"]) == (
+        2.0,
+        10.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "expected"),
+    [(None, 1), (1, 1), (8, 1), (16, 2), (31, 3)],
+)
+def test_suggested_clip_workers_scales_by_eight_cores(monkeypatch, cpu_count, expected):
+    monkeypatch.setattr(gemini_subs.os, "cpu_count", lambda: cpu_count)
+    assert gemini_subs.suggested_clip_workers() == expected
+
+
+@pytest.mark.parametrize(
+    ("ext", "codec", "encoder"),
+    [
+        (".webm", "vp9", "libvpx-vp9"),
+        (".mp4", "h264", "libx264"),
+        (".mp4", "hevc", "libx265"),
+    ],
+)
+def test_overlap_codec_args_select_current_encoders(ext, codec, encoder):
+    assert encoder in gemini_subs.overlap_codec_args(ext, codec)
+
+
+def test_overlap_codec_args_rejects_mismatched_container():
+    with pytest.raises(ValueError, match="H.264 input requires MP4"):
+        gemini_subs.overlap_codec_args(".webm", "h264")
+
+
+def test_validation_sorts_canonicalizes_clamps_and_preserves_text():
+    result = gemini_subs.validate_captions(
+        [
+            caption(2, "4.2", "12", "Second"),
+            caption(1, "00:00:01,250", "00:00:02.5", "First"),
+        ],
+        10,
+    )
+
+    assert [item["id"] for item in result] == [1, 2]
+    assert result[0]["start"] == "00:00:01.250"
+    assert result[1]["end"] == "00:00:10.500"
+    assert result[1]["text"] == "Second"
+
+
+def test_validation_rejects_duplicate_ids():
+    with pytest.raises(ValueError, match=r"Duplicate caption IDs: \[1\]"):
+        gemini_subs.validate_captions([caption(1, "0", "1"), caption(1, "2", "3")], 5)
+
+
+@pytest.mark.parametrize(
+    "captions",
+    [
+        [caption(1, "-1", "1")],
+        [caption(1, "1", "1")],
+        [caption(1, "10.6", "11")],
+    ],
+)
+def test_validation_rejects_invalid_and_out_of_bounds_timing(captions):
+    with pytest.raises(ValueError):
+        gemini_subs.validate_captions(captions, 10)
+
+
+def test_validation_heals_overlaps_in_sorted_output():
+    result = gemini_subs.validate_captions(
+        [caption(2, "1", "3", "Later"), caption(1, "0", "2", "Earlier")], 5
+    )
+
+    assert result[0]["end"] == "00:00:01.000"
+    assert result[1]["start"] == "00:00:01.000"
+
+
+def test_validation_pushes_equal_start_caption_forward():
+    result = gemini_subs.validate_captions(
+        [caption(1, "1", "2"), caption(2, "1", "3")], 5
+    )
+
+    assert result[0]["end"] == "00:00:01.001"
+    assert result[1]["start"] == "00:00:01.001"
+
+
+def test_atomic_write_json_replaces_target_with_unicode_json(tmp_path):
+    path = tmp_path / "value.json"
+    path.write_text("old", encoding="utf-8")
+
+    gemini_subs.atomic_write_json(path, {"text": "안녕"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"text": "안녕"}
+    assert not Path(f"{path}.tmp").exists()
+
+
+def test_list_chunks_uses_physical_line_index_and_duration(tmp_path):
+    (tmp_path / "segments.csv").write_text(
+        "ignored\nchunk_001.mp4,1.5,4.25,extra\n", encoding="utf-8"
+    )
+
+    assert gemini_subs.list_chunks(tmp_path) == [
+        {
+            "idx": 1,
+            "name": "chunk_001.mp4",
+            "start": 1.5,
+            "end": 4.25,
+            "duration": 2.75,
+        }
+    ]
+
+
+def test_clean_incomplete_split_preserves_unrelated_files(tmp_path):
+    removable = [
+        "chunk_000.mp4",
+        "context_chunk_000.webm.tmp",
+        "subtitle_chunk_000.json.tmp",
+        "segments.csv",
+    ]
+    preserved = [gemini_subs.MANIFEST_NAME, ".split_complete", "notes.txt"]
+    for name in removable + preserved:
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    gemini_subs.clean_incomplete_split(tmp_path)
+
+    assert not any((tmp_path / name).exists() for name in removable)
+    assert all((tmp_path / name).exists() for name in preserved)
+
+
+def test_cached_captions_load_valid_data(tmp_path):
+    path = tmp_path / "captions.json"
+    path.write_text(
+        json.dumps([{"id": 0, "start": "0", "end": "1", "text": "Hi"}]),
+        encoding="utf-8",
+    )
+
+    result = gemini_subs.load_cached_captions(path, 2)
+
+    assert result[0]["start"] == "00:00:00.000"
+
+
+def test_cached_captions_delete_invalid_data(tmp_path, capsys):
+    path = tmp_path / "captions.json"
+    path.write_text("not json", encoding="utf-8")
+
+    assert gemini_subs.load_cached_captions(path, 2) is None
+    assert not path.exists()
+    assert "Ignoring invalid cached output" in capsys.readouterr().out
+
+
+def test_acquire_and_release_lock(tmp_path):
+    lock_path = gemini_subs.acquire_lock(tmp_path)
+
+    assert Path(lock_path).read_text(encoding="utf-8") == str(os.getpid())
+    with pytest.raises(RuntimeError, match="Another run"):
+        gemini_subs.acquire_lock(tmp_path)
+    gemini_subs.release_lock(lock_path)
+    assert not Path(lock_path).exists()
+
+
+def test_acquire_lock_replaces_stale_pid(tmp_path, monkeypatch):
+    lock_path = tmp_path / gemini_subs.LOCK_NAME
+    lock_path.write_text("999999999", encoding="utf-8")
+
+    def missing_process(_pid, _signal):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(gemini_subs.os, "kill", missing_process)
+    acquired = gemini_subs.acquire_lock(tmp_path)
+
+    assert acquired == str(lock_path)
+    gemini_subs.release_lock(acquired)
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("matroska,webm\nvp9\n", (".webm", "video/webm", "vp9")),
+        ("mov,mp4\nh264\n", (".mp4", "video/mp4", "h264")),
+        ("mov,mp4\nhevc\n", (".mp4", "video/mp4", "hevc")),
+    ],
+)
+def test_probe_video_format_detects_supported_codecs(monkeypatch, output, expected):
+    run = MagicMock(return_value=subprocess.CompletedProcess([], 0, output, ""))
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    assert gemini_subs.probe_video_format("video file") == expected
+    assert run.call_args.args[0][-1] == "video file"
+
+
+def test_probe_video_format_preserves_unsupported_error(monkeypatch):
+    monkeypatch.setattr(
+        gemini_subs.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "av1", ""),
+    )
+    with pytest.raises(RuntimeError, match="Video format not supported"):
+        gemini_subs.probe_video_format("video")
+
+
+def test_probe_video_format_wraps_subprocess_failure(monkeypatch):
+    def missing_ffprobe(*_args, **_kwargs):
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr(gemini_subs.subprocess, "run", missing_ffprobe)
+    with pytest.raises(RuntimeError, match="Failed to probe video format"):
+        gemini_subs.probe_video_format("video")
+
+
+def test_split_video_skips_valid_completed_split(tmp_path, monkeypatch):
+    write_chunk_layout(tmp_path, [("chunk_000.mp4", 0, 2)])
+    (tmp_path / "chunk_000.mp4").write_bytes(b"video")
+    (tmp_path / gemini_subs.SPLIT_COMPLETE_MARKER).write_text("ok\n", encoding="utf-8")
+    run = MagicMock()
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    gemini_subs.split_video("video.mp4", tmp_path, 60, manifest())
+
+    run.assert_not_called()
+
+
+def test_split_video_runs_stream_copy_and_marks_completion(tmp_path, monkeypatch):
+    run = MagicMock()
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    gemini_subs.split_video("video.mp4", tmp_path, 60, manifest())
+
+    command = run.call_args.args[0]
+    assert command[0] == "ffmpeg"
+    assert "copy" in command
+    assert command[-1] == str(tmp_path / "chunk_%03d.mp4")
+    assert (tmp_path / gemini_subs.SPLIT_COMPLETE_MARKER).exists()
+
+
+def test_create_overlap_clip_builds_command_and_atomically_moves_result(
+    tmp_path, monkeypatch
+):
+    (tmp_path / gemini_subs.MANIFEST_NAME).write_text(
+        json.dumps(manifest()), encoding="utf-8"
+    )
+
+    def create_tmp(command, **_kwargs):
+        Path(command[-1]).write_bytes(b"clip")
+        return subprocess.CompletedProcess(command, 0)
+
+    run = MagicMock(side_effect=create_tmp)
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    name = gemini_subs.create_overlap_clip(
+        "source.mp4", tmp_path, 2, 1.25, 4.75, ".mp4"
+    )
+
+    assert name == "context_chunk_002.mp4"
+    assert (tmp_path / name).exists()
+    command = run.call_args.args[0]
+    assert command[command.index("-ss") + 1] == "00:00:01.250"
+    assert command[command.index("-t") + 1] == "3.500"
+    assert "libx264" in command
+
+
+def test_create_overlap_clip_reuses_positive_cached_clip(tmp_path, monkeypatch):
+    clip = tmp_path / "context_chunk_000.mp4"
+    clip.write_bytes(b"clip")
+    run = MagicMock(return_value=subprocess.CompletedProcess([], 0, "2.5\n", ""))
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    name = gemini_subs.create_overlap_clip("source.mp4", tmp_path, 0, 0, 2.5, ".mp4")
+
+    assert name == clip.name
+    assert run.call_count == 1
+
+
+def test_client_forwards_key_and_base_url(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(gemini_subs.genai, "Client", client)
+
+    gemini_subs.create_client("key", "https://example.test")
+
+    client.assert_called_once_with(
+        api_key="key", http_options={"base_url": "https://example.test"}
+    )
+
+
+def test_generate_content_config_uses_schema_and_uppercase_thinking():
+    config = gemini_subs.generate_content_config("high")
+
+    assert config.temperature == 0.0
+    assert config.response_mime_type == "application/json"
+    assert config.response_schema == gemini_subs.SubtitleResponse
+    assert config.thinking_config.thinking_level == "HIGH"
+
+
+def test_thinking_level_validation_only_restricts_minimal():
+    gemini_subs.validate_thinking_level_for_model("GEMINI-FLASH", "minimal")
+    gemini_subs.validate_thinking_level_for_model("gemini-pro", "high")
+    with pytest.raises(ValueError, match="only supported by Flash"):
+        gemini_subs.validate_thinking_level_for_model("gemini-pro", "minimal")
+
+
+def test_process_chunk_uses_valid_cache_without_api_or_media_read(monkeypatch):
+    chunk = {
+        "idx": 0,
+        "clip_name": "missing.mp4",
+        "clip_duration": 2,
+        "owner_start_rel": 0,
+        "owner_end_rel": 2,
+    }
+    client = MagicMock()
+    monkeypatch.setattr(gemini_subs, "load_cached_captions", lambda *_args: [])
+    monkeypatch.setattr(gemini_subs, "create_client", client)
+
+    assert gemini_subs.process_chunk(
+        "key", None, chunk, "/missing", "model", "video/mp4", "high"
+    )
+    client.assert_not_called()
+
+
+def test_process_chunk_streams_validates_and_writes_caption_list(tmp_path, monkeypatch):
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    chunk = {
+        "idx": 3,
+        "clip_name": "clip.mp4",
+        "clip_duration": 2,
+        "owner_start_rel": 0,
+        "owner_end_rel": 2,
+    }
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text='{"captions": [{"id": 0, '),
+        SimpleNamespace(text='"start": "0", "end": "1", "text": "Hi"}]}'),
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+    monkeypatch.setattr(gemini_subs, "load_cached_captions", lambda *_args: None)
+
+    result = gemini_subs.process_chunk(
+        "key", None, chunk, tmp_path, "model", "video/mp4", "high"
+    )
+
+    assert result
+    saved = json.loads(
+        (tmp_path / "subtitle_chunk_003.json").read_text(encoding="utf-8")
+    )
+    assert saved[0]["text"] == "Hi"
+    call = client.models.generate_content_stream.call_args
+    assert call.kwargs["model"] == "model"
+    assert call.kwargs["contents"][0].inline_data.mime_type == "video/mp4"
+
+
+def test_process_chunk_returns_false_for_invalid_response(tmp_path, monkeypatch):
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    chunk = {
+        "idx": 0,
+        "clip_name": "clip.mp4",
+        "clip_duration": 2,
+        "owner_start_rel": 0,
+        "owner_end_rel": 2,
+    }
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text="invalid")
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+    monkeypatch.setattr(gemini_subs, "load_cached_captions", lambda *_args: None)
+
+    assert not gemini_subs.process_chunk(
+        "key", None, chunk, tmp_path, "model", "video/mp4", "high"
+    )
+    assert not (tmp_path / "subtitle_chunk_000.json").exists()
+
+
+def test_stitch_offsets_and_filters_context(tmp_path):
+    write_chunk_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 10), ("chunk_001.mp4", 10, 20)],
+        overlap=2,
+    )
+    (tmp_path / "subtitle_chunk_000.json").write_text(
+        json.dumps(
+            [
+                {"start": "1", "end": "3", "text": "First"},
+                {"start": "10", "end": "12", "text": "Context only"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "subtitle_chunk_001.json").write_text(
+        json.dumps(
+            [
+                {"start": "0", "end": "1", "text": "Prior context"},
+                {"start": "2", "end": "4", "text": "Second"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "output.vtt"
+
+    gemini_subs.stitch(tmp_path, output)
+
+    result = webvtt.read(output)
+    assert [cap.text for cap in result] == ["First", "Second"]
+    assert result[0].start == "00:00:01.000"
+    assert result[1].start == "00:00:10.000"
+
+
+def test_stitch_rejects_missing_and_unexpected_results(tmp_path):
+    write_chunk_layout(tmp_path, [("chunk_000.mp4", 0, 10)])
+    (tmp_path / "subtitle_chunk_002.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"missing chunk indices: \[0\].*unexpected chunk indices: \[2\]",
+    ):
+        gemini_subs.stitch(tmp_path, tmp_path / "output.vtt")
+
+
+def test_stitch_without_overlap_keeps_all_captions_and_heals_overlap(tmp_path):
+    write_chunk_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 5), ("chunk_001.mp4", 5, 10)],
+    )
+    (tmp_path / "subtitle_chunk_000.json").write_text(
+        json.dumps([{"start": "1", "end": "5.5", "text": "One"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "subtitle_chunk_001.json").write_text(
+        json.dumps([{"start": "0", "end": "1", "text": "Two"}]),
+        encoding="utf-8",
+    )
+    output = tmp_path / "output.vtt"
+
+    gemini_subs.stitch(tmp_path, output)
+
+    result = webvtt.read(output)
+    assert result[0].end == "00:00:05.000"
+    assert result[1].start == "00:00:05.000"
+
+
+def test_global_refinement_updates_only_valid_ids_and_saves_atomically(
+    tmp_path, monkeypatch
+):
+    input_path = tmp_path / "input.vtt"
+    output_path = tmp_path / "output.vtt"
+    source = webvtt.WebVTT()
+    source.captions.extend(
+        [
+            webvtt.Caption("00:00:00.000", "00:00:01.000", "Old\nline"),
+            webvtt.Caption("00:00:02.000", "00:00:03.000", "Keep"),
         ]
+    )
+    source.save(input_path)
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text='{"changes": [{"id": 0, "text": "New"},'),
+        SimpleNamespace(text='{"id": 9, "text": "Ignored"}]}'),
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
-        with self.assertRaisesRegex(ValueError, "Duplicate caption IDs"):
-            validate_captions(captions, chunk_duration=10.0)
+    gemini_subs.global_refine_subtitles(
+        input_path, output_path, "key", None, "refiner", "high"
+    )
 
-    def test_generation_clamps_long_end_and_heals_overlap(self):
-        captions = [
-            Caption(id=0, start="00:00:01.000", end="00:00:03.000", text="First"),
-            Caption(id=1, start="00:00:02.000", end="00:00:04.000", text="Second"),
-        ]
-
-        validated = validate_captions(captions, chunk_duration=2.0)
-
-        self.assertEqual(validated[0]["start"], "00:00:01.000")
-        self.assertEqual(validated[0]["end"], "00:00:02.000")
-        self.assertEqual(validated[1]["start"], "00:00:02.000")
-        self.assertEqual(validated[1]["end"], "00:00:02.500")
-
-
-class ThinkingConfigTest(unittest.TestCase):
-    def test_default_chunk_model_uses_gemini_3_6_flash(self):
-        self.assertEqual(DEFAULT_CHUNK_MODEL, "gemini-3.6-flash")
-
-    def test_default_chunk_thinking_level_returns_high(self):
-        self.assertEqual(default_chunk_thinking_level("gemini-3.6-flash"), "high")
-        self.assertEqual(default_chunk_thinking_level("gemini-3.1-pro-preview"), "high")
-
-    def test_generate_content_config_sets_thinking_level(self):
-        config = generate_content_config("low")
-
-        self.assertIsNotNone(config.thinking_config)
-        self.assertEqual(config.thinking_config.thinking_level.value, "LOW")
-        self.assertIsNone(config.thinking_config.thinking_budget)
-
-    def test_minimal_thinking_level_is_flash_only(self):
-        validate_thinking_level_for_model("gemini-3.6-flash", "minimal")
-
-        with self.assertRaisesRegex(ValueError, "Flash models"):
-            validate_thinking_level_for_model("gemini-3.1-pro-preview", "minimal")
+    result = webvtt.read(output_path)
+    assert [cap.text for cap in result] == ["New", "Keep"]
+    call = client.models.generate_content_stream.call_args
+    assert "Old line" in call.kwargs["contents"]
+    assert call.kwargs["model"] == "refiner"
+    assert call.kwargs["config"].thinking_config.thinking_level == "HIGH"
 
 
-class PromptTest(unittest.TestCase):
-    def test_generation_prompt_includes_clip_boundaries_and_safeguards(self):
-        prompt = build_generation_prompt(65.25, 5.0, 60.0)
+def test_global_refinement_exits_for_invalid_model_json(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.vtt"
+    webvtt.WebVTT().save(input_path)
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text="invalid")
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
-        self.assertIn("65.250-second video clip", prompt)
-        self.assertIn("00:00:05.000 to 00:01:00.000", prompt)
-        self.assertIn("00:01:05.250", prompt)
-        self.assertIn("Avoid cues shorter than 500 milliseconds", prompt)
-        self.assertIn('Do not use generic numbered labels such as "Speaker 1:"', prompt)
-        self.assertIn('without mechanical prefixes such as "On-screen text:"', prompt)
-        self.assertIn('Do not describe visible actions such as "(walks)"', prompt)
-
-    def test_refinement_prompt_is_non_destructive(self):
-        prompt = build_refinement_prompt("[0] 00:00:00.000 --> 00:00:01.000: Hi")
-
-        self.assertIn("Do not alter IDs or timestamps", prompt)
-        self.assertIn("Do not assign new speaker identities", prompt)
-        self.assertIn("Do not return unchanged entries", prompt)
-        self.assertIn("[0] 00:00:00.000 --> 00:00:01.000: Hi", prompt)
-
-
-class VideoFormatTest(unittest.TestCase):
-    def test_vp9_webm_uses_webm_chunks(self):
-        probe_output = "vp9\nopus\nmatroska,webm\n"
-
-        with patch("gemini_subs.subprocess.run") as run:
-            run.return_value.stdout = probe_output
-
-            ext, mime, codec = probe_video_format("input.webm")
-
-        self.assertEqual(ext, ".webm")
-        self.assertEqual(mime, "video/webm")
-        self.assertEqual(codec, "vp9")
-
-    def test_h264_mkv_uses_mp4_chunks(self):
-        probe_output = "h264\naac\nsubrip\nmatroska,webm\n"
-
-        with patch("gemini_subs.subprocess.run") as run:
-            run.return_value.stdout = probe_output
-
-            ext, mime, codec = probe_video_format("input.mkv")
-
-        self.assertEqual(ext, ".mp4")
-        self.assertEqual(mime, "video/mp4")
-        self.assertEqual(codec, "h264")
-
-    def test_hevc_mkv_uses_mp4_chunks_and_hevc_codec(self):
-        probe_output = "hevc\naac\nsubrip\nsubrip\nmatroska,webm\n"
-
-        with patch("gemini_subs.subprocess.run") as run:
-            run.return_value.stdout = probe_output
-
-            ext, mime, codec = probe_video_format("input.mkv")
-
-        self.assertEqual(ext, ".mp4")
-        self.assertEqual(mime, "video/mp4")
-        self.assertEqual(codec, "hevc")
-
-    def test_manifest_stores_video_codec(self):
-        args = SimpleNamespace(
-            video_file="input.mkv",
-            chunk_dur=60,
-            model="gemini-3.1-pro-preview",
-            chunk_thinking_level="low",
-            overlap=5,
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            input_path,
+            tmp_path / "output.vtt",
+            "key",
+            None,
+            "refiner",
+            "high",
         )
 
-        with (
-            patch(
-                "gemini_subs.probe_video_format",
-                return_value=(".mp4", "video/mp4", "hevc"),
-            ),
-            patch(
-                "gemini_subs.file_fingerprint",
-                return_value={"path": "input.mkv", "size": 1, "mtime_ns": 2},
-            ),
-        ):
-            manifest, _chunk_dir = build_manifest(args)
 
-        self.assertEqual(manifest["video_codec"], "hevc")
-        self.assertEqual(manifest["process_ext"], ".mp4")
-        self.assertEqual(manifest["process_mime"], "video/mp4")
+def test_refine_only_forwards_current_refinement_defaults(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.vtt"
+    input_path.write_text("WEBVTT\n", encoding="utf-8")
+    refine = MagicMock()
+    monkeypatch.delenv("GEMINI_API_BASE", raising=False)
+    monkeypatch.delenv("GEMINI_REFINE_MODEL", raising=False)
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(input_path),
+            "--refine-only",
+            "--api-key",
+            "key",
+            "--output",
+            "out.vtt",
+        ],
+    )
 
-    def test_unsupported_video_codec_fails_early(self):
-        probe_output = "av1\nopus\nmatroska,webm\n"
+    with pytest.raises(SystemExit, match="0"):
+        gemini_subs.main()
 
-        with patch("gemini_subs.subprocess.run") as run:
-            run.return_value.stdout = probe_output
-
-            with self.assertRaisesRegex(RuntimeError, "Video format not supported"):
-                probe_video_format("input.mkv")
-
-    def test_ffprobe_failure_fails_early(self):
-        with patch("gemini_subs.subprocess.run") as run:
-            run.side_effect = subprocess.CalledProcessError(1, ["ffprobe"])
-
-            with self.assertRaisesRegex(RuntimeError, "Failed to probe video format"):
-                probe_video_format("input.mkv")
-
-    def test_mp4_overlap_uses_x264_for_h264(self):
-        args = overlap_codec_args(".mp4", "h264")
-
-        self.assertIn("libx264", args)
-
-    def test_mp4_overlap_uses_x265_for_hevc(self):
-        args = overlap_codec_args(".mp4", "hevc")
-
-        self.assertIn("libx265", args)
-
-    def test_webm_overlap_uses_vp9_for_vp9(self):
-        args = overlap_codec_args(".webm", "vp9")
-
-        self.assertIn("libvpx-vp9", args)
-
-    def test_unsupported_overlap_format_fails_early(self):
-        with self.assertRaisesRegex(ValueError, "requires MP4 overlap clips"):
-            overlap_codec_args(".mkv", "h264")
-
-    def test_vp9_requires_webm_overlap_clips(self):
-        with self.assertRaisesRegex(ValueError, "requires WebM overlap clips"):
-            overlap_codec_args(".mp4", "vp9")
+    refine.assert_called_once_with(
+        str(input_path),
+        "out.vtt",
+        "key",
+        None,
+        gemini_subs.DEFAULT_REFINE_MODEL,
+        gemini_subs.REFINEMENT_THINKING_LEVEL,
+    )
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_main_rejects_invalid_overlap_before_pipeline(monkeypatch):
+    build = MagicMock()
+    monkeypatch.setattr(gemini_subs, "build_manifest", build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            "video.mp4",
+            "--api-key",
+            "key",
+            "--chunk-dur",
+            "5",
+            "--overlap",
+            "5",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.main()
+
+    build.assert_not_called()
+
+
+def test_main_runs_pipeline_releases_lock_and_cleans_on_success(monkeypatch):
+    chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
+    split = MagicMock()
+    process = MagicMock(return_value=[])
+    stitch = MagicMock()
+    release = MagicMock()
+    remove = MagicMock()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["gemini_subs.py", "video.mp4", "--api-key", "key", "--disable-text-refine"],
+    )
+    monkeypatch.setattr(gemini_subs.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(
+        gemini_subs, "build_manifest", lambda _args: (manifest(), "work-dir")
+    )
+    monkeypatch.setattr(gemini_subs.os, "makedirs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gemini_subs, "acquire_lock", lambda _path: "work-dir/.lock")
+    monkeypatch.setattr(gemini_subs, "split_video", split)
+    monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
+    monkeypatch.setattr(gemini_subs, "process_chunks", process)
+    monkeypatch.setattr(gemini_subs, "stitch", stitch)
+    monkeypatch.setattr(gemini_subs, "release_lock", release)
+    monkeypatch.setattr(gemini_subs.shutil, "rmtree", remove)
+
+    gemini_subs.main()
+
+    split.assert_called_once()
+    process.assert_called_once()
+    stitch.assert_called_once_with("work-dir", "output_subtitles.vtt")
+    release.assert_called_once_with("work-dir/.lock")
+    remove.assert_called_once_with("work-dir")
+
+
+def test_main_keeps_work_directory_when_chunk_processing_fails(monkeypatch):
+    chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
+    release = MagicMock()
+    remove = MagicMock()
+    monkeypatch.setattr(
+        sys, "argv", ["gemini_subs.py", "video.mp4", "--api-key", "key"]
+    )
+    monkeypatch.setattr(gemini_subs.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(
+        gemini_subs, "build_manifest", lambda _args: (manifest(), "work-dir")
+    )
+    monkeypatch.setattr(gemini_subs.os, "makedirs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gemini_subs, "acquire_lock", lambda _path: "work-dir/.lock")
+    monkeypatch.setattr(gemini_subs, "split_video", lambda *_args: None)
+    monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
+    monkeypatch.setattr(gemini_subs, "process_chunks", lambda *_args: ["chunk_000.mp4"])
+    monkeypatch.setattr(gemini_subs, "release_lock", release)
+    monkeypatch.setattr(gemini_subs.shutil, "rmtree", remove)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.main()
+
+    release.assert_called_once_with("work-dir/.lock")
+    remove.assert_not_called()
+
+
+def test_build_manifest_records_current_inputs_and_stable_digest(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    args = argparse.Namespace(
+        video_file=str(video),
+        overlap=5,
+        chunk_dur=60,
+        model="model",
+        chunk_thinking_level="high",
+    )
+    monkeypatch.setattr(
+        gemini_subs,
+        "probe_video_format",
+        lambda _path: (".mp4", "video/mp4", "h264"),
+    )
+    monkeypatch.setattr(gemini_subs, "CHUNK_ROOT", "chunks")
+
+    first = gemini_subs.build_manifest(args)
+    second = gemini_subs.build_manifest(args)
+
+    assert first == second
+    built, chunk_dir = first
+    assert built["video_codec"] == "h264"
+    assert built["chunk_thinking_level"] == "high"
+    assert Path(chunk_dir).parent == Path("chunks")
+    assert len(Path(chunk_dir).name) == 16
+    assert all(character in "0123456789abcdef" for character in Path(chunk_dir).name)

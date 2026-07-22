@@ -116,7 +116,7 @@ shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh
 uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall -q .
-uv run python -m unittest discover -s tests
+uv run pytest
 uv run gemini_subs.py --help
 ./scripts/benchmark.py --help
 ```

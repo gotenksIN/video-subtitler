@@ -43,7 +43,7 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 - Uses `uv` for dependency management (`uv run`). 
 - Schema uses strictly typed Pydantic models.
 - Uses Ruff for formatting and lint checks.
-- Prefer the Python standard library for tests and small utilities unless a new dependency clearly pays for itself.
+- Use pytest for tests and prefer the Python standard library for small utilities unless a new dependency clearly pays for itself.
 - For system dependencies (like FFmpeg/FFprobe), explicitly recommend and document headless/X11-free GPL static builds (from BtbN/FFmpeg-Builds) in environments like WSL or Ubuntu Server to avoid pulling in graphical dependencies.
 
 ### 5. Code Style
@@ -64,7 +64,7 @@ Run only the validation commands relevant to the files changed in the current ta
 - **If only docs or instructions are modified** (`*.md`, including `AGENTS.md` and `README.md`): No code validation is required.
 - **If shell scripts in `scripts/*.sh` are modified**: Run `shellcheck` only on the modified shell script(s) (e.g., `shellcheck scripts/subtitle.sh`).
 - **If `gemini_subs.py` is modified**: Run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`.
-- **If core behavior in `gemini_subs.py` or files in `tests/` are modified**: Run `uv run python -m unittest discover -s tests`.
+- **If core behavior in `gemini_subs.py` or files in `tests/` are modified**: Run `uv run pytest`.
 - **If CLI arguments in `gemini_subs.py` are modified**: Run `uv run gemini_subs.py --help`.
 - **If `scripts/benchmark.py` is modified**: No tests or validation are required unless the user explicitly asks.
 
