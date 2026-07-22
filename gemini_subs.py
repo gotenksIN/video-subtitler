@@ -793,12 +793,24 @@ def stitch(chunk_dir, output_vtt):
             if f.startswith("subtitle_chunk_") and f.endswith(".json")
         ]
     )
+    result_indices = {
+        int(name.removeprefix("subtitle_chunk_").removesuffix(".json"))
+        for name in json_files
+    }
+    expected_indices = set(window_map)
+    missing_indices = sorted(expected_indices - result_indices)
+    unexpected_indices = sorted(result_indices - expected_indices)
+    if missing_indices or unexpected_indices:
+        problems = []
+        if missing_indices:
+            problems.append(f"missing chunk indices: {missing_indices}")
+        if unexpected_indices:
+            problems.append(f"unexpected chunk indices: {unexpected_indices}")
+        raise ValueError(f"Invalid subtitle results: {'; '.join(problems)}")
 
     for json_name in json_files:
         chunk_idx = int(json_name.replace("subtitle_chunk_", "").replace(".json", ""))
-        window = window_map.get(chunk_idx)
-        if not window:
-            continue
+        window = window_map[chunk_idx]
         offset_sec = window["clip_start"]
 
         with open(os.path.join(chunk_dir, json_name), "r") as f:
