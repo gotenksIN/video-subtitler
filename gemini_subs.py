@@ -555,6 +555,11 @@ def validate_captions(captions, chunk_duration):
         max_end = chunk_duration + 0.5
         if end > max_end:
             end = max_end
+        if end <= start:
+            raise ValueError(
+                f"Caption timing exceeds chunk duration for id={cap.id}: "
+                f"{cap.start} --> {cap.end}"
+            )
 
         validated.append(
             {
