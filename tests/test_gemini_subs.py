@@ -6,6 +6,7 @@ from unittest.mock import patch
 from gemini_subs import (
     build_manifest,
     Caption,
+    DEFAULT_CHUNK_MODEL,
     default_chunk_thinking_level,
     format_time,
     generate_content_config,
@@ -57,8 +58,11 @@ class CaptionValidationTest(unittest.TestCase):
 
 
 class ThinkingConfigTest(unittest.TestCase):
+    def test_default_chunk_model_uses_gemini_3_6_flash(self):
+        self.assertEqual(DEFAULT_CHUNK_MODEL, "gemini-3.6-flash")
+
     def test_default_chunk_thinking_level_returns_high(self):
-        self.assertEqual(default_chunk_thinking_level("gemini-3.5-flash"), "high")
+        self.assertEqual(default_chunk_thinking_level("gemini-3.6-flash"), "high")
         self.assertEqual(default_chunk_thinking_level("gemini-3.1-pro-preview"), "high")
 
     def test_generate_content_config_sets_thinking_level(self):
@@ -69,7 +73,7 @@ class ThinkingConfigTest(unittest.TestCase):
         self.assertIsNone(config.thinking_config.thinking_budget)
 
     def test_minimal_thinking_level_is_flash_only(self):
-        validate_thinking_level_for_model("gemini-3.5-flash", "minimal")
+        validate_thinking_level_for_model("gemini-3.6-flash", "minimal")
 
         with self.assertRaisesRegex(ValueError, "Flash models"):
             validate_thinking_level_for_model("gemini-3.1-pro-preview", "minimal")

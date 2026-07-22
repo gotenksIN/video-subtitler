@@ -47,7 +47,7 @@ MANIFEST_NAME = "manifest.json"
 LOCK_NAME = ".lock"
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
-DEFAULT_CHUNK_MODEL = "gemini-3.5-flash"
+DEFAULT_CHUNK_MODEL = "gemini-3.6-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 REFINEMENT_THINKING_LEVEL = "high"
 

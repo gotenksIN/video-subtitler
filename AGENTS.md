@@ -8,13 +8,13 @@ A high-performance Python CLI tool that uses the Google Gemini API to generate c
 ## Architecture
 1. **Chunking**: FFmpeg stream-copies the video into chunks (default 60s) to bypass Gemini inline video limits and proxy timeouts.
 2. **Context Overlaps**: Temporary clips are re-encoded (default 5s overlap) to give the model context across chunk boundaries, preserving the input codec family for VP9, H.264, and HEVC/H.265.
-3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.5-flash` by default). Overlap clip creation is auto-sized from CPU count.
+3. **Parallel Processing**: Video chunks are sent concurrently to the Gemini API (`gemini-3.6-flash` by default). Overlap clip creation is auto-sized from CPU count.
 4. **Structured Output**: Uses `google-genai` SDK and Pydantic schemas (`SubtitleResponse`) to guarantee valid JSON returns.
 5. **Stitching & Healing**: Validates timestamps, auto-heals any overlapping cues by nudging boundaries, and stitches chunks back into a final `.vtt`.
 6. **Global Refinement**: A second, full-script Gemini pass (`RefinementResponse`) fixes character names, continuity, and grammar without altering the generated timestamps. Saves atomically to prevent corruption.
 
 ## Current Defaults
-- Chunk model: `gemini-3.5-flash`
+- Chunk model: `gemini-3.6-flash`
 - Global refinement model: `gemini-3.1-pro-preview`
 - Common base URL: `https://main.your-proxy-domain.com/google/v1beta`
 - Chunk duration: `60`

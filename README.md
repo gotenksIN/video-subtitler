@@ -34,7 +34,7 @@ A Python CLI that uses the Google Gemini API to generate new English subtitles f
 
    # Optional: Set a custom base URL or change the default hybrid models
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3.5-flash
+   GEMINI_MODEL=gemini-3.6-flash
    GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
    ```
 
@@ -75,7 +75,7 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 ```
 
 ### Two-Stage Processing & Text Refinement
-By default, the pipeline uses a hybrid model setup: `gemini-3.5-flash` for chunk video generation and `gemini-3.1-pro-preview` for the global text refinement pass. Because chunk-based processing limits context to 60 seconds, a final global pass allows the model to see the *entire* subtitle script at once, fixing inconsistent character names, over-localized memes, and continuity errors without altering the generated timestamps.
+By default, the pipeline uses a hybrid model setup: `gemini-3.6-flash` for chunk video generation and `gemini-3.1-pro-preview` for the global text refinement pass. Because chunk-based processing limits context to 60 seconds, a final global pass allows the model to see the *entire* subtitle script at once, fixing inconsistent character names, over-localized memes, and continuity errors without altering the generated timestamps.
 
 To skip the global refinement pass:
 ```bash
@@ -96,7 +96,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--thinking-level`: Gemini thinking level for chunk video calls. Default: `high`. Lowest supported: `minimal` for Flash models, `low` otherwise. The global refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
-- `--model`: Override `GEMINI_MODEL` for chunk video generation. Default: `gemini-3.5-flash`.
+- `--model`: Override `GEMINI_MODEL` for chunk video generation. Default: `gemini-3.6-flash`.
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement. Default: `gemini-3.1-pro-preview`.
 
 ## Notes
