@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from gemini_subs import (
     build_manifest,
+    build_generation_prompt,
+    build_refinement_prompt,
     Caption,
     DEFAULT_CHUNK_MODEL,
     default_chunk_thinking_level,
@@ -77,6 +79,27 @@ class ThinkingConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Flash models"):
             validate_thinking_level_for_model("gemini-3.1-pro-preview", "minimal")
+
+
+class PromptTest(unittest.TestCase):
+    def test_generation_prompt_includes_clip_boundaries_and_safeguards(self):
+        prompt = build_generation_prompt(65.25, 5.0, 60.0)
+
+        self.assertIn("65.250-second video clip", prompt)
+        self.assertIn("00:00:05.000 to 00:01:00.000", prompt)
+        self.assertIn("00:01:05.250", prompt)
+        self.assertIn("Avoid cues shorter than 500 milliseconds", prompt)
+        self.assertIn('Do not use generic numbered labels such as "Speaker 1:"', prompt)
+        self.assertIn('without mechanical prefixes such as "On-screen text:"', prompt)
+        self.assertIn('Do not describe visible actions such as "(walks)"', prompt)
+
+    def test_refinement_prompt_is_non_destructive(self):
+        prompt = build_refinement_prompt("[0] 00:00:00.000 --> 00:00:01.000: Hi")
+
+        self.assertIn("Do not alter IDs or timestamps", prompt)
+        self.assertIn("Do not assign new speaker identities", prompt)
+        self.assertIn("Do not return unchanged entries", prompt)
+        self.assertIn("[0] 00:00:00.000 --> 00:00:01.000: Hi", prompt)
 
 
 class VideoFormatTest(unittest.TestCase):

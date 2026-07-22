@@ -644,6 +644,68 @@ def generate_content_config(thinking_level):
     return types.GenerateContentConfig(**kwargs)
 
 
+def build_generation_prompt(clip_duration, owner_start_rel, owner_end_rel):
+    return f"""You are an expert subtitle generator and translator.
+
+Watch this {clip_duration:.3f}-second video clip.
+
+The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
+
+Generate accurate, natural English subtitles for dialogue and meaningful on-screen text throughout the entire clip, including the context windows. Captions outside the main window will be filtered later.
+
+TIMING
+
+1. Create timestamps relative to the beginning of the full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
+2. For spoken dialogue, start at the exact first audible syllable and end at the exact end of the last audible syllable.
+3. For on-screen text, start when the text becomes visible and end when it disappears.
+4. Preserve real silent gaps. Do not stretch captions through silence, reaction shots, or scene changes.
+5. Keep captions sorted by start time and do not overlap them.
+6. Avoid cues shorter than 500 milliseconds. If a meaningful short utterance cannot fit naturally, combine it with an adjacent utterance from the same speaker only when doing so preserves meaning and timing.
+
+TRANSLATION
+
+7. Translate all spoken dialogue and meaningful on-screen text from the source language into natural English. Never return a source-language transcription instead of an English translation.
+8. Prefer faithful, clear English over punchy paraphrases.
+9. Preserve every meaningful question, answer, joke, reaction, and product detail. Do not summarize or omit meaningful content.
+10. Do not infer missing dialogue or invent facts, product claims, jokes, or cultural explanations.
+11. Preserve established names, brands, foods, products, titles, and recurring terms consistently.
+12. Preserve useful source-language cultural terms when they express a relationship or concept that English cannot express as precisely.
+13. Do not replace understandable English with unexplained romanized source-language terms.
+14. Transliterate uncertain proper nouns conservatively instead of inventing a nickname, joke, or English equivalent.
+15. Preserve wordplay naturally in English whenever possible. Do not silently replace a pun with unrelated dialogue.
+
+SPEAKER LABELS
+
+16. Add speaker labels when the speaker is confidently identifiable from the video, dialogue, or established context.
+17. Prefer a known person's consistent name.
+18. When a name is unknown, use a stable descriptive role such as "Resident:", "Student:", "Shop Owner:", "Host:", or "Producer:".
+19. Do not use generic numbered labels such as "Speaker 1:".
+20. Never guess a person's identity. If attribution is uncertain, leave the dialogue unlabeled.
+21. Use the exact format "Name: Dialogue".
+22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line.
+23. Do not assign speaker labels to on-screen text.
+
+ON-SCREEN TEXT
+
+24. Include meaningful on-screen editorial text when it contributes information, context, humor, branding, or narrative meaning.
+25. Ignore decorative text, logos, persistent watermarks, repeated UI, and text unrelated to understanding the video.
+26. Keep on-screen text distinct from spoken dialogue.
+27. Render on-screen text in square brackets, without mechanical prefixes such as "On-screen text:".
+28. Do not combine unrelated dialogue and on-screen text in one caption.
+29. Do not describe visible actions such as "(walks)", "(rings bell)", or "(sprays product)" unless corresponding written editorial text actually appears in the video.
+30. Translate source-language editorial idioms and visual-caption metaphors into understandable English rather than preserving an incomprehensible literal translation.
+31. Do not wrap ordinary spoken dialogue in quotation marks.
+
+FORMATTING
+
+32. Use sequential integer IDs starting at 0.
+33. Follow standard subtitle readability rules: no more than 42 characters per line and no more than two lines per caption.
+34. Split long speech into readable, natural phrases without changing meaning.
+35. Do not use markdown or include explanations outside subtitle captions.
+36. Return only a valid JSON object matching the required schema with a "captions" array.
+"""
+
+
 def process_chunk(
     api_key, base_url, chunk, chunk_dir, model_name, chunk_mime, thinking_level
 ):
@@ -660,30 +722,7 @@ def process_chunk(
         print(f"Skipping {clip_name} - already processed.")
         return True
 
-    prompt = f"""
-    You are an expert subtitle generator and translator.
-    Watch this {clip_duration:.3f}-second video clip.
-    The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
-
-    Your task:
-    1. Generate accurate English subtitles for dialogue and relevant on-screen text for the ENTIRE clip, including the context windows. (We will filter them later).
-    2. Create accurate timestamps relative to the start of this full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
-    3. For spoken dialogue, start_time must be the exact millisecond of the first audible syllable/word, and end_time must be the exact end of the last audible syllable.
-    4. Silent gaps between spoken sentences must remain real gaps in the timestamps; do not arbitrarily stretch durations to fill silence.
-    5. Prefer faithful, clear English over punchy paraphrases when dialogue is not English.
-    6. Preserve names and recurring terms consistently within the chunk. Keep original native nicknames and do not translate them.
-    7. If a proper noun is uncertain, transliterate conservatively instead of inventing a nickname or joke.
-    8. Preserve native cultural terms and foods rather than over-localizing them.
-    9. Do not summarize, explain, or infer missing dialogue.
-    10. Include meaningful on-screen text when it matters for understanding the video, timing it exactly to when it appears and disappears.
-    11. Ignore decorative text, logos, watermarks, and unrelated UI.
-    12. Use sequential integer IDs starting at 0.
-    13. Keep captions sorted by start time and do not overlap them.
-    14. Follow standard subtitle rules: max 42 characters per line, max 2 lines per caption.
-    15. Split long speech into readable, natural phrases.
-
-    Return ONLY the valid JSON object matching the required schema with a 'captions' array. Do not include markdown formatting or explanations.
-    """
+    prompt = build_generation_prompt(clip_duration, owner_start_rel, owner_end_rel)
 
     try:
         with open(chunk_path, "rb") as f:
@@ -799,6 +838,78 @@ def stitch(chunk_dir, output_vtt):
     )
 
 
+def build_refinement_prompt(full_script):
+    return f"""You are an expert English subtitle localization editor.
+
+Below is the complete subtitle script for a video.
+
+You do not have access to the source video or audio. Never infer or reconstruct source content that is not established by the provided script.
+
+Use the complete script as global context and correct only lines with a clear problem involving:
+
+1. Inconsistent character names, speaker labels, brands, foods, products, program titles, or recurring terms.
+2. Unnatural or ungrammatical English.
+3. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
+4. Clear continuity errors that can be resolved confidently from the script.
+5. Formatting artifacts such as stray quotation marks, raw OCR debris, or inconsistent punctuation.
+
+Do not rewrite the entire script. If a line is acceptable, leave it unchanged.
+
+SEMANTIC PRESERVATION
+
+6. Preserve each line's distinct semantic content.
+7. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
+8. Never replace a line with a duplicate or paraphrase of an adjacent line.
+9. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
+10. Do not infer what the original audio or on-screen text might have said.
+11. If a proposed correction is uncertain, leave the line unchanged.
+12. Do not merge, split, reorder, add, or remove subtitle entries.
+13. Do not alter IDs or timestamps.
+
+TERMINOLOGY AND LOCALIZATION
+
+14. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
+15. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
+16. Do not replace understandable English with unexplained romanized source-language terms.
+17. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
+18. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
+19. Preserve visible footnote markers such as "*".
+20. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
+
+SPEAKER LABELS
+
+21. Preserve existing speaker labels.
+22. Normalize each known person's label consistently using clear evidence within the script.
+23. Normalize recurring descriptive roles consistently, such as "Resident:", "Student:", "Shop Owner:", "Host:", and "Producer:".
+24. Do not assign new speaker identities because the source video is unavailable.
+25. Do not replace a named speaker with a generic role unless the existing attribution is demonstrably inconsistent within the script.
+26. Do not remove a speaker label unless it is clearly attached to on-screen text.
+27. Preserve each speaker's turn when multiple speakers occur in one caption.
+28. Never add speaker labels to on-screen text.
+
+ON-SCREEN TEXT
+
+29. Preserve square brackets around on-screen editorial text.
+30. Keep on-screen text distinct from dialogue.
+31. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
+32. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
+33. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
+
+FORMATTING AND OUTPUT
+
+34. Preserve line breaks when they distinguish multiple speakers.
+35. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
+36. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
+37. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
+38. Do not return unchanged entries.
+39. Do not return timestamps, markdown, or explanations.
+
+SCRIPT
+
+{full_script}
+"""
+
+
 def global_refine_subtitles(
     input_vtt, output_vtt, api_key, base_url, model_name, thinking_level
 ):
@@ -812,24 +923,7 @@ def global_refine_subtitles(
 
     full_script = "\n".join(script_lines)
 
-    prompt = f"""
-You are an expert subtitle localization editor.
-Below is an entire subtitle script for a video.
-
-Your task is to read the whole script to understand the global context and fix:
-1. Inconsistent character names or nicknames (ensure they are uniform from start to finish).
-2. Over-localized terms (revert to native cultural terms where appropriate).
-3. Awkward grammar or unnatural phrasing.
-4. Glaring continuity errors in dialogue.
-
-DO NOT REWRITE THE ENTIRE SCRIPT. Only modify lines that genuinely need correction for consistency or natural flow. If a line is acceptable, leave it alone.
-
-Return a JSON object containing a 'changes' list with ONLY the lines you want to change. Each change must have the 'id' (found in brackets like [ID]) and the 'text' (the new, corrected text).
-Do not change the timestamps. Do not merge or split lines.
-
-Script:
-{full_script}
-"""
+    prompt = build_refinement_prompt(full_script)
 
     with create_client(api_key, base_url) as client:
         print(
