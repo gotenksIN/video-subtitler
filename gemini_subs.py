@@ -827,7 +827,18 @@ def stitch(chunk_dir, output_vtt):
                 }
             )
 
-    for cap in sorted(captions_to_write, key=lambda item: item["start"]):
+    captions_to_write.sort(key=lambda item: item["start"])
+    for i in range(1, len(captions_to_write)):
+        previous = captions_to_write[i - 1]
+        current = captions_to_write[i]
+        if current["start"] < previous["end"]:
+            boundary = max(previous["start"] + 0.001, current["start"])
+            previous["end"] = boundary
+            if boundary > current["start"]:
+                current["start"] = boundary
+                current["end"] = max(current["end"], boundary + 0.001)
+
+    for cap in captions_to_write:
         final_vtt.captions.append(
             webvtt.Caption(
                 format_time(cap["start"]), format_time(cap["end"]), cap["text"]
