@@ -163,10 +163,25 @@ def build_manifest(args):
 
 def acquire_lock(chunk_dir):
     lock_path = os.path.join(chunk_dir, LOCK_NAME)
-    try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise RuntimeError(f"Another run is already using {chunk_dir}")
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                pid = int(Path(lock_path).read_text(encoding="utf-8").strip())
+                if pid <= 0:
+                    raise ValueError
+                os.kill(pid, 0)
+            except ValueError, FileNotFoundError, ProcessLookupError:
+                try:
+                    os.remove(lock_path)
+                except FileNotFoundError:
+                    pass
+                continue
+            except PermissionError:
+                pass
+            raise RuntimeError(f"Another run is already using {chunk_dir}")
 
     os.write(fd, str(os.getpid()).encode("utf-8"))
     os.close(fd)
