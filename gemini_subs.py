@@ -6,6 +6,7 @@ import subprocess
 import shutil
 import webvtt
 import concurrent.futures
+import fcntl
 import hashlib
 import re
 from pathlib import Path
@@ -163,34 +164,33 @@ def build_manifest(args):
 
 def acquire_lock(chunk_dir):
     lock_path = os.path.join(chunk_dir, LOCK_NAME)
-    while True:
+    lock_file = open(  # noqa: SIM115 - The caller keeps the lock file open.
+        lock_path, "a+", encoding="utf-8"
+    )
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.seek(0)
+        pid = lock_file.read().strip()
+        lock_file.close()
+        detail = f" (PID {pid})" if pid.isdigit() else ""
+        raise RuntimeError(
+            f"Another run{detail} is already using {chunk_dir}"
+        ) from None
+
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(str(os.getpid()))
+    lock_file.flush()
+    return lock_file
+
+
+def release_lock(lock_file):
+    if lock_file:
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            try:
-                pid = int(Path(lock_path).read_text(encoding="utf-8").strip())
-                if pid <= 0:
-                    raise ValueError
-                os.kill(pid, 0)
-            except ValueError, FileNotFoundError, ProcessLookupError:
-                try:
-                    os.remove(lock_path)
-                except FileNotFoundError:
-                    pass
-                continue
-            except PermissionError:
-                pass
-            raise RuntimeError(f"Another run is already using {chunk_dir}")
-
-    os.write(fd, str(os.getpid()).encode("utf-8"))
-    os.close(fd)
-    return lock_path
-
-
-def release_lock(lock_path):
-    if lock_path and os.path.exists(lock_path):
-        os.remove(lock_path)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 def clean_incomplete_split(chunk_dir):
@@ -1181,11 +1181,11 @@ def main():
 
     manifest, chunk_dir = build_manifest(args)
     os.makedirs(chunk_dir, exist_ok=True)
-    lock_path = None
+    lock_file = None
     completed = False
 
     try:
-        lock_path = acquire_lock(chunk_dir)
+        lock_file = acquire_lock(chunk_dir)
         print(f"Using work directory: {chunk_dir}")
 
         # 1. Split Video
@@ -1236,7 +1236,7 @@ def main():
         print(f"Error: {e}")
         sys.exit(1)
     finally:
-        release_lock(lock_path)
+        release_lock(lock_file)
         # 4. Cleanup
         if completed and os.path.exists(chunk_dir):
             print(f"Cleaning up temporary directory: {chunk_dir}")

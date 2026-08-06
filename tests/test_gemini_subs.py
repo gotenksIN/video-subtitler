@@ -272,27 +272,27 @@ def test_cached_captions_delete_invalid_data(tmp_path, capsys):
 
 
 def test_acquire_and_release_lock(tmp_path):
-    lock_path = gemini_subs.acquire_lock(tmp_path)
+    lock_file = gemini_subs.acquire_lock(tmp_path)
+    lock_path = tmp_path / gemini_subs.LOCK_NAME
 
-    assert Path(lock_path).read_text(encoding="utf-8") == str(os.getpid())
-    with pytest.raises(RuntimeError, match="Another run"):
+    assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+    with pytest.raises(RuntimeError, match=f"Another run \\(PID {os.getpid()}\\)"):
         gemini_subs.acquire_lock(tmp_path)
-    gemini_subs.release_lock(lock_path)
-    assert not Path(lock_path).exists()
+    gemini_subs.release_lock(lock_file)
+
+    replacement_lock = gemini_subs.acquire_lock(tmp_path)
+    gemini_subs.release_lock(replacement_lock)
+    assert lock_path.exists()
 
 
-def test_acquire_lock_replaces_stale_pid(tmp_path, monkeypatch):
+def test_acquire_lock_ignores_stale_pid_file(tmp_path):
     lock_path = tmp_path / gemini_subs.LOCK_NAME
     lock_path.write_text("999999999", encoding="utf-8")
 
-    def missing_process(_pid, _signal):
-        raise ProcessLookupError
+    lock_file = gemini_subs.acquire_lock(tmp_path)
 
-    monkeypatch.setattr(gemini_subs.os, "kill", missing_process)
-    acquired = gemini_subs.acquire_lock(tmp_path)
-
-    assert acquired == str(lock_path)
-    gemini_subs.release_lock(acquired)
+    assert lock_path.read_text(encoding="utf-8") == str(os.getpid())
+    gemini_subs.release_lock(lock_file)
 
 
 @pytest.mark.parametrize(
