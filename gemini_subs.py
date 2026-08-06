@@ -1,20 +1,21 @@
-import os
-import sys
-import json
 import argparse
-import subprocess
-import shutil
-import tempfile
-import webvtt
 import concurrent.futures
 import fcntl
 import hashlib
+import json
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-from pydantic import BaseModel, Field
+
+import webvtt
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 # Load environment variables from .env file
 load_dotenv()
@@ -83,7 +84,7 @@ def probe_video_format(path):
         raise RuntimeError(f"Video format not supported: {path}")
     except RuntimeError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - Wrap all probe failures consistently.
         raise RuntimeError(f"Failed to probe video format: {e}")
 
 
@@ -118,7 +119,7 @@ def format_time(seconds):
     if seconds < 0:
         raise ValueError(f"Negative timestamp: {seconds}")
 
-    total_ms = int(round(seconds * 1000))
+    total_ms = round(seconds * 1000)
     h, rem = divmod(total_ms, 3600 * 1000)
     m, rem = divmod(rem, 60 * 1000)
     s, ms = divmod(rem, 1000)
@@ -435,6 +436,7 @@ def create_overlap_clip(
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         try:
             cached_duration = float(probe.stdout.strip())
@@ -516,7 +518,7 @@ def collect_api_results(futures):
         try:
             if not future.result():
                 failed.append(chunk_name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Convert worker failures to results.
             print(f"ERROR processing {chunk_name}: {e}")
             failed.append(chunk_name)
     return failed
@@ -584,7 +586,7 @@ def process_chunks(
             chunk_name = f"context_chunk_{chunk['idx']:03d}{clip_ext}"
             try:
                 processing_chunk = future.result()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - Record clip failures and continue.
                 print(f"ERROR creating {chunk_name}: {e}")
                 failed.append(chunk_name)
                 continue
@@ -628,8 +630,7 @@ def validate_captions(captions, chunk_duration):
             )
 
         max_end = chunk_duration + 0.5
-        if end > max_end:
-            end = max_end
+        end = min(end, max_end)
         if end <= start:
             raise ValueError(
                 f"Caption timing exceeds chunk duration for id={cap.id}: "
@@ -685,7 +686,7 @@ def load_cached_captions(out_json, chunk_duration):
             data = json.load(f)
         response = SubtitleResponse(captions=data)
         return validate_captions(response.captions, chunk_duration)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         print(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
         return None
@@ -825,9 +826,9 @@ def process_chunk(
                 config=generate_content_config(thinking_level),
             )
             full_json_text = ""
-            for chunk in response_stream:
-                if chunk.text:
-                    full_json_text += chunk.text
+            for response_chunk in response_stream:
+                if response_chunk.text:
+                    full_json_text += response_chunk.text
 
         parsed_response = SubtitleResponse.model_validate_json(full_json_text)
         validated = validate_captions(parsed_response.captions, clip_duration)
@@ -835,7 +836,7 @@ def process_chunk(
 
         print(f"[Worker-{chunk_idx:03d}] Finished {clip_name}.")
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - A chunk failure must keep the run resumable.
         print(f"[Worker-{chunk_idx:03d}] ERROR processing {clip_name}: {e}")
         return False
 
@@ -1273,7 +1274,7 @@ def main():
 
         completed = True
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - Convert pipeline failures to CLI errors.
         print(f"Error: {e}")
         sys.exit(1)
     finally:

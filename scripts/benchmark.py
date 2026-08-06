@@ -11,9 +11,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from google.genai import types  # noqa: E402
+from google.genai import types
 
-from gemini_subs import (  # noqa: E402
+from gemini_subs import (
     DEFAULT_CHUNK_MODEL,
     SubtitleResponse,
     create_client,
@@ -183,9 +183,7 @@ def benchmark_gemini(args, clip_path, mime_type, clip_duration):
             config=generate_content_config(args.thinking_level),
         )
         full_json_text = ""
-        chunk_count = 0
-        for chunk in response_stream:
-            chunk_count += 1
+        for chunk_count, chunk in enumerate(response_stream, start=1):
             print(
                 f"\rGemini stream chunks received: {chunk_count}",
                 end="",
