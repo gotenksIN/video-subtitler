@@ -39,6 +39,49 @@ def write_chunk_layout(directory, rows, overlap=0):
     )
 
 
+def test_atomic_save_vtt_uses_unique_temporary_paths_in_destination(
+    tmp_path, monkeypatch
+):
+    output_path = tmp_path / "output.vtt"
+    sources = []
+    real_replace = os.replace
+
+    def record_replace(source, destination):
+        sources.append(Path(source))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(gemini_subs.os, "replace", record_replace)
+    vtt = webvtt.WebVTT()
+
+    gemini_subs.atomic_save_vtt(vtt, output_path)
+    gemini_subs.atomic_save_vtt(vtt, output_path)
+
+    assert len(set(sources)) == 2
+    assert all(source.parent == output_path.parent for source in sources)
+    assert all(source.name.endswith(".tmp.vtt") for source in sources)
+
+
+@pytest.mark.parametrize("failure", ["save", "replace"])
+def test_atomic_save_vtt_removes_temporary_file_on_failure(
+    tmp_path, monkeypatch, failure
+):
+    output_path = tmp_path / "output.vtt"
+    vtt = MagicMock()
+    if failure == "save":
+        vtt.save.side_effect = OSError("save failed")
+    else:
+        monkeypatch.setattr(
+            gemini_subs.os,
+            "replace",
+            MagicMock(side_effect=OSError("replace failed")),
+        )
+
+    with pytest.raises(OSError, match=f"{failure} failed"):
+        gemini_subs.atomic_save_vtt(vtt, output_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("1", 1), ("02:03.25", 123.25), ("01:02:03,004", 3723.004)],

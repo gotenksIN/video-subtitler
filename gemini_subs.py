@@ -4,6 +4,7 @@ import json
 import argparse
 import subprocess
 import shutil
+import tempfile
 import webvtt
 import concurrent.futures
 import fcntl
@@ -124,6 +125,20 @@ def atomic_write_json(path, data):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, path)
+
+
+def atomic_save_vtt(vtt, path):
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp.vtt", dir=path.parent
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        vtt.save(str(tmp_path))
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def file_fingerprint(path):
@@ -902,10 +917,7 @@ def stitch(chunk_dir, output_vtt):
             )
         )
 
-    output_path = Path(output_vtt)
-    tmp_output = output_path.with_name(f"{output_path.name}.tmp.vtt")
-    final_vtt.save(str(tmp_output))
-    os.replace(tmp_output, output_path)
+    atomic_save_vtt(final_vtt, output_vtt)
     print(
         f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions."
     )
@@ -1040,10 +1052,7 @@ def global_refine_subtitles(
         except ValueError:
             pass
 
-    output_path = Path(output_vtt)
-    tmp_output = output_path.with_name(f"{output_path.name}.tmp.vtt")
-    vtt.save(str(tmp_output))
-    os.replace(tmp_output, output_path)
+    atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
 
 
