@@ -110,7 +110,7 @@ CLI arguments take precedence over environment variables.
 The chunk thinking level accepts `minimal`, `low`, `medium`, and `high`.
 It defaults to `high`.
 `minimal` is valid only when the model name contains `flash`.
-The refinement pass always uses `high`.
+The refinement pass always uses `medium`.
 
 The direct CLI defaults are:
 
