@@ -220,6 +220,8 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
         print("Chunks already exist, skipping splitting.")
         return
 
+    if os.path.exists(complete_marker):
+        os.remove(complete_marker)
     clean_incomplete_split(chunk_dir)
     ext = manifest["chunk_ext"]
 

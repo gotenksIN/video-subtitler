@@ -205,6 +205,51 @@ def test_clean_incomplete_split_preserves_unrelated_files(tmp_path):
     assert all((tmp_path / name).exists() for name in preserved)
 
 
+def test_split_video_removes_stale_marker_before_cleaning(tmp_path, monkeypatch):
+    marker = tmp_path / gemini_subs.SPLIT_COMPLETE_MARKER
+    marker.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "segments.csv").write_text("chunk_000.mp4,0,10\n", encoding="utf-8")
+
+    def check_marker_removed(_chunk_dir):
+        assert not marker.exists()
+        raise RuntimeError("stop before ffmpeg")
+
+    monkeypatch.setattr(gemini_subs, "clean_incomplete_split", check_marker_removed)
+
+    with pytest.raises(RuntimeError, match="stop before ffmpeg"):
+        gemini_subs.split_video("video.mp4", tmp_path, 60, manifest())
+
+
+def test_failed_split_does_not_leave_stale_marker_for_next_run(tmp_path, monkeypatch):
+    marker = tmp_path / gemini_subs.SPLIT_COMPLETE_MARKER
+    marker.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "segments.csv").write_text(
+        "chunk_000.mp4,0,10\nchunk_001.mp4,10,20\n", encoding="utf-8"
+    )
+    (tmp_path / "chunk_000.mp4").write_bytes(b"old")
+    calls = 0
+
+    def run_split(_cmd, **_kwargs):
+        nonlocal calls
+        calls += 1
+        (tmp_path / "segments.csv").write_text("chunk_000.mp4,0,10\n", encoding="utf-8")
+        (tmp_path / "chunk_000.mp4").write_bytes(b"partial")
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, "ffmpeg")
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run_split)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        gemini_subs.split_video("video.mp4", tmp_path, 60, manifest())
+    assert not marker.exists()
+
+    gemini_subs.split_video("video.mp4", tmp_path, 60, manifest())
+
+    assert calls == 2
+    assert marker.read_text(encoding="utf-8") == "ok\n"
+
+
 def test_cached_captions_load_valid_data(tmp_path):
     path = tmp_path / "captions.json"
     path.write_text(
