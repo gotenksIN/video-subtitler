@@ -126,12 +126,45 @@ def run_ffmpeg(video_file, clip_path, start, duration, ext, codec):
     return time.perf_counter() - started
 
 
-def benchmark_gemini(args, clip_path, mime_type):
+def probe_clip_duration(clip_path):
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(clip_path),
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise RuntimeError("FFprobe is required to measure the benchmark clip") from e
+    except subprocess.CalledProcessError as e:
+        detail = e.stderr.strip() if e.stderr else "unknown FFprobe error"
+        raise RuntimeError(f"Could not probe benchmark clip duration: {detail}") from e
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as e:
+        raise RuntimeError(
+            f"FFprobe returned an invalid benchmark clip duration: {result.stdout.strip()!r}"
+        ) from e
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError(
+            f"FFprobe returned a non-positive benchmark clip duration: {duration}"
+        )
+    return duration
+
+
+def benchmark_gemini(args, clip_path, mime_type, clip_duration):
     video_data = clip_path.read_bytes()
     prompt = f"""
     You are benchmarking subtitle generation latency.
-    Watch this {args.duration:.3f}-second video clip and generate concise English subtitles.
-    Create accurate timestamps relative to the start of this clip, ranging from 00:00:00.000 to {format_time(args.duration)}.
+    Watch this {clip_duration:.3f}-second video clip and generate concise English subtitles.
+    The main chunk window is 00:00:00.000 to {format_time(clip_duration)} in this clip.
+    Create accurate timestamps relative to the start of this clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
     Use sequential integer IDs starting at 0. Keep captions sorted by start time and do not overlap them.
     Return ONLY the valid JSON object matching the required schema with a 'captions' array.
     """
@@ -161,7 +194,7 @@ def benchmark_gemini(args, clip_path, mime_type):
 
     print("Validating Gemini response...")
     parsed = SubtitleResponse.model_validate_json(full_json_text)
-    validate_captions(parsed.captions, args.duration)
+    validate_captions(parsed.captions, clip_duration)
     return time.perf_counter() - started, len(parsed.captions)
 
 
@@ -177,6 +210,7 @@ def print_summary(
     ext,
     mime_type,
     codec,
+    clip_duration,
     ffmpeg_seconds,
     api_seconds,
     caption_count,
@@ -191,6 +225,7 @@ def print_summary(
     print(f"  Codec: {codec}")
     print(f"  Clip container: {ext} ({mime_type})")
     print(f"  Clip size: {clip_size_mb:.1f} MB")
+    print(f"  Gemini request clip duration: {clip_duration:.3f}s")
     print(f"  FFmpeg clip generation: {ffmpeg_seconds:.2f}s")
     print(f"  Gemini processing: {api_seconds:.2f}s")
     print(f"  Captions returned: {caption_count}")
@@ -242,13 +277,18 @@ def main():
         ffmpeg_seconds = run_ffmpeg(
             str(video_file), clip_path, args.start, args.duration, ext, codec
         )
-        api_seconds, caption_count = benchmark_gemini(args, clip_path, mime_type)
+        print("Probing benchmark clip duration...")
+        clip_duration = probe_clip_duration(clip_path)
+        api_seconds, caption_count = benchmark_gemini(
+            args, clip_path, mime_type, clip_duration
+        )
         print_summary(
             video_file,
             clip_path,
             ext,
             mime_type,
             codec,
+            clip_duration,
             ffmpeg_seconds,
             api_seconds,
             caption_count,
