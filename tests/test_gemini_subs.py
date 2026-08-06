@@ -606,6 +606,58 @@ def test_refine_only_forwards_current_refinement_defaults(tmp_path, monkeypatch)
     )
 
 
+def test_refine_only_allows_in_place_output(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.vtt"
+    input_path.write_text("WEBVTT\n", encoding="utf-8")
+    refine = MagicMock()
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(input_path),
+            "--refine-only",
+            "--api-key",
+            "key",
+            "--output",
+            str(input_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="0"):
+        gemini_subs.main()
+
+    refine.assert_called_once()
+
+
+def test_main_rejects_output_that_resolves_to_source(tmp_path, monkeypatch, capsys):
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    output_path = tmp_path / "video-alias.mp4"
+    output_path.symlink_to(video_path)
+    build = MagicMock()
+    monkeypatch.setattr(gemini_subs, "build_manifest", build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(video_path),
+            "--output",
+            str(output_path),
+            "--api-key",
+            "key",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.main()
+
+    assert "--output must not resolve to the source video" in capsys.readouterr().out
+    build.assert_not_called()
+
+
 def test_main_rejects_invalid_overlap_before_pipeline(monkeypatch):
     build = MagicMock()
     monkeypatch.setattr(gemini_subs, "build_manifest", build)

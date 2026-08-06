@@ -1167,6 +1167,10 @@ def main():
         print(f"Error: Video file not found: {args.video_file}")
         sys.exit(1)
 
+    if Path(args.video_file).resolve() == Path(args.output).resolve():
+        print("Error: --output must not resolve to the source video")
+        sys.exit(1)
+
     if not args.api_key:
         print(
             "Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
