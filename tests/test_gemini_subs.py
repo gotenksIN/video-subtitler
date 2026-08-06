@@ -831,6 +831,109 @@ def test_main_cleans_before_release_without_removing_new_owner_files(
     assert new_owner_artifact.read_text(encoding="utf-8") == "new"
 
 
+def test_main_preserves_output_and_cleans_staging_when_refinement_fails(
+    tmp_path, monkeypatch
+):
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    output_path = tmp_path / "output.vtt"
+    output_path.write_text("previous output", encoding="utf-8")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    staging_paths = []
+
+    def stitch(_chunk_dir, path):
+        staging_paths.append(Path(path))
+        Path(path).write_text("stitched output", encoding="utf-8")
+
+    def refine(input_path, *_args):
+        assert Path(input_path).read_text(encoding="utf-8") == "stitched output"
+        raise RuntimeError("refinement failed")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(video_path),
+            "--api-key",
+            "key",
+            "--output",
+            str(output_path),
+        ],
+    )
+    monkeypatch.setattr(
+        gemini_subs, "build_manifest", lambda _args: (manifest(), str(work_dir))
+    )
+    monkeypatch.setattr(gemini_subs, "split_video", lambda *_args: None)
+    monkeypatch.setattr(
+        gemini_subs,
+        "list_chunks",
+        lambda _path: [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}],
+    )
+    monkeypatch.setattr(gemini_subs, "process_chunks", lambda *_args: [])
+    monkeypatch.setattr(gemini_subs, "stitch", stitch)
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.main()
+
+    assert output_path.read_text(encoding="utf-8") == "previous output"
+    assert len(staging_paths) == 1
+    assert staging_paths[0].parent == output_path.parent
+    assert not staging_paths[0].exists()
+
+
+def test_main_publishes_refined_output_and_cleans_staging(tmp_path, monkeypatch):
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    output_path = tmp_path / "output.vtt"
+    output_path.write_text("previous output", encoding="utf-8")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    staging_paths = []
+
+    def stitch(_chunk_dir, path):
+        staging_paths.append(Path(path))
+        Path(path).write_text("stitched output", encoding="utf-8")
+
+    def refine(input_path, refined_output, *_args):
+        assert Path(input_path).read_text(encoding="utf-8") == "stitched output"
+        Path(refined_output).write_text("refined output", encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(video_path),
+            "--api-key",
+            "key",
+            "--output",
+            str(output_path),
+        ],
+    )
+    monkeypatch.setattr(
+        gemini_subs, "build_manifest", lambda _args: (manifest(), str(work_dir))
+    )
+    monkeypatch.setattr(gemini_subs, "split_video", lambda *_args: None)
+    monkeypatch.setattr(
+        gemini_subs,
+        "list_chunks",
+        lambda _path: [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}],
+    )
+    monkeypatch.setattr(gemini_subs, "process_chunks", lambda *_args: [])
+    monkeypatch.setattr(gemini_subs, "stitch", stitch)
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+
+    gemini_subs.main()
+
+    assert output_path.read_text(encoding="utf-8") == "refined output"
+    assert len(staging_paths) == 1
+    assert staging_paths[0].parent == output_path.parent
+    assert not staging_paths[0].exists()
+
+
 def test_main_keeps_work_directory_when_chunk_processing_fails(monkeypatch):
     chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
     release = MagicMock()

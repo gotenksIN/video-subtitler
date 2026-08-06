@@ -1201,6 +1201,7 @@ def main():
     manifest, chunk_dir = build_manifest(args)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_file = None
+    staging_vtt = None
     completed = False
 
     try:
@@ -1235,13 +1236,21 @@ def main():
                 f"Keeping {chunk_dir} so you can retry."
             )
 
-        # 3. Stitch chunks together
-        stitch(chunk_dir, args.output)
-
-        # 4. Optional Global Refinement Pass
-        if not args.disable_text_refine:
+        # 3. Stitch chunks together and optionally refine before publication
+        if args.disable_text_refine:
+            stitch(chunk_dir, args.output)
+        else:
+            output_path = Path(args.output)
+            fd, staging_name = tempfile.mkstemp(
+                prefix=f".{output_path.name}.",
+                suffix=".staging.vtt",
+                dir=output_path.parent,
+            )
+            staging_vtt = Path(staging_name)
+            os.close(fd)
+            stitch(chunk_dir, staging_vtt)
             global_refine_subtitles(
-                args.output,
+                staging_vtt,
                 args.output,
                 args.api_key,
                 args.base_url,
@@ -1256,6 +1265,9 @@ def main():
         sys.exit(1)
     finally:
         try:
+            if staging_vtt is not None:
+                staging_vtt.unlink(missing_ok=True)
+
             # 4. Cleanup
             if completed and os.path.exists(chunk_dir):
                 print(f"Cleaning up temporary directory: {chunk_dir}")
