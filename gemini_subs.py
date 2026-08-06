@@ -89,6 +89,9 @@ def probe_video_format(path):
 
 def parse_time(time_str):
     value = str(time_str).strip().replace(",", ".")
+    if value.startswith("-"):
+        raise ValueError(f"Negative timestamp: {time_str}")
+
     parts = value.split(":")
     if len(parts) == 3:
         h, m, s_ms = parts

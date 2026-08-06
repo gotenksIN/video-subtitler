@@ -95,6 +95,12 @@ def test_parse_time_rejects_too_many_components():
         gemini_subs.parse_time("1:2:3:4")
 
 
+@pytest.mark.parametrize("value", ["-0.5", "-00:00:00.5"])
+def test_parse_time_rejects_negative_fractional_values(value):
+    with pytest.raises(ValueError, match="Negative timestamp"):
+        gemini_subs.parse_time(value)
+
+
 @pytest.mark.parametrize(
     ("seconds", "expected"),
     [
@@ -185,6 +191,12 @@ def test_validation_rejects_duplicate_ids():
 def test_validation_rejects_invalid_and_out_of_bounds_timing(captions):
     with pytest.raises(ValueError):
         gemini_subs.validate_captions(captions, 10)
+
+
+@pytest.mark.parametrize("start", ["-0.5", "-00:00:00.5"])
+def test_validation_rejects_negative_fractional_timing(start):
+    with pytest.raises(ValueError, match="Negative timestamp"):
+        gemini_subs.validate_captions([caption(1, start, "1")], 10)
 
 
 def test_validation_heals_overlaps_in_sorted_output():
