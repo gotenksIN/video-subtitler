@@ -654,9 +654,38 @@ def test_global_refinement_updates_only_valid_ids_and_saves_atomically(
     result = webvtt.read(output_path)
     assert [cap.text for cap in result] == ["New", "Keep"]
     call = client.models.generate_content_stream.call_args
-    assert "Old line" in call.kwargs["contents"]
+    assert "Old\nline" in call.kwargs["contents"]
     assert call.kwargs["model"] == "refiner"
     assert call.kwargs["config"].thinking_config.thinking_level == "HIGH"
+
+
+def test_global_refinement_prompt_preserves_caption_line_breaks(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.vtt"
+    output_path = tmp_path / "output.vtt"
+    source = webvtt.WebVTT()
+    source.captions.append(
+        webvtt.Caption(
+            "00:00:00.000",
+            "00:00:02.000",
+            "- Speaker One: Hello.\n- Speaker Two: Hi.",
+        )
+    )
+    source.save(input_path)
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text='{"changes": []}')
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        input_path, output_path, "key", None, "refiner", "high"
+    )
+
+    prompt = client.models.generate_content_stream.call_args.kwargs["contents"]
+    assert (
+        "[0] 00:00:00.000 --> 00:00:02.000: - Speaker One: Hello.\n- Speaker Two: Hi."
+    ) in prompt
 
 
 def test_global_refinement_exits_for_invalid_model_json(tmp_path, monkeypatch):

@@ -1015,8 +1015,7 @@ def global_refine_subtitles(
 
     script_lines = []
     for i, caption in enumerate(vtt):
-        text = caption.text.replace("\n", " ")
-        script_lines.append(f"[{i}] {caption.start} --> {caption.end}: {text}")
+        script_lines.append(f"[{i}] {caption.start} --> {caption.end}: {caption.text}")
 
     full_script = "\n".join(script_lines)
 
