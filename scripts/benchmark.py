@@ -98,28 +98,31 @@ def run_ffmpeg(video_file, clip_path, start, duration, ext, codec):
         str(clip_path),
     ]
     started = time.perf_counter()
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        key, sep, value = raw_line.strip().partition("=")
-        if sep and key == "out_time_ms":
-            if not value.isdecimal():
-                continue
-            elapsed = max(0.0, int(value) / 1_000_000)
-            percent = min(100.0, elapsed / duration * 100)
-            print(
-                f"\rFFmpeg progress: {percent:5.1f}% "
-                f"({elapsed:.1f}s / {duration:.1f}s)",
-                end="",
-                flush=True,
-            )
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+        )
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            key, sep, value = raw_line.strip().partition("=")
+            if sep and key == "out_time_ms":
+                if not value.isdecimal():
+                    continue
+                elapsed = max(0.0, int(value) / 1_000_000)
+                percent = min(100.0, elapsed / duration * 100)
+                print(
+                    f"\rFFmpeg progress: {percent:5.1f}% "
+                    f"({elapsed:.1f}s / {duration:.1f}s)",
+                    end="",
+                    flush=True,
+                )
 
-    _stdout, stderr = process.communicate()
+        process.wait()
+        stderr_file.seek(0)
+        stderr = stderr_file.read()
     print("\rFFmpeg progress: 100.0%" + " " * 24)
     if process.returncode != 0:
         raise RuntimeError(f"FFmpeg benchmark failed: {stderr.strip()}")
