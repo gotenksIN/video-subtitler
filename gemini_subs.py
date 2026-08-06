@@ -1007,6 +1007,18 @@ SCRIPT
 """
 
 
+def validate_refinement_changes(changes, caption_count):
+    seen_ids = set()
+    for change in changes:
+        if not 0 <= change.id < caption_count:
+            raise ValueError(f"subtitle ID {change.id} is out of range")
+        if change.id in seen_ids:
+            raise ValueError(f"subtitle ID {change.id} is duplicated")
+        if not change.text.strip():
+            raise ValueError(f"subtitle ID {change.id} has empty text")
+        seen_ids.add(change.id)
+
+
 def global_refine_subtitles(
     input_vtt, output_vtt, api_key, base_url, model_name, thinking_level
 ):
@@ -1047,8 +1059,9 @@ def global_refine_subtitles(
 
     try:
         refinements = RefinementResponse.model_validate_json(full_json_text)
-    except Exception as e:
-        print(f"Error parsing model response: {e}")
+        validate_refinement_changes(refinements.changes, len(vtt))
+    except ValueError as e:
+        print(f"Error parsing or validating model response: {e}")
         print("Raw response:")
         print(full_json_text)
         sys.exit(1)
@@ -1057,11 +1070,7 @@ def global_refine_subtitles(
     print(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")
 
     for change in changes:
-        try:
-            if 0 <= change.id < len(vtt):
-                vtt[change.id].text = change.text
-        except ValueError:
-            pass
+        vtt[change.id].text = change.text
 
     atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")

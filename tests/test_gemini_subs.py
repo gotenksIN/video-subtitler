@@ -626,7 +626,7 @@ def test_stitch_without_overlap_keeps_all_captions_and_heals_overlap(tmp_path):
     assert result[1].start == "00:00:05.000"
 
 
-def test_global_refinement_updates_only_valid_ids_and_saves_atomically(
+def test_global_refinement_updates_valid_ids_and_saves_atomically(
     tmp_path, monkeypatch
 ):
     input_path = tmp_path / "input.vtt"
@@ -642,8 +642,7 @@ def test_global_refinement_updates_only_valid_ids_and_saves_atomically(
     client = MagicMock()
     client.__enter__.return_value = client
     client.models.generate_content_stream.return_value = [
-        SimpleNamespace(text='{"changes": [{"id": 0, "text": "New"},'),
-        SimpleNamespace(text='{"id": 9, "text": "Ignored"}]}'),
+        SimpleNamespace(text='{"changes": [{"id": 0, "text": "New"}]}'),
     ]
     monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
@@ -657,6 +656,100 @@ def test_global_refinement_updates_only_valid_ids_and_saves_atomically(
     assert "Old\nline" in call.kwargs["contents"]
     assert call.kwargs["model"] == "refiner"
     assert call.kwargs["config"].thinking_config.thinking_level == "HIGH"
+
+
+@pytest.mark.parametrize("text", ["", " \t\n"])
+def test_global_refinement_rejects_empty_text(tmp_path, monkeypatch, text):
+    input_path = tmp_path / "input.vtt"
+    source = webvtt.WebVTT()
+    source.captions.append(webvtt.Caption("00:00:00.000", "00:00:01.000", "Original"))
+    source.save(input_path)
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text=json.dumps({"changes": [{"id": 0, "text": text}]}))
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+    output_path = tmp_path / "output.vtt"
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            input_path, output_path, "key", None, "refiner", "high"
+        )
+
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        [{"id": 0, "text": "First"}, {"id": 0, "text": "Second"}],
+        [{"id": 1, "text": "Out of range"}],
+    ],
+    ids=["duplicate IDs", "out-of-range ID"],
+)
+def test_global_refinement_rejects_invalid_ids(tmp_path, monkeypatch, changes):
+    input_path = tmp_path / "input.vtt"
+    source = webvtt.WebVTT()
+    source.captions.append(webvtt.Caption("00:00:00.000", "00:00:01.000", "Original"))
+    source.save(input_path)
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(text=json.dumps({"changes": changes}))
+    ]
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+    output_path = tmp_path / "output.vtt"
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            input_path, output_path, "key", None, "refiner", "high"
+        )
+
+    assert not output_path.exists()
+
+
+def test_global_refinement_does_not_partially_apply_invalid_changes(
+    tmp_path, monkeypatch
+):
+    source = webvtt.WebVTT()
+    source.captions.extend(
+        [
+            webvtt.Caption("00:00:00.000", "00:00:01.000", "First original"),
+            webvtt.Caption("00:00:02.000", "00:00:03.000", "Second original"),
+        ]
+    )
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.models.generate_content_stream.return_value = [
+        SimpleNamespace(
+            text=json.dumps(
+                {
+                    "changes": [
+                        {"id": 0, "text": "First changed"},
+                        {"id": 2, "text": "Invalid"},
+                    ]
+                }
+            )
+        )
+    ]
+    monkeypatch.setattr(gemini_subs.webvtt, "read", lambda _path: source)
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+    save = MagicMock()
+    monkeypatch.setattr(gemini_subs, "atomic_save_vtt", save)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            tmp_path / "input.vtt",
+            tmp_path / "output.vtt",
+            "key",
+            None,
+            "refiner",
+            "high",
+        )
+
+    assert [caption.text for caption in source] == ["First original", "Second original"]
+    save.assert_not_called()
 
 
 def test_global_refinement_prompt_preserves_caption_line_breaks(tmp_path, monkeypatch):
