@@ -341,9 +341,9 @@ def test_acquire_lock_ignores_stale_pid_file(tmp_path):
 @pytest.mark.parametrize(
     ("output", "expected"),
     [
-        ("matroska,webm\nvp9\n", (".webm", "video/webm", "vp9")),
-        ("mov,mp4\nh264\n", (".mp4", "video/mp4", "h264")),
-        ("mov,mp4\nhevc\n", (".mp4", "video/mp4", "hevc")),
+        ("vp9\n", (".webm", "video/webm", "vp9")),
+        ("h264\n", (".mp4", "video/mp4", "h264")),
+        ("hevc\n", (".mp4", "video/mp4", "hevc")),
     ],
 )
 def test_probe_video_format_detects_supported_codecs(monkeypatch, output, expected):
@@ -354,11 +354,31 @@ def test_probe_video_format_detects_supported_codecs(monkeypatch, output, expect
     assert run.call_args.args[0][-1] == "video file"
 
 
-def test_probe_video_format_preserves_unsupported_error(monkeypatch):
+def test_probe_video_format_selects_primary_video_stream(monkeypatch):
+    def run(cmd, **_kwargs):
+        selector = cmd[cmd.index("-select_streams") + 1]
+        output = {"v:0": "h264\n", "v:1": "vp9\n"}[selector]
+        return subprocess.CompletedProcess([], 0, output, "")
+
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+
+    assert gemini_subs.probe_video_format("multi-video") == (
+        ".mp4",
+        "video/mp4",
+        "h264",
+    )
+
+
+def test_probe_video_format_rejects_unsupported_primary_stream(monkeypatch):
+    def run(cmd, **_kwargs):
+        selector = cmd[cmd.index("-select_streams") + 1]
+        output = {"v:0": "av1\n", "v:1": "h264\n"}[selector]
+        return subprocess.CompletedProcess([], 0, output, "")
+
     monkeypatch.setattr(
         gemini_subs.subprocess,
         "run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "av1", ""),
+        run,
     )
     with pytest.raises(RuntimeError, match="Video format not supported"):
         gemini_subs.probe_video_format("video")

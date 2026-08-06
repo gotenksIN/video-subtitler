@@ -63,20 +63,22 @@ def probe_video_format(path):
         "ffprobe",
         "-v",
         "error",
+        "-select_streams",
+        "v:0",
         "-show_entries",
-        "format=format_name:stream=codec_name",
+        "stream=codec_name",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
         path,
     ]
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        fmt = result.stdout.strip().lower()
-        if "vp9" in fmt:
+        codec = result.stdout.strip().lower()
+        if codec == "vp9":
             return ".webm", "video/webm", "vp9"
-        if "h264" in fmt:
+        if codec == "h264":
             return ".mp4", "video/mp4", "h264"
-        if "hevc" in fmt or "h265" in fmt:
+        if codec in ("hevc", "h265"):
             return ".mp4", "video/mp4", "hevc"
         raise RuntimeError(f"Video format not supported: {path}")
     except RuntimeError:
