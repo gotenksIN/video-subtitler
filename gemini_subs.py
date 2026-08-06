@@ -396,7 +396,7 @@ def create_overlap_clip(
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=duration",
+                "format=duration",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
                 clip_path,

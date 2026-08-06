@@ -336,16 +336,19 @@ def test_create_overlap_clip_builds_command_and_atomically_moves_result(
     assert "libx264" in command
 
 
-def test_create_overlap_clip_reuses_positive_cached_clip(tmp_path, monkeypatch):
-    clip = tmp_path / "context_chunk_000.mp4"
+def test_create_overlap_clip_reuses_positive_cached_webm_clip(tmp_path, monkeypatch):
+    clip = tmp_path / "context_chunk_000.webm"
     clip.write_bytes(b"clip")
     run = MagicMock(return_value=subprocess.CompletedProcess([], 0, "2.5\n", ""))
     monkeypatch.setattr(gemini_subs.subprocess, "run", run)
 
-    name = gemini_subs.create_overlap_clip("source.mp4", tmp_path, 0, 0, 2.5, ".mp4")
+    name = gemini_subs.create_overlap_clip("source.webm", tmp_path, 0, 0, 2.5, ".webm")
 
     assert name == clip.name
     assert run.call_count == 1
+    probe_command = run.call_args.args[0]
+    assert probe_command[probe_command.index("-show_entries") + 1] == "format=duration"
+    assert probe_command[0] == "ffprobe"
 
 
 def test_client_forwards_key_and_base_url(monkeypatch):
