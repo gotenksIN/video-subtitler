@@ -208,6 +208,16 @@ def release_lock(lock_file):
             lock_file.close()
 
 
+def clean_completed_work(chunk_dir):
+    for entry in os.scandir(chunk_dir):
+        if entry.name == LOCK_NAME:
+            continue
+        if entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path)
+        else:
+            os.remove(entry.path)
+
+
 def clean_incomplete_split(chunk_dir):
     for name in os.listdir(chunk_dir):
         if (
@@ -1245,11 +1255,13 @@ def main():
         print(f"Error: {e}")
         sys.exit(1)
     finally:
-        release_lock(lock_file)
-        # 4. Cleanup
-        if completed and os.path.exists(chunk_dir):
-            print(f"Cleaning up temporary directory: {chunk_dir}")
-            shutil.rmtree(chunk_dir)
+        try:
+            # 4. Cleanup
+            if completed and os.path.exists(chunk_dir):
+                print(f"Cleaning up temporary directory: {chunk_dir}")
+                clean_completed_work(chunk_dir)
+        finally:
+            release_lock(lock_file)
 
 
 if __name__ == "__main__":

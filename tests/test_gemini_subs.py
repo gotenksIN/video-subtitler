@@ -770,44 +770,71 @@ def test_main_rejects_invalid_overlap_before_pipeline(monkeypatch):
     build.assert_not_called()
 
 
-def test_main_runs_pipeline_releases_lock_and_cleans_on_success(monkeypatch):
+def test_main_cleans_before_release_without_removing_new_owner_files(
+    tmp_path, monkeypatch
+):
     chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    old_artifact = work_dir / "manifest.json"
+    old_artifact.write_text("old", encoding="utf-8")
+    new_owner_artifact = work_dir / "new-owner.json"
     split = MagicMock()
     process = MagicMock(return_value=[])
     stitch = MagicMock()
-    release = MagicMock()
-    remove = MagicMock()
+    events = []
+    real_cleanup = gemini_subs.clean_completed_work
+    real_release = gemini_subs.release_lock
+
+    def cleanup(path):
+        events.append("cleanup")
+        real_cleanup(path)
+
+    def release(lock_file):
+        events.append("release")
+        real_release(lock_file)
+        new_owner_lock = gemini_subs.acquire_lock(work_dir)
+        new_owner_artifact.write_text("new", encoding="utf-8")
+        real_release(new_owner_lock)
+
     monkeypatch.setattr(
         sys,
         "argv",
-        ["gemini_subs.py", "video.mp4", "--api-key", "key", "--disable-text-refine"],
+        [
+            "gemini_subs.py",
+            str(video_path),
+            "--api-key",
+            "key",
+            "--disable-text-refine",
+        ],
     )
-    monkeypatch.setattr(gemini_subs.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(
-        gemini_subs, "build_manifest", lambda _args: (manifest(), "work-dir")
+        gemini_subs, "build_manifest", lambda _args: (manifest(), str(work_dir))
     )
-    monkeypatch.setattr(gemini_subs.os, "makedirs", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(gemini_subs, "acquire_lock", lambda _path: "work-dir/.lock")
     monkeypatch.setattr(gemini_subs, "split_video", split)
     monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
     monkeypatch.setattr(gemini_subs, "process_chunks", process)
     monkeypatch.setattr(gemini_subs, "stitch", stitch)
     monkeypatch.setattr(gemini_subs, "release_lock", release)
-    monkeypatch.setattr(gemini_subs.shutil, "rmtree", remove)
+    monkeypatch.setattr(gemini_subs, "clean_completed_work", cleanup)
 
     gemini_subs.main()
 
     split.assert_called_once()
     process.assert_called_once()
-    stitch.assert_called_once_with("work-dir", "output_subtitles.vtt")
-    release.assert_called_once_with("work-dir/.lock")
-    remove.assert_called_once_with("work-dir")
+    stitch.assert_called_once_with(str(work_dir), "output_subtitles.vtt")
+    assert events == ["cleanup", "release"]
+    assert not old_artifact.exists()
+    assert (work_dir / gemini_subs.LOCK_NAME).exists()
+    assert new_owner_artifact.read_text(encoding="utf-8") == "new"
 
 
 def test_main_keeps_work_directory_when_chunk_processing_fails(monkeypatch):
     chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
     release = MagicMock()
-    remove = MagicMock()
+    cleanup = MagicMock()
     monkeypatch.setattr(
         sys, "argv", ["gemini_subs.py", "video.mp4", "--api-key", "key"]
     )
@@ -821,13 +848,13 @@ def test_main_keeps_work_directory_when_chunk_processing_fails(monkeypatch):
     monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
     monkeypatch.setattr(gemini_subs, "process_chunks", lambda *_args: ["chunk_000.mp4"])
     monkeypatch.setattr(gemini_subs, "release_lock", release)
-    monkeypatch.setattr(gemini_subs.shutil, "rmtree", remove)
+    monkeypatch.setattr(gemini_subs, "clean_completed_work", cleanup)
 
     with pytest.raises(SystemExit, match="1"):
         gemini_subs.main()
 
     release.assert_called_once_with("work-dir/.lock")
-    remove.assert_not_called()
+    cleanup.assert_not_called()
 
 
 def test_build_manifest_records_current_inputs_and_stable_digest(tmp_path, monkeypatch):
