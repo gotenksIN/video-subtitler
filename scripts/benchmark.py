@@ -33,7 +33,7 @@ from gemini_subs import (
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Benchmark FFmpeg overlap clip creation and Gemini processing."
+        description="Benchmark subtitle generation and refinement models across full video runs."
     )
     parser.add_argument("video_file", help="Path to the source video file")
     parser.add_argument(

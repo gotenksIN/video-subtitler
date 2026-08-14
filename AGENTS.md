@@ -1,4 +1,4 @@
-# Project Specification
+# Project specification
 
 This file is the source of truth for agents that work on this repository.
 It describes the project from first principles.
@@ -16,7 +16,7 @@ FFmpeg performs local media work.
 The Gemini API performs video interpretation and translation.
 Pydantic validates every structured model response before it reaches the output file.
 
-## System Model
+## System model
 
 The normal generation path has seven stages.
 
@@ -39,7 +39,7 @@ flowchart TD
 The command holds one process lock for the complete work-directory lifecycle.
 The lock covers splitting, clip creation, API calls, output publication, and success cleanup.
 
-## Repository Layout
+## Repository layout
 
 | Path | Responsibility |
 | --- | --- |
@@ -48,7 +48,7 @@ The lock covers splitting, clip creation, API calls, output publication, and suc
 | `scripts/subtitle.sh` | Local wrapper with eight API workers. |
 | `scripts/yt-dl.sh` | Single-video YouTube downloader. |
 | `scripts/ffmpeg.sh` | Headless static FFmpeg installer. |
-| `scripts/benchmark.py` | Measures one overlap encode and one Gemini request. |
+| `scripts/benchmark.py` | Full-video matrix benchmark across generation and refinement models. |
 | `README.md` | User-facing installation and usage guide. |
 | `.env.example` | Environment variable template. |
 | `pyproject.toml` | Python metadata and dependency declarations. |
@@ -58,7 +58,7 @@ Keep `gemini_subs.py` as one focused module unless the file becomes unmanageable
 Use the standard library for small utilities.
 Do not add heavy media libraries when an FFmpeg subprocess is sufficient.
 
-## Runtime Requirements
+## Runtime requirements
 
 The project requires Python 3.14 or newer.
 Use `uv` for dependency installation and tool execution.
@@ -83,7 +83,7 @@ uv sync
 
 The CLI also requires `ffmpeg` and `ffprobe` in `PATH`.
 Use a headless GPL static build in WSL or Ubuntu Server environments.
-The supported installer downloads current BtbN FFmpeg Builds releases.
+The supported installer downloads BtbN FFmpeg Builds releases.
 
 ```bash
 ./scripts/ffmpeg.sh
@@ -124,7 +124,7 @@ The `scripts/subtitle.sh` wrapper overrides the API worker count to `8`.
 The number of overlap clip workers is automatic.
 It is `max(1, CPU count // 8)`.
 
-## CLI Modes
+## CLI modes
 
 ### Generation
 
@@ -138,7 +138,7 @@ Generation probes the input, creates or resumes a work directory, processes all 
 The output path must not resolve to the source video path.
 This guard prevents replacing a video file with subtitle text.
 
-### Generation Without Refinement
+### Generation without refinement
 
 Use `--disable-text-refine` to publish the stitched VTT directly.
 
@@ -149,7 +149,7 @@ uv run python gemini_subs.py input.webm --disable-text-refine
 This mode still validates chunk responses and heals timestamp overlaps.
 It does not make the full-script Gemini request.
 
-### Refinement Only
+### Refinement only
 
 Use an existing VTT as the positional input with `--refine-only`.
 
@@ -161,7 +161,7 @@ This mode skips video probing, splitting, overlap creation, and chunk generation
 It sends the complete VTT script to the refinement model.
 In-place VTT refinement is allowed because the write is atomic.
 
-### CLI Validation
+### CLI validation
 
 The CLI rejects these conditions before media processing:
 
@@ -174,7 +174,7 @@ The CLI rejects these conditions before media processing:
 - `minimal` thinking for a non-Flash chunk model.
 - Generation output resolving to the source video.
 
-## Video Support
+## Video support
 
 `probe_video_format()` asks FFprobe for the codec of the primary video stream, `v:0`.
 Only these codecs are supported:
@@ -228,11 +228,11 @@ Overlap clips are written to `context_chunk_%03d{ext}.tmp` first.
 The completed file is published with `os.replace()`.
 Invalid existing clips are checked with FFprobe and regenerated.
 
-## Gemini Chunk Generation
+## Gemini chunk generation
 
 The chunk request sends one video part and one detailed generation prompt.
 The SDK uses streaming responses to reduce proxy timeout risk.
-The response configuration requires JSON and the `SubtitleResponse` schema.
+The response configuration requires JSON, disables automatic function calling, and enforces the `SubtitleResponse` schema.
 
 The chunk prompt requires the model to:
 
@@ -255,7 +255,7 @@ The second pool sends completed clips to Gemini immediately.
 When overlap is disabled, one API pool processes the stream-copy chunks.
 Any clip or API failure marks the run as failed.
 
-## Structured Data
+## Structured data
 
 The chunk response schema is:
 
@@ -289,7 +289,7 @@ The on-disk `subtitle_chunk_%03d.json` file contains the validated caption array
 Each caption contains `id`, canonical `start`, canonical `end`, and `text`.
 Chunk IDs must be unique within one response.
 
-## Timestamp Rules
+## Timestamp rules
 
 Accepted input shapes are seconds, minutes and seconds, or hours, minutes, and seconds.
 Decimal commas are accepted and converted to decimal points.
@@ -328,7 +328,7 @@ Midpoint ownership can lose or duplicate a cue when the model gives inconsistent
 Do not add heuristic text deduplication without a deterministic rule.
 Repeated dialogue can be intentional.
 
-## Global Refinement
+## Global refinement
 
 The default pipeline writes a staging VTT before refinement.
 The staging file is in the output directory and has a random name ending in `.staging.vtt`.
@@ -353,7 +353,7 @@ Refinement changes text only.
 It never changes timestamps.
 The final VTT is saved atomically.
 
-## Persistent Work State
+## Persistent work state
 
 The work directory is:
 
@@ -370,8 +370,8 @@ The manifest contains:
 - `video.size`: source size in bytes.
 - `video.mtime_ns`: source modification time.
 - `chunk_dur`: requested split duration.
-- `format`: currently `stream-copy-v1`.
-- `mode`: currently `generate` for work directories.
+- `format`: `stream-copy-v1`.
+- `mode`: `generate` for work directories.
 - `model`: chunk Gemini model.
 - `chunk_thinking_level`: chunk thinking level.
 - `overlap`: overlap seconds.
@@ -399,7 +399,7 @@ subtitle_chunk_000.json
 It is removed before an invalid split is regenerated.
 `segments.csv` remains the index used by `list_chunks()`.
 
-## Locking and Atomic Writes
+## Locking and atomic writes
 
 The `.lock` file is opened and held with a non-blocking exclusive POSIX `fcntl.flock()`.
 The current PID is written for diagnostics.
@@ -419,7 +419,7 @@ Successful runs clean all work entries except `.lock` while still holding the lo
 The lock is released after cleanup.
 Failed runs retain the work directory and all valid intermediate files.
 
-## Resume and Recovery
+## Resume and recovery
 
 Retry the same command after a failed run.
 The same source fingerprint and options select the same work directory.
@@ -429,7 +429,7 @@ On retry:
 1. A valid split marker and non-empty listed chunks skip FFmpeg splitting.
 2. An invalid split removes the marker and old split artifacts before regeneration.
 3. A valid overlap clip is reused after its container duration is checked.
-4. A valid subtitle JSON file is loaded without a new API request.
+4. A valid subtitle JSON file is loaded without an additional API request.
 5. Invalid JSON or invalid caption timing is deleted and regenerated.
 6. Stitching requires one result for every expected chunk.
 
@@ -445,7 +445,7 @@ Existing cache files are intentionally user-controlled and are not invalidated b
 If a final refinement request fails, the staging file is removed and the previous requested output remains intact.
 If chunk processing fails, no final stitch is attempted and the work directory remains available.
 
-## Helper Scripts
+## Helper scripts
 
 ### `scripts/subtitle.sh`
 
@@ -462,7 +462,7 @@ It sets `--workers 8`.
 
 This script requires a YouTube URL and accepts an optional output template.
 It passes `--no-playlist`.
-It prefers VP9 video plus best audio and falls back to the best WebM format.
+It selects VP9 video with audio, falling back to WebM when VP9 is unavailable.
 The default output template is `%(title)s.webm`.
 
 ```bash
@@ -475,38 +475,30 @@ It runs `yt-dlp` through `uvx`.
 ### `scripts/ffmpeg.sh`
 
 This script accepts no arguments.
-It downloads the current BtbN GPL static archive for the host architecture.
+It downloads the BtbN GPL static archive for the host architecture.
 It extracts the archive in a temporary directory.
 It installs `ffmpeg` and `ffprobe` into `~/.local/bin`.
 It removes the temporary directory on exit.
 
 ### `scripts/benchmark.py`
 
-This executable requires one source video.
-It accepts `--start`, `--duration`, `--api-key`, `--base-url`, `--model`, and `--thinking-level`.
-The default start is `0` seconds.
-The default requested duration is `70` seconds.
+This script runs full-video subtitle generation and refinement across model matrix configurations.
+It requires one source video path.
+It accepts `--model`, `--case`, `--reference-vtt`, `--output-dir`, `--chunk-dur`, `--overlap`, `--workers`, `--thinking-level`, `--api-key`, and `--base-url`.
 
-The benchmark probes the primary codec, re-encodes one sample clip, and measures FFmpeg time.
-It probes the actual output clip duration before building the Gemini prompt.
-It streams one Gemini request and validates the returned captions.
-It reports a suggested API worker count.
+Pass `--model` repeatedly to benchmark independent chunk generation models without refinement.
+Pass `--case GEN_MODEL:REFINE_MODEL` repeatedly to benchmark generation and refinement model pairs.
+Pass `--reference-vtt` to calculate text similarity and temporal overlap metrics (recall, precision, and IoU) against reference subtitles.
+The benchmark writes generated WebVTT outputs and `benchmark-results.json` to the output directory (default: `benchmark_results/`).
 
-The recommendation is:
+For each generation model, the benchmark runs the full video pipeline (split, overlap generation, concurrent chunk processing, stitching, and cleanup).
+It then runs global refinement for each configured refinement pair and records execution duration and comparison metrics.
 
-```text
-max(1, ceil(clip_workers * api_seconds / ffmpeg_seconds))
-```
+## Development rules
 
-The benchmark stores FFmpeg diagnostics in a temporary file while reading progress output.
-This prevents a full stderr pipe from blocking the child process.
-It does not replace a full production run or test API quota limits.
-
-## Development Rules
-
-Use ASCII for new documentation, code, and comments unless existing content requires another character set.
+Use ASCII for documentation, code, and comments unless existing content requires another character set.
 Keep comments rare and explain non-obvious behavior.
-Use atomic output publication for any new final file.
+Use atomic output publication for final files.
 Do not use legacy `google-generativeai`.
 Do not add automatic cache revisions without approval.
 Do not change timing semantics casually.
@@ -517,7 +509,7 @@ Put each complete sentence on its own source line.
 Use Mermaid diagrams for documented flows because GitHub renders them.
 Do not use LaTeX syntax in project documentation.
 
-## Validation Matrix
+## Validation matrix
 
 Run only checks relevant to the changed files.
 
@@ -528,7 +520,7 @@ Run only checks relevant to the changed files.
 | `gemini_subs.py` | `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`. |
 | Core behavior or `tests/` | `uv run pytest`. |
 | CLI arguments in `gemini_subs.py` | `uv run gemini_subs.py --help`. |
-| `scripts/benchmark.py` | No tests required unless explicitly requested. Run `./scripts/benchmark.py --help` when useful. |
+| `scripts/benchmark.py` | Run `./scripts/benchmark.py --help` and `uv run ruff check .` when changed. |
 
 The full test suite is run with:
 
@@ -540,7 +532,7 @@ Shell scripts must be directly executable from the repository root.
 Use `shellcheck` when it is installed.
 If a required tool is unavailable, report that fact instead of hiding it.
 
-## Git Workflow
+## Git workflow
 
 Never create a commit unless the user asks.
 When the user asks for individual commits, make one focused commit per discrete change.
