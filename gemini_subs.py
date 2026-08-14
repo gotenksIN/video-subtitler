@@ -457,10 +457,10 @@ def create_overlap_clip(
     cmd = [
         "ffmpeg",
         "-y",
-        "-i",
-        video_file,
         "-ss",
         format_time(clip_start),
+        "-i",
+        video_file,
         "-t",
         f"{duration:.3f}",
         "-map",

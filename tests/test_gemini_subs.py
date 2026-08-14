@@ -509,6 +509,28 @@ def test_overlap_codec_configuration_rejects_container_mismatch():
         gemini_subs.overlap_codec_args(".webm", "h264")
 
 
+def test_overlap_clip_command_seeks_before_input(tmp_path, monkeypatch):
+    (tmp_path / gemini_subs.MANIFEST_NAME).write_text(
+        json.dumps(make_manifest(codec="h264")), encoding="utf-8"
+    )
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"new clip")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(gemini_subs.subprocess, "run", run)
+    result = gemini_subs.create_overlap_clip(
+        "source.mp4", tmp_path, 0, 1.25, 4.75, ".mp4"
+    )
+
+    assert result == "context_chunk_000.mp4"
+    command = calls[0]
+    assert command.index("-ss") < command.index("-i")
+    assert command[command.index("-ss") + 1] == "00:00:01.250"
+
+
 def test_valid_overlap_clip_cache_is_reused_without_reencoding(tmp_path, monkeypatch):
     clip = tmp_path / "context_chunk_000.mp4"
     clip.write_bytes(b"cached")
