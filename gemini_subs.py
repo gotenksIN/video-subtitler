@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import webvtt
@@ -54,6 +55,28 @@ DEFAULT_CHUNK_MODEL = "gemini-3.7-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_API_WORKERS = 7
 REFINEMENT_THINKING_LEVEL = "medium"
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    """Immutable inputs for one generation run."""
+
+    video_path: Path
+    output_path: Path
+    model: str
+    api_key: str | None = None
+    base_url: str | None = None
+    refine_model: str | None = None
+    chunk_dur: int = 60
+    overlap: float = 5.0
+    workers: int = DEFAULT_API_WORKERS
+    thinking_level: str | None = None
+    refine_text: bool = True
+
+    @property
+    def chunk_thinking_level(self) -> str:
+        """Resolved chunk thinking level used by the manifest and API calls."""
+        return self.thinking_level or default_chunk_thinking_level(self.model)
 
 
 def probe_video_format(path):
@@ -153,18 +176,18 @@ def file_fingerprint(path):
     }
 
 
-def build_manifest(args):
-    ext, mime, video_codec = probe_video_format(args.video_file)
+def build_manifest(config: GenerationConfig):
+    ext, mime, video_codec = probe_video_format(str(config.video_path))
     process_ext, process_mime = ext, mime
 
     manifest = {
-        "video": file_fingerprint(args.video_file),
-        "chunk_dur": args.chunk_dur,
+        "video": file_fingerprint(config.video_path),
+        "chunk_dur": config.chunk_dur,
         "format": "stream-copy-v1",
         "mode": "generate",
-        "model": args.model,
-        "chunk_thinking_level": args.chunk_thinking_level,
-        "overlap": args.overlap,
+        "model": config.model,
+        "chunk_thinking_level": config.chunk_thinking_level,
+        "overlap": config.overlap,
         "chunk_ext": ext,
         "chunk_mime": mime,
         "process_ext": process_ext,
@@ -1124,6 +1147,113 @@ def global_refine_subtitles(
     print(f"Saved refined subtitles to {output_vtt}")
 
 
+def validate_generation_config(config: GenerationConfig) -> None:
+    if config.chunk_dur <= 0:
+        raise ValueError("--chunk-dur must be greater than 0")
+
+    if config.workers <= 0:
+        raise ValueError("--workers must be greater than 0")
+
+    validate_thinking_level_for_model(config.model, config.chunk_thinking_level)
+
+    if config.overlap < 0:
+        raise ValueError("--overlap must be greater than or equal to 0")
+
+    if config.overlap >= config.chunk_dur:
+        raise ValueError("--overlap must be smaller than --chunk-dur")
+
+    if not config.video_path.exists():
+        raise RuntimeError(f"Video file not found: {config.video_path}")
+
+    if config.video_path.resolve() == config.output_path.resolve():
+        raise RuntimeError("--output must not resolve to the source video")
+
+    if not config.api_key:
+        raise RuntimeError(
+            "Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
+        )
+
+
+def run_generation(config: GenerationConfig) -> None:
+    """Run the complete resumable generation lifecycle for one config."""
+    validate_generation_config(config)
+
+    clip_workers = suggested_clip_workers(config.workers)
+    manifest, chunk_dir = build_manifest(config)
+    os.makedirs(chunk_dir, exist_ok=True)
+    lock_file = None
+    staging_vtt = None
+    completed = False
+
+    try:
+        lock_file = acquire_lock(chunk_dir)
+        print(f"Using work directory: {chunk_dir}")
+
+        # 1. Split Video
+        split_video(str(config.video_path), chunk_dir, config.chunk_dur, manifest)
+
+        chunks = list_chunks(chunk_dir)
+        if not chunks:
+            raise RuntimeError("No video chunks were created")
+
+        # 2. Process chunks concurrently. Overlap runs pipeline clip creation into API calls.
+        failed = process_chunks(
+            config.api_key,
+            config.base_url,
+            str(config.video_path),
+            chunk_dir,
+            chunks,
+            config.overlap,
+            manifest["process_ext"],
+            clip_workers,
+            config.workers,
+            config.model,
+            manifest["process_mime"],
+            config.chunk_thinking_level,
+        )
+        if failed:
+            raise RuntimeError(
+                f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
+                f"Keeping {chunk_dir} so you can retry."
+            )
+
+        # 3. Stitch chunks together and optionally refine before publication
+        if config.refine_text:
+            output_path = config.output_path
+            fd, staging_name = tempfile.mkstemp(
+                prefix=f".{output_path.name}.",
+                suffix=".staging.vtt",
+                dir=output_path.parent,
+            )
+            staging_vtt = Path(staging_name)
+            os.close(fd)
+            stitch(chunk_dir, staging_vtt)
+            global_refine_subtitles(
+                staging_vtt,
+                str(output_path),
+                config.api_key,
+                config.base_url,
+                config.refine_model or config.model,
+                REFINEMENT_THINKING_LEVEL,
+            )
+        else:
+            stitch(chunk_dir, str(config.output_path))
+
+        completed = True
+
+    finally:
+        try:
+            if staging_vtt is not None:
+                staging_vtt.unlink(missing_ok=True)
+
+            # 4. Cleanup
+            if completed and os.path.exists(chunk_dir):
+                print(f"Cleaning up temporary directory: {chunk_dir}")
+                clean_completed_work(chunk_dir)
+        finally:
+            release_lock(lock_file)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate VTT subtitles for a video using Gemini API."
@@ -1215,126 +1345,24 @@ def main():
         )
         sys.exit(0)
 
-    # Map back to video_file for standard pipeline processing
-    args.video_file = args.video_file_or_vtt
-    args.chunk_thinking_level = args.thinking_level or default_chunk_thinking_level(
-        args.model
+    config = GenerationConfig(
+        video_path=Path(args.video_file_or_vtt),
+        output_path=Path(args.output),
+        model=args.model,
+        api_key=args.api_key,
+        base_url=args.base_url,
+        refine_model=args.refine_model,
+        chunk_dur=args.chunk_dur,
+        overlap=args.overlap,
+        workers=args.workers,
+        thinking_level=args.thinking_level,
+        refine_text=not args.disable_text_refine,
     )
-
-    if args.chunk_dur <= 0:
-        print("Error: --chunk-dur must be greater than 0")
-        sys.exit(1)
-
-    if args.workers <= 0:
-        print("Error: --workers must be greater than 0")
-        sys.exit(1)
-
     try:
-        validate_thinking_level_for_model(args.model, args.chunk_thinking_level)
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    if args.overlap < 0:
-        print("Error: --overlap must be greater than or equal to 0")
-        sys.exit(1)
-
-    if args.overlap >= args.chunk_dur:
-        print("Error: --overlap must be smaller than --chunk-dur")
-        sys.exit(1)
-
-    clip_workers = suggested_clip_workers(args.workers)
-
-    if not os.path.exists(args.video_file):
-        print(f"Error: Video file not found: {args.video_file}")
-        sys.exit(1)
-
-    if Path(args.video_file).resolve() == Path(args.output).resolve():
-        print("Error: --output must not resolve to the source video")
-        sys.exit(1)
-
-    if not args.api_key:
-        print(
-            "Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
-        )
-        sys.exit(1)
-
-    manifest, chunk_dir = build_manifest(args)
-    os.makedirs(chunk_dir, exist_ok=True)
-    lock_file = None
-    staging_vtt = None
-    completed = False
-
-    try:
-        lock_file = acquire_lock(chunk_dir)
-        print(f"Using work directory: {chunk_dir}")
-
-        # 1. Split Video
-        split_video(args.video_file, chunk_dir, args.chunk_dur, manifest)
-
-        chunks = list_chunks(chunk_dir)
-        if not chunks:
-            raise RuntimeError("No video chunks were created")
-
-        # 2. Process chunks concurrently. Overlap runs pipeline clip creation into API calls.
-        failed = process_chunks(
-            args.api_key,
-            args.base_url,
-            args.video_file,
-            chunk_dir,
-            chunks,
-            args.overlap,
-            manifest["process_ext"],
-            clip_workers,
-            args.workers,
-            args.model,
-            manifest["process_mime"],
-            args.chunk_thinking_level,
-        )
-        if failed:
-            raise RuntimeError(
-                f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
-                f"Keeping {chunk_dir} so you can retry."
-            )
-
-        # 3. Stitch chunks together and optionally refine before publication
-        if args.disable_text_refine:
-            stitch(chunk_dir, args.output)
-        else:
-            output_path = Path(args.output)
-            fd, staging_name = tempfile.mkstemp(
-                prefix=f".{output_path.name}.",
-                suffix=".staging.vtt",
-                dir=output_path.parent,
-            )
-            staging_vtt = Path(staging_name)
-            os.close(fd)
-            stitch(chunk_dir, staging_vtt)
-            global_refine_subtitles(
-                staging_vtt,
-                args.output,
-                args.api_key,
-                args.base_url,
-                args.refine_model or args.model,
-                REFINEMENT_THINKING_LEVEL,
-            )
-
-        completed = True
-
+        run_generation(config)
     except Exception as e:  # noqa: BLE001 - Convert pipeline failures to CLI errors.
         print(f"Error: {e}")
         sys.exit(1)
-    finally:
-        try:
-            if staging_vtt is not None:
-                staging_vtt.unlink(missing_ok=True)
-
-            # 4. Cleanup
-            if completed and os.path.exists(chunk_dir):
-                print(f"Cleaning up temporary directory: {chunk_dir}")
-                clean_completed_work(chunk_dir)
-        finally:
-            release_lock(lock_file)
 
 
 if __name__ == "__main__":

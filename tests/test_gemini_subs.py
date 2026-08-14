@@ -1,4 +1,3 @@
-import argparse
 import hashlib
 import json
 import os
@@ -328,11 +327,12 @@ def test_manifest_contains_documented_identity_and_uses_sorted_hash(
 ):
     video = tmp_path / "source.mp4"
     video.write_bytes(b"video")
-    args = argparse.Namespace(
-        video_file=str(video),
-        chunk_dur=60,
+    config = gemini_subs.GenerationConfig(
+        video_path=video,
+        output_path=tmp_path / "out.vtt",
         model="chunk-model",
-        chunk_thinking_level="high",
+        thinking_level="high",
+        chunk_dur=60,
         overlap=5.0,
     )
     monkeypatch.setattr(
@@ -342,7 +342,7 @@ def test_manifest_contains_documented_identity_and_uses_sorted_hash(
     )
     monkeypatch.setattr(gemini_subs, "CHUNK_ROOT", str(tmp_path / "work"))
 
-    manifest, work_dir = gemini_subs.build_manifest(args)
+    manifest, work_dir = gemini_subs.build_manifest(config)
     expected_fields = {
         "video",
         "chunk_dur",
@@ -375,22 +375,25 @@ def test_manifest_contains_documented_identity_and_uses_sorted_hash(
 def test_manifest_identity_changes_with_runtime_input(tmp_path, monkeypatch):
     video = tmp_path / "source.webm"
     video.write_bytes(b"video")
-    args = argparse.Namespace(
-        video_file=str(video),
-        chunk_dur=60,
-        model="model-a",
-        chunk_thinking_level="high",
-        overlap=0,
-    )
+
+    def make_config(model):
+        return gemini_subs.GenerationConfig(
+            video_path=video,
+            output_path=tmp_path / "out.vtt",
+            model=model,
+            thinking_level="high",
+            chunk_dur=60,
+            overlap=0,
+        )
+
     monkeypatch.setattr(
         gemini_subs,
         "probe_video_format",
         lambda _path: (".webm", "video/webm", "vp9"),
     )
 
-    _, first = gemini_subs.build_manifest(args)
-    args.model = "model-b"
-    _, second = gemini_subs.build_manifest(args)
+    _, first = gemini_subs.build_manifest(make_config("model-a"))
+    _, second = gemini_subs.build_manifest(make_config("model-b"))
 
     assert first != second
 
@@ -1149,14 +1152,16 @@ def test_refine_only_refines_in_place_without_running_video_pipeline(
     assert source.read_text(encoding="utf-8") == "refined\n"
 
 
-def prepare_generation_main(tmp_path, monkeypatch, process_result=None):
+def prepare_generation_config(
+    tmp_path, monkeypatch, process_result=None, refine_text=True, output_path=None
+):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
     work = tmp_path / "work"
     work.mkdir()
     chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 1}]
     monkeypatch.setattr(
-        gemini_subs, "build_manifest", lambda _args: (make_manifest(), str(work))
+        gemini_subs, "build_manifest", lambda _config: (make_manifest(), str(work))
     )
     monkeypatch.setattr(gemini_subs, "split_video", MagicMock())
     monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
@@ -1165,16 +1170,25 @@ def prepare_generation_main(tmp_path, monkeypatch, process_result=None):
         "process_chunks",
         MagicMock(return_value=[] if process_result is None else process_result),
     )
-    return source, work
+    return gemini_subs.GenerationConfig(
+        video_path=source,
+        output_path=output_path or tmp_path / "output_subtitles.vtt",
+        model="model",
+        api_key="key",
+        chunk_dur=60,
+        overlap=5.0,
+        workers=7,
+        thinking_level="high",
+        refine_text=refine_text,
+    ), work
 
 
 def test_successful_generation_without_refinement_cleans_work_before_unlock(
     tmp_path, monkeypatch
 ):
-    source, work = prepare_generation_main(tmp_path, monkeypatch)
+    config, work = prepare_generation_config(tmp_path, monkeypatch, refine_text=False)
     artifact = work / "manifest.json"
     artifact.write_text("state", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
     real_release = gemini_subs.release_lock
 
     def release_after_cleanup(lock_file):
@@ -1187,13 +1201,8 @@ def test_successful_generation_without_refinement_cleans_work_before_unlock(
 
     monkeypatch.setattr(gemini_subs, "release_lock", release_after_cleanup)
     monkeypatch.setattr(gemini_subs, "stitch", stitch)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["gemini_subs.py", str(source), "--api-key", "key", "--disable-text-refine"],
-    )
 
-    gemini_subs.main()
+    gemini_subs.run_generation(config)
 
     assert (tmp_path / "output_subtitles.vtt").read_text(encoding="utf-8") == (
         "stitched\n"
@@ -1206,17 +1215,14 @@ def test_successful_generation_without_refinement_cleans_work_before_unlock(
 def test_failed_chunk_processing_keeps_resume_state_and_releases_lock(
     tmp_path, monkeypatch
 ):
-    source, work = prepare_generation_main(
+    config, work = prepare_generation_config(
         tmp_path, monkeypatch, process_result=["chunk_000.mp4"]
     )
     artifact = work / "subtitle_chunk_000.json"
     artifact.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(
-        sys, "argv", ["gemini_subs.py", str(source), "--api-key", "key"]
-    )
 
-    with pytest.raises(SystemExit, match="1"):
-        gemini_subs.main()
+    with pytest.raises(RuntimeError, match="Failed to process 1 chunk"):
+        gemini_subs.run_generation(config)
 
     assert artifact.exists()
     lock = gemini_subs.acquire_lock(work)
@@ -1226,11 +1232,11 @@ def test_failed_chunk_processing_keeps_resume_state_and_releases_lock(
 def test_refinement_failure_preserves_output_removes_staging_and_resume_state(
     tmp_path, monkeypatch
 ):
-    source, work = prepare_generation_main(tmp_path, monkeypatch)
-    state = work / "manifest.json"
-    state.write_text("state", encoding="utf-8")
     output = tmp_path / "output.vtt"
     output.write_text("previous", encoding="utf-8")
+    config, work = prepare_generation_config(tmp_path, monkeypatch, output_path=output)
+    state = work / "manifest.json"
+    state.write_text("state", encoding="utf-8")
     received = {}
 
     def stitch(_directory, path):
@@ -1243,14 +1249,9 @@ def test_refinement_failure_preserves_output_removes_staging_and_resume_state(
 
     monkeypatch.setattr(gemini_subs, "stitch", stitch)
     monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["gemini_subs.py", str(source), "--api-key", "key", "--output", str(output)],
-    )
 
-    with pytest.raises(SystemExit, match="1"):
-        gemini_subs.main()
+    with pytest.raises(RuntimeError, match="refinement failed"):
+        gemini_subs.run_generation(config)
 
     assert received["content"] == "stitched"
     assert received["path"].name.endswith(".staging.vtt")

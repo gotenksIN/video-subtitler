@@ -16,19 +16,10 @@ sys.path.insert(0, str(REPO_ROOT))
 from gemini_subs import (
     DEFAULT_API_WORKERS,
     DEFAULT_CHUNK_MODEL,
-    acquire_lock,
-    build_manifest,
-    clean_completed_work,
-    default_chunk_thinking_level,
+    GenerationConfig,
     global_refine_subtitles,
-    list_chunks,
     parse_time,
-    process_chunks,
-    release_lock,
-    split_video,
-    stitch,
-    suggested_clip_workers,
-    validate_thinking_level_for_model,
+    run_generation,
 )
 
 
@@ -159,61 +150,25 @@ def safe_model_name(model):
 
 
 def run_full_generation(args, model, output):
-    pipeline_args = argparse.Namespace(
-        video_file=str(args.video_file),
+    config = GenerationConfig(
+        video_path=args.video_file,
+        output_path=Path(output),
         model=model,
+        api_key=args.api_key,
+        base_url=args.base_url,
         chunk_dur=args.chunk_dur,
         overlap=args.overlap,
-        chunk_thinking_level=args.thinking_level or default_chunk_thinking_level(model),
+        workers=args.workers,
+        thinking_level=args.thinking_level,
+        refine_text=False,
     )
-    manifest, chunk_dir = build_manifest(pipeline_args)
-    os.makedirs(chunk_dir, exist_ok=True)
-    lock_file = acquire_lock(chunk_dir)
     started = time.perf_counter()
-    try:
-        split_video(str(args.video_file), chunk_dir, args.chunk_dur, manifest)
-        chunks = list_chunks(chunk_dir)
-        if not chunks:
-            raise RuntimeError("No video chunks were created")
-        failed = process_chunks(
-            args.api_key,
-            args.base_url,
-            str(args.video_file),
-            chunk_dir,
-            chunks,
-            args.overlap,
-            manifest["process_ext"],
-            suggested_clip_workers(args.workers),
-            args.workers,
-            model,
-            manifest["process_mime"],
-            pipeline_args.chunk_thinking_level,
-        )
-        if failed:
-            raise RuntimeError(f"Failed chunks: {', '.join(sorted(failed))}")
-        stitch(chunk_dir, output)
-        clean_completed_work(chunk_dir)
-    finally:
-        release_lock(lock_file)
+    run_generation(config)
     return time.perf_counter() - started
 
 
 def run_full_matrix(args):
     args.video_file = Path(args.video_file)
-    if not args.api_key:
-        print("Error: Gemini API key not configured.", file=sys.stderr)
-        sys.exit(1)
-    if args.workers <= 0 or args.chunk_dur <= 0 or args.overlap < 0:
-        print("Error: invalid chunk or worker settings", file=sys.stderr)
-        sys.exit(2)
-    if args.overlap >= args.chunk_dur:
-        print("Error: --overlap must be smaller than --chunk-dur", file=sys.stderr)
-        sys.exit(2)
-    if not args.video_file.exists():
-        print(f"Error: video file not found: {args.video_file}", file=sys.stderr)
-        sys.exit(1)
-
-    default_model = os.environ.get("GEMINI_MODEL", DEFAULT_CHUNK_MODEL)
     if args.case:
         cases = []
         for value in args.case:
@@ -223,6 +178,7 @@ def run_full_matrix(args):
                 sys.exit(2)
             cases.append((generation, refinement))
     else:
+        default_model = os.environ.get("GEMINI_MODEL", DEFAULT_CHUNK_MODEL)
         cases = [(model, None) for model in (args.model or [default_model])]
 
     output_dir = args.output_dir or Path("benchmark_results")
@@ -230,10 +186,6 @@ def run_full_matrix(args):
     generated = {}
     results = []
     for generation_model in dict.fromkeys(model for model, _ in cases):
-        validate_thinking_level_for_model(
-            generation_model,
-            args.thinking_level or default_chunk_thinking_level(generation_model),
-        )
         generated[generation_model] = output_dir / (
             f"{safe_model_name(generation_model)}.generated.vtt"
         )
@@ -304,4 +256,8 @@ def run_refinement(
 
 
 if __name__ == "__main__":
-    run_full_matrix(parse_args())
+    try:
+        run_full_matrix(parse_args())
+    except Exception as e:  # noqa: BLE001 - Convert pipeline failures to CLI errors.
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
