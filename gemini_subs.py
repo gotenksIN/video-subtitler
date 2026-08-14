@@ -55,10 +55,6 @@ DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 REFINEMENT_THINKING_LEVEL = "medium"
 
 
-def clamp(value, minimum, maximum):
-    return max(minimum, min(value, maximum))
-
-
 def probe_video_format(path):
     cmd = [
         "ffprobe",
@@ -158,10 +154,7 @@ def file_fingerprint(path):
 
 def build_manifest(args):
     ext, mime, video_codec = probe_video_format(args.video_file)
-    if args.overlap:
-        process_ext, process_mime = ext, mime
-    else:
-        process_ext, process_mime = ext, mime
+    process_ext, process_mime = ext, mime
 
     manifest = {
         "video": file_fingerprint(args.video_file),
