@@ -306,6 +306,7 @@ For editorial text, use the exact visible interval.
 `validate_captions()` rejects duplicate IDs and non-positive intervals.
 It clamps an end time that is at most 0.5 seconds beyond the clip duration.
 It rejects the cue if clamping would make the interval invalid.
+It rejects any cue whose interval is not positive after millisecond rounding.
 It sorts by start time and ID.
 It shortens or nudges overlapping cues to maintain valid output.
 

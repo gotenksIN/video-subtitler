@@ -629,19 +629,32 @@ def validate_captions(captions, chunk_duration):
                 f"Invalid caption timing for id={cap.id}: {cap.start} --> {cap.end}"
             )
 
-        max_end = chunk_duration + 0.5
-        end = min(end, max_end)
-        if end <= start:
+        if end > chunk_duration:
+            if end - chunk_duration > 0.5:
+                raise ValueError(
+                    f"Caption timing exceeds chunk duration for id={cap.id}: "
+                    f"{cap.start} --> {cap.end}"
+                )
+            end = chunk_duration
+            if end <= start:
+                raise ValueError(
+                    f"Caption timing exceeds chunk duration for id={cap.id}: "
+                    f"{cap.start} --> {cap.end}"
+                )
+
+        canonical_start = format_time(start)
+        canonical_end = format_time(end)
+        if parse_time(canonical_end) <= parse_time(canonical_start):
             raise ValueError(
-                f"Caption timing exceeds chunk duration for id={cap.id}: "
+                f"Caption timing rounds to a non-positive interval for id={cap.id}: "
                 f"{cap.start} --> {cap.end}"
             )
 
         validated.append(
             {
                 "id": cap.id,
-                "start": format_time(start),
-                "end": format_time(end),
+                "start": canonical_start,
+                "end": canonical_end,
                 "text": cap.text,
             }
         )

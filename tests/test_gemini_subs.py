@@ -221,19 +221,23 @@ def test_caption_validation_nudges_cues_with_the_same_start():
     [
         [make_caption(0, "0", "1"), make_caption(0, "2", "3")],
         [make_caption(0, "1", "1")],
-        [make_caption(0, "10.6", "11")],
+        [make_caption(0, "9", "10.6")],
+        [make_caption(0, "10.2", "10.4")],
+        [make_caption(0, "9.9996", "10.4")],
     ],
-    ids=["duplicate IDs", "non-positive interval", "clamp makes interval invalid"],
+    ids=[
+        "duplicate IDs",
+        "non-positive interval",
+        "overrun beyond tolerance",
+        "clamp makes interval invalid",
+        "rounding collapses interval",
+    ],
 )
 def test_caption_validation_rejects_invalid_responses(captions):
     with pytest.raises(ValueError):
         gemini_subs.validate_captions(captions, 10)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="validate_captions does not clamp a small end overrun to clip duration",
-)
 def test_caption_validation_clamps_allowed_end_overrun_to_clip_duration():
     result = gemini_subs.validate_captions([make_caption(0, "9", "10.4")], 10)
     assert result[0]["end"] == "00:00:10.000"
