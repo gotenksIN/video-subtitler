@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from gemini_subs import (
+    DEFAULT_API_WORKERS,
     DEFAULT_CHUNK_MODEL,
     acquire_lock,
     build_manifest,
@@ -69,7 +70,7 @@ def parse_args():
     )
     parser.add_argument("--chunk-dur", type=int, default=60)
     parser.add_argument("--overlap", type=float, default=5.0)
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=DEFAULT_API_WORKERS)
     parser.add_argument(
         "--thinking-level",
         choices=("minimal", "low", "medium", "high"),

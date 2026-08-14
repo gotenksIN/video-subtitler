@@ -52,6 +52,7 @@ INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 DEFAULT_CHUNK_MODEL = "gemini-3.7-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_API_WORKERS = 7
 REFINEMENT_THINKING_LEVEL = "medium"
 
 
@@ -1178,7 +1179,10 @@ def main():
         help="Seconds of context to add before and after each chunk (default: 5)",
     )
     parser.add_argument(
-        "--workers", type=int, default=4, help="Max concurrent API workers"
+        "--workers",
+        type=int,
+        default=DEFAULT_API_WORKERS,
+        help="Max concurrent API workers",
     )
     parser.add_argument(
         "--thinking-level",

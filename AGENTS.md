@@ -45,7 +45,7 @@ The lock covers splitting, clip creation, API calls, output publication, and suc
 | --- | --- |
 | `gemini_subs.py` | Main CLI, media pipeline, Gemini calls, validation, stitching, and refinement. |
 | `tests/test_gemini_subs.py` | Unit and integration-style tests for the main module. |
-| `scripts/subtitle.sh` | Local wrapper with eight API workers. |
+| `scripts/subtitle.sh` | Local wrapper that uses the default API worker count. |
 | `scripts/yt-dl.sh` | Single-video YouTube downloader. |
 | `scripts/ffmpeg.sh` | Headless static FFmpeg installer. |
 | `scripts/benchmark.py` | Full-video matrix benchmark across generation and refinement models. |
@@ -116,11 +116,11 @@ The direct CLI defaults are:
 
 - `--chunk-dur 60` seconds.
 - `--overlap 5` seconds.
-- `--workers 4` API workers.
+- `--workers 7` API workers.
 - `--output output_subtitles.vtt`.
 - Text refinement enabled.
 
-The `scripts/subtitle.sh` wrapper overrides the API worker count to `8`.
+The `scripts/subtitle.sh` wrapper uses the CLI default API worker count.
 The number of overlap clip workers is automatic.
 It is the lower of the API worker count and the CPU count.
 FFmpeg divides the available CPUs across active overlap encoders.
@@ -453,7 +453,7 @@ If chunk processing fails, no final stitch is attempted and the work directory r
 This script requires exactly one video path.
 It writes `<video path>.vtt`.
 It invokes the repository CLI through `uv run --project`.
-It sets `--workers 8`.
+It uses the CLI default API worker count.
 
 ```bash
 ./scripts/subtitle.sh "input.webm"

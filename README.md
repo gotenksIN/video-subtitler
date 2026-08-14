@@ -58,7 +58,7 @@ Download a YouTube video as VP9 video with audio, falling back to WebM when VP9 
 ./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
 ```
 
-Generate subtitles for a local video using eight API workers:
+Generate subtitles for a local video:
 ```bash
 ./scripts/subtitle.sh "your_video.webm"
 ```
@@ -109,7 +109,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--overlap`: Seconds of context to add before and after each chunk (default: `5.0`).
   This creates temporary re-encoded overlap clips for accurate boundary timing.
   The input codec determines the clip container and video encoder.
-- `--workers`: Maximum concurrent API workers (default: `4`).
+- `--workers`: Maximum concurrent API workers (default: `7`).
 - `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
   Supported levels are `minimal`, `low`, `medium`, and `high`.
   `minimal` requires a Flash model.

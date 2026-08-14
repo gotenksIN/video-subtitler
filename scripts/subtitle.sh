@@ -17,5 +17,4 @@ VIDEO="$1"
 OUTPUT="${VIDEO}.vtt"
 
 uv run --project "$REPO_ROOT" "${REPO_ROOT}/gemini_subs.py" "$VIDEO" \
-    --workers 8 \
     --output "$OUTPUT"
