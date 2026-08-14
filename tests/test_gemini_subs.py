@@ -581,18 +581,23 @@ def test_generation_config_meets_documented_request_contract(monkeypatch):
     def make_thinking_config(**kwargs):
         return kwargs
 
+    def make_afc_config(**kwargs):
+        return SimpleNamespace(**kwargs)
+
     monkeypatch.setattr(
         gemini_subs,
         "types",
         SimpleNamespace(
             GenerateContentConfig=make_config,
             ThinkingConfig=make_thinking_config,
+            AutomaticFunctionCallingConfig=make_afc_config,
         ),
     )
 
     gemini_subs.generate_content_config("high")
 
     assert contract["response_mime_type"] == "application/json"
+    assert contract["automatic_function_calling"].disable is True
     schema = contract["response_schema"]
     parsed = schema.model_validate(
         {"captions": [{"id": 0, "start": "0", "end": "1", "text": "Hi"}]}

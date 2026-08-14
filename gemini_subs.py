@@ -723,6 +723,9 @@ def generate_content_config(thinking_level):
         "temperature": 0.0,
         "response_mime_type": "application/json",
         "response_schema": SubtitleResponse,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+            disable=True
+        ),
     }
     if thinking_level is not None:
         kwargs["thinking_config"] = types.ThinkingConfig(
@@ -1051,6 +1054,9 @@ def global_refine_subtitles(
             "temperature": 0.0,
             "response_mime_type": "application/json",
             "response_schema": RefinementResponse,
+            "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+                disable=True
+            ),
         }
         if thinking_level is not None:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
