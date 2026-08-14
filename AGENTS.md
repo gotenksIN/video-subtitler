@@ -1,5 +1,19 @@
 # Project specification
 
+## Agent skills
+
+### Issue tracker
+
+Track issues in GitHub Issues for `gotenksIN/video-subtitler`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use the single-context domain layout. See `docs/agents/domain.md`.
+
 This file is the source of truth for agents that work on this repository.
 It describes the project from first principles.
 Read it before changing code, tests, scripts, or operational documentation.
