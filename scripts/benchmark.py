@@ -182,7 +182,7 @@ def run_full_generation(args, model, output):
             chunks,
             args.overlap,
             manifest["process_ext"],
-            suggested_clip_workers(),
+            suggested_clip_workers(args.workers),
             args.workers,
             model,
             manifest["process_mime"],

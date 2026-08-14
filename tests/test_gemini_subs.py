@@ -504,6 +504,16 @@ def test_overlap_codec_configuration_matches_primary_codec(ext, codec, encoder, 
     assert arguments[arguments.index("-crf") + 1] == "32"
 
 
+@pytest.mark.parametrize(
+    ("ext", "codec", "expected"),
+    [(".webm", "vp9", "3"), (".mp4", "h264", "3"), (".mp4", "hevc", "8")],
+)
+def test_overlap_codec_threads_keep_hevc_fixed(ext, codec, expected):
+    arguments = gemini_subs.overlap_codec_args(ext, codec, threads=3)
+
+    assert arguments[arguments.index("-threads") + 1] == expected
+
+
 def test_overlap_codec_configuration_rejects_container_mismatch():
     with pytest.raises(ValueError, match="H.264 input requires MP4"):
         gemini_subs.overlap_codec_args(".webm", "h264")
@@ -529,6 +539,30 @@ def test_overlap_clip_command_seeks_before_input(tmp_path, monkeypatch):
     command = calls[0]
     assert command.index("-ss") < command.index("-i")
     assert command[command.index("-ss") + 1] == "00:00:01.250"
+
+
+@pytest.mark.parametrize(
+    ("workers", "cpu_count", "expected"),
+    [(1, 24, 0), (3, 24, 8), (8, 24, 3)],
+)
+def test_ffmpeg_threads_scale_with_clip_workers(
+    monkeypatch, workers, cpu_count, expected
+):
+    monkeypatch.setattr(gemini_subs.os, "process_cpu_count", lambda: cpu_count)
+
+    assert gemini_subs.ffmpeg_threads_for_workers(workers) == expected
+
+
+@pytest.mark.parametrize(
+    ("api_workers", "cpu_count", "expected"),
+    [(4, 24, 4), (16, 24, 16), (32, 24, 24)],
+)
+def test_suggested_clip_workers_follows_api_workers(
+    monkeypatch, api_workers, cpu_count, expected
+):
+    monkeypatch.setattr(gemini_subs.os, "process_cpu_count", lambda: cpu_count)
+
+    assert gemini_subs.suggested_clip_workers(api_workers) == expected
 
 
 def test_valid_overlap_clip_cache_is_reused_without_reencoding(tmp_path, monkeypatch):
@@ -776,7 +810,7 @@ def test_process_chunks_overlap_keeps_processing_clips_after_a_clip_failure(
         {"idx": 1, "name": "chunk_001.mp4", "start": 2, "end": 4},
     ]
 
-    def attach(_video, _directory, chunk, _overlap, _ext):
+    def attach(_video, _directory, chunk, _overlap, _ext, *_args):
         if chunk["idx"] == 1:
             raise RuntimeError("encode failed")
         return {**chunk, "clip_name": "context_chunk_000.mp4"}

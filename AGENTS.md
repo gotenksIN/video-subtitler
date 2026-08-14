@@ -122,7 +122,8 @@ The direct CLI defaults are:
 
 The `scripts/subtitle.sh` wrapper overrides the API worker count to `8`.
 The number of overlap clip workers is automatic.
-It is `max(1, CPU count // 8)`.
+It is the lower of the API worker count and the CPU count.
+FFmpeg divides the available CPUs across active overlap encoders.
 
 ## CLI modes
 

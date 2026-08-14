@@ -329,12 +329,22 @@ def get_processing_windows(chunks, overlap_sec):
     return windows
 
 
-def suggested_clip_workers():
-    cpu_count = os.cpu_count() or 1
-    return max(1, cpu_count // 8 or 1)
+def available_cpu_count():
+    return os.process_cpu_count() or 1
 
 
-def overlap_codec_args(ext, codec):
+def suggested_clip_workers(api_workers):
+    return min(api_workers, available_cpu_count())
+
+
+def ffmpeg_threads_for_workers(clip_workers):
+    if clip_workers <= 1:
+        return 0
+    return max(1, available_cpu_count() // clip_workers)
+
+
+def overlap_codec_args(ext, codec, threads=None):
+    threads = available_cpu_count() if threads is None else threads
     if codec == "vp9":
         if ext != ".webm":
             raise ValueError("VP9 input requires WebM overlap clips")
@@ -350,7 +360,7 @@ def overlap_codec_args(ext, codec):
             "-cpu-used",
             "4",
             "-threads",
-            "8",
+            str(threads),
             "-tile-columns",
             "2",
             "-row-mt",
@@ -376,7 +386,7 @@ def overlap_codec_args(ext, codec):
             "-b:v",
             "0",
             "-threads",
-            "8",
+            str(threads),
             "-c:a",
             "aac",
             "-b:a",
@@ -409,7 +419,13 @@ def overlap_codec_args(ext, codec):
 
 
 def create_overlap_clip(
-    video_file, chunk_dir, chunk_idx, clip_start, clip_end, clip_ext
+    video_file,
+    chunk_dir,
+    chunk_idx,
+    clip_start,
+    clip_end,
+    clip_ext,
+    ffmpeg_threads=None,
 ):
     clip_name = f"context_chunk_{chunk_idx:03d}{clip_ext}"
     clip_path = os.path.join(chunk_dir, clip_name)
@@ -468,7 +484,7 @@ def create_overlap_clip(
         "-map",
         "0:a?",
         "-sn",
-        *overlap_codec_args(clip_ext, video_codec),
+        *overlap_codec_args(clip_ext, video_codec, ffmpeg_threads),
         "-f",
         "webm" if clip_ext == ".webm" else "mp4",
         tmp_path,
@@ -485,7 +501,9 @@ def create_overlap_clip(
     return clip_name
 
 
-def attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext):
+def attach_overlap_clip(
+    video_file, chunk_dir, chunk, overlap_sec, clip_ext, ffmpeg_threads=None
+):
     if overlap_sec > 0:
         clip_name = create_overlap_clip(
             video_file,
@@ -494,6 +512,7 @@ def attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext):
             chunk["clip_start"],
             chunk["clip_end"],
             clip_ext,
+            ffmpeg_threads,
         )
     else:
         clip_name = chunk["name"]
@@ -533,8 +552,11 @@ def process_chunks(
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
+        ffmpeg_threads = ffmpeg_threads_for_workers(1)
         processing_chunks = [
-            attach_overlap_clip(video_file, chunk_dir, chunk, overlap_sec, clip_ext)
+            attach_overlap_clip(
+                video_file, chunk_dir, chunk, overlap_sec, clip_ext, ffmpeg_threads
+            )
             for chunk in windows
         ]
         print(
@@ -556,9 +578,12 @@ def process_chunks(
             }
             return collect_api_results(futures)
 
+    clip_workers = min(clip_workers, len(windows))
+    ffmpeg_threads = ffmpeg_threads_for_workers(clip_workers)
     print(
         f"Creating {len(windows)} overlap clips using {clip_workers} workers "
-        f"and processing them using {api_workers} API workers..."
+        f"({ffmpeg_threads or 'auto'} FFmpeg threads each) and processing them "
+        f"using {api_workers} API workers..."
     )
     failed = []
     api_futures = {}
@@ -570,7 +595,13 @@ def process_chunks(
     ):
         clip_futures = {
             clip_executor.submit(
-                attach_overlap_clip, video_file, chunk_dir, chunk, overlap_sec, clip_ext
+                attach_overlap_clip,
+                video_file,
+                chunk_dir,
+                chunk,
+                overlap_sec,
+                clip_ext,
+                ffmpeg_threads,
             ): chunk
             for chunk in windows
         }
@@ -1208,7 +1239,7 @@ def main():
         print("Error: --overlap must be smaller than --chunk-dur")
         sys.exit(1)
 
-    clip_workers = suggested_clip_workers()
+    clip_workers = suggested_clip_workers(args.workers)
 
     if not os.path.exists(args.video_file):
         print(f"Error: Video file not found: {args.video_file}")
