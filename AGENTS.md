@@ -104,7 +104,7 @@ CLI arguments take precedence over environment variables.
 | --- | --- | --- | --- |
 | `GEMINI_API_KEY` | `--api-key` | None | Required Gemini credential. |
 | `GEMINI_API_BASE` | `--base-url` | SDK default | Optional Gemini-compatible proxy URL. |
-| `GEMINI_MODEL` | `--model` | `gemini-3.6-flash` | Chunk video model. |
+| `GEMINI_MODEL` | `--model` | `gemini-3.7-flash` | Chunk video model. |
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-3.1-pro-preview` | Full-script refinement model. |
 
 The chunk thinking level accepts `minimal`, `low`, `medium`, and `high`.

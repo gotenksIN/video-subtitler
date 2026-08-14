@@ -38,7 +38,7 @@ It processes the clips concurrently, stitches validated JSON results into a fina
 
    # Optional: Set a custom base URL or change the default hybrid models
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3.6-flash
+    GEMINI_MODEL=gemini-3.7-flash
    GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
    ```
 
@@ -79,7 +79,7 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 ```
 
 ### Two-Stage Processing & Text Refinement
-By default, the pipeline uses `gemini-3.6-flash` for chunk video generation and `gemini-3.1-pro-preview` for global text refinement.
+By default, the pipeline uses `gemini-3.7-flash` for chunk video generation and `gemini-3.1-pro-preview` for global text refinement.
 Chunk processing limits context to 60 seconds.
 A final global pass gives the model the complete subtitle script.
 It corrects inconsistent character names, excessive localization, and continuity errors without changing the generated timestamps.
@@ -110,7 +110,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL` for chunk video generation.
-  Default: `gemini-3.6-flash`.
+  Default: `gemini-3.7-flash`.
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement.
   Default: `gemini-3.1-pro-preview`.
 
