@@ -168,7 +168,7 @@ Use `--disable-text-refine` to publish the stitched VTT directly.
 uv run python gemini_subs.py input.webm --disable-text-refine
 ```
 
-This mode still validates chunk responses and heals timestamp overlaps.
+This mode still validates chunk responses.
 It does not make the full-script Gemini request.
 
 ### Refinement only
@@ -337,7 +337,8 @@ It clamps an end time that is at most 0.5 seconds beyond the clip duration.
 It rejects the cue if clamping would make the interval invalid.
 It rejects any cue whose interval is not positive after millisecond rounding.
 It sorts by start time and ID.
-It shortens or nudges overlapping cues to maintain valid output.
+Valid overlapping cues keep their canonical timing.
+WebVTT renders overlapping cues concurrently.
 
 ## Stitching
 
@@ -350,7 +351,8 @@ Keep a caption when its midpoint is at least `owner_start_rel` and less than `ow
 This removes context duplicates without changing the caption text.
 
 The remaining captions are sorted by absolute start time.
-Cross-chunk overlaps are healed by shortening the previous cue and, when needed, nudging the current cue forward by 1 millisecond.
+Valid cross-chunk overlaps keep their timing.
+WebVTT renders overlapping cues concurrently.
 The resulting captions are written as WebVTT.
 
 Midpoint ownership can lose or duplicate a cue when the model gives inconsistent boundary timing.

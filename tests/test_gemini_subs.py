@@ -392,7 +392,7 @@ def test_timestamp_formatter_rejects_negative_values():
         gemini_subs.format_time(-0.001)
 
 
-def test_caption_validation_sorts_canonicalizes_and_heals_overlap():
+def test_caption_validation_sorts_canonicalizes_and_preserves_overlap():
     result = gemini_subs.validate_captions(
         [
             make_caption(2, "1", "3", "Later"),
@@ -401,23 +401,37 @@ def test_caption_validation_sorts_canonicalizes_and_heals_overlap():
         5,
     )
 
-    assert [item["id"] for item in result] == [1, 2]
     assert result[0] == {
         "id": 1,
         "start": "00:00:00.250",
-        "end": "00:00:01.000",
+        "end": "00:00:02.000",
         "text": "Earlier",
     }
-    assert result[1]["start"] == "00:00:01.000"
+    assert result[1] == {
+        "id": 2,
+        "start": "00:00:01.000",
+        "end": "00:00:03.000",
+        "text": "Later",
+    }
 
 
-def test_caption_validation_nudges_cues_with_the_same_start():
+def test_caption_validation_preserves_cues_with_the_same_start():
     result = gemini_subs.validate_captions(
         [make_caption(0, "1", "2"), make_caption(1, "1", "3")], 5
     )
 
-    assert result[0]["end"] == "00:00:01.001"
-    assert result[1]["start"] == "00:00:01.001"
+    assert result[0] == {
+        "id": 0,
+        "start": "00:00:01.000",
+        "end": "00:00:02.000",
+        "text": "Text",
+    }
+    assert result[1] == {
+        "id": 1,
+        "start": "00:00:01.000",
+        "end": "00:00:03.000",
+        "text": "Text",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1079,7 +1093,7 @@ def test_stitch_rejects_missing_and_unexpected_chunk_results(tmp_path):
         gemini_subs.stitch(tmp_path, tmp_path / "output.vtt")
 
 
-def test_stitch_preserves_repeated_text_and_heals_cross_chunk_overlap(tmp_path):
+def test_stitch_preserves_repeated_text_and_cross_chunk_overlap(tmp_path):
     write_layout(
         tmp_path,
         [("chunk_000.mp4", 0, 5), ("chunk_001.mp4", 5, 10)],
@@ -1092,8 +1106,10 @@ def test_stitch_preserves_repeated_text_and_heals_cross_chunk_overlap(tmp_path):
 
     result = webvtt.read(output)
     assert [caption.text for caption in result] == ["Again", "Again"]
-    assert result[0].end == "00:00:05.000"
+    assert result[0].start == "00:00:01.000"
+    assert result[0].end == "00:00:05.500"
     assert result[1].start == "00:00:05.000"
+    assert result[1].end == "00:00:06.000"
 
 
 def test_refinement_prompt_contains_script_title_and_identity_context():

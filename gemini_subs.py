@@ -735,31 +735,6 @@ def validate_captions(captions, chunk_duration):
         validated, key=lambda item: (parse_time(item["start"]), item["id"])
     )
 
-    # Auto-heal overlaps instead of crashing
-    for i in range(1, len(validated)):
-        prev_cap = validated[i - 1]
-        curr_cap = validated[i]
-
-        prev_end = parse_time(prev_cap["end"])
-        curr_start = parse_time(curr_cap["start"])
-
-        if curr_start < prev_end:
-            # If they overlap, adjust the previous caption's end time to match the current's start time
-            # ensuring it doesn't go below its own start time
-            prev_start = parse_time(prev_cap["start"])
-            new_prev_end = max(prev_start + 0.001, curr_start)
-
-            # If adjusting the previous end makes the current start invalid (curr_start < prev_start),
-            # push the current start forward instead.
-            if new_prev_end > curr_start:
-                curr_start = new_prev_end
-                curr_end = parse_time(curr_cap["end"])
-                curr_end = max(curr_start + 0.001, curr_end)
-                curr_cap["start"] = format_time(curr_start)
-                curr_cap["end"] = format_time(curr_end)
-
-            prev_cap["end"] = format_time(new_prev_end)
-
     return validated
 
 
@@ -1081,16 +1056,6 @@ def stitch(chunk_dir, output_vtt):
             )
 
     captions_to_write.sort(key=lambda item: item["start"])
-    for i in range(1, len(captions_to_write)):
-        previous = captions_to_write[i - 1]
-        current = captions_to_write[i]
-        if current["start"] < previous["end"]:
-            boundary = max(previous["start"] + 0.001, current["start"])
-            previous["end"] = boundary
-            if boundary > current["start"]:
-                current["start"] = boundary
-                current["end"] = max(current["end"], boundary + 0.001)
-
     for cap in captions_to_write:
         final_vtt.captions.append(
             webvtt.Caption(
