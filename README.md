@@ -9,6 +9,7 @@ It processes clips in parallel, stitches validated JSON results into a WebVTT fi
 - **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
 - **Concurrent processing:** Process video chunks in parallel using multiple Gemini API workers.
 - **Structured outputs:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and invalid chunk output.
+- **Grounded refinement:** Run a grounded refinement flow: web identity research with Google Search, optional direct YouTube video analysis, then a structured script polish so speaker identities use verified evidence instead of appearance guesses.
 - **Resumable failures:** Keep temporary work directories on failure so retries reuse valid completed chunks.
   Clean up temporary chunk files on success.
 - **Safe outputs:** Write chunk JSON and final WebVTT files atomically to prevent corrupted output.
@@ -64,6 +65,9 @@ Generate subtitles for a local video:
 ```
 
 The subtitle helper writes output to `your_video.webm.vtt`.
+When standard input is a terminal, it prompts once for an optional context URL for grounded refinement.
+Press Enter with a blank answer to skip it.
+Noninteractive usage never prompts.
 
 Benchmark subtitle generation and refinement models across full video runs:
 ```bash
@@ -88,8 +92,21 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 By default, the pipeline uses `gemini-3.7-flash` for chunk video generation and `gemini-3.1-pro-preview` for global text refinement.
 Chunk processing limits context to 60 seconds per chunk.
-A final global pass provides the complete subtitle script to the refinement model.
-It corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
+The global refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
+
+Refinement has up to three Gemini requests:
+
+1. Grounded web identity research first: a plain-text, streamed request with Google Search grounding.
+   It researches participant names in official English styling, roles, and evidence for speaker-label normalization.
+   Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
+2. Direct YouTube analysis second, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
+   It returns participant identities, official names and roles, and timestamped speaker-identification observations.
+3. Structured refinement last: the streamed JSON request with the `RefinementResponse` schema.
+   It receives the grounded research text and the YouTube analysis text as identity context and does not use tools.
+
+Refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
+The previous output stays intact.
+There is no ungrounded fallback.
 
 To skip the global refinement pass:
 ```bash
@@ -118,6 +135,12 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.7-flash`).
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
+- `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
+  Repeat the option to supply several URLs.
+  Public YouTube watch or share URLs (`youtube.com` and `youtu.be`) become direct video inputs for a separate YouTube analysis pass.
+  Other URLs use the URL Context tool.
+  Refinement fails if any other URL is not retrieved successfully.
+  An invalid, private, or unavailable YouTube video fails the analysis request before publication.
 
 ## Notes
 

@@ -17,6 +17,7 @@ from gemini_subs import (
     DEFAULT_API_WORKERS,
     DEFAULT_CHUNK_MODEL,
     GenerationConfig,
+    derive_source_title,
     global_refine_subtitles,
     parse_time,
     run_generation,
@@ -246,6 +247,7 @@ def run_refinement(
         args.base_url,
         refinement_model,
         "medium",
+        source_title=derive_source_title(args.video_file),
     )
     result["refinement_seconds"] = time.perf_counter() - started
     result["final_vtt"] = str(final_vtt)

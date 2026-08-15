@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import webvtt
+from google.genai import types
 from pydantic import ValidationError
 
 import gemini_subs
@@ -89,10 +90,19 @@ class ImmediateExecutor:
 class FakeGeminiClient:
     """Fake SDK boundary that consumes each request and enforces the documented contract."""
 
-    def __init__(self, model_name, response_pieces, verify_contents):
+    def __init__(
+        self,
+        model_name,
+        response_pieces,
+        verify_contents,
+        verify_config=None,
+        candidate_metadata=None,
+    ):
         self.model_name = model_name
         self.response_pieces = response_pieces
         self.verify_contents = verify_contents
+        self.verify_config = verify_config
+        self.candidate_metadata = candidate_metadata or []
 
     def __enter__(self):
         return self
@@ -115,7 +125,163 @@ class FakeGeminiClient:
         # Consume the response schema like the SDK structured-output boundary does.
         config.response_schema.model_validate_json("".join(self.response_pieces))
         self.verify_contents(kwargs["contents"])
-        return iter(SimpleNamespace(text=piece) for piece in self.response_pieces)
+        if self.verify_config:
+            self.verify_config(config)
+        return iter(
+            SimpleNamespace(
+                text=piece,
+                candidates=(
+                    self.candidate_metadata[index]
+                    if index < len(self.candidate_metadata)
+                    else None
+                ),
+            )
+            for index, piece in enumerate(self.response_pieces)
+        )
+
+
+def search_candidate(queries=(), sources=(), urls=()):
+    """Build one stream candidate carrying grounding and URL retrieval metadata."""
+    grounding = None
+    if queries or sources:
+        grounding = types.GroundingMetadata(
+            web_search_queries=list(queries),
+            grounding_chunks=[
+                types.GroundingChunk(web=types.GroundingChunkWeb(title=title, uri=uri))
+                for title, uri in sources
+            ],
+        )
+    url_context = None
+    if urls:
+        url_context = types.UrlContextMetadata(
+            url_metadata=[
+                types.UrlMetadata(retrieved_url=url, url_retrieval_status=status)
+                for url, status in urls
+            ]
+        )
+    return [
+        types.Candidate(grounding_metadata=grounding, url_context_metadata=url_context)
+    ]
+
+
+def research_call(
+    pieces=("Research text",),
+    queries=(),
+    sources=(),
+    urls=(),
+    verify_contents=None,
+    verify_config=None,
+):
+    """One expected plain-text grounded identity research request."""
+    return {
+        "structured": False,
+        "pieces": list(pieces),
+        "candidates": [search_candidate(queries, sources, urls)],
+        "verify_contents": verify_contents,
+        "verify_config": verify_config,
+    }
+
+
+def youtube_call(pieces=("YouTube analysis",), verify_contents=None, error=None):
+    """One expected plain-text direct YouTube analysis request."""
+    return {
+        "youtube": True,
+        "pieces": list(pieces),
+        "candidates": [],
+        "verify_contents": verify_contents,
+        "error": error,
+    }
+
+
+def refinement_call(pieces, verify_contents=None, verify_config=None):
+    """One expected structured refinement request."""
+    return {
+        "structured": True,
+        "pieces": list(pieces),
+        "candidates": [],
+        "verify_contents": verify_contents,
+        "verify_config": verify_config,
+    }
+
+
+class FakeRefinementClient:
+    """Fake SDK boundary for the three-request refinement flow.
+
+    The first request must be plain text with the Google Search tool and no
+    video Parts. An optional second request analyzes YouTube videos with
+    plain text, video Parts, and no tools. The final request must be
+    structured JSON without any tool.
+    """
+
+    def __init__(self, model_name, calls):
+        self.model_name = model_name
+        self.calls = list(calls)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    @property
+    def models(self):
+        return self
+
+    @property
+    def pending_calls(self):
+        return len(self.calls)
+
+    def generate_content_stream(self, **kwargs):
+        if kwargs["model"] != self.model_name:
+            raise AssertionError(
+                f"request must use model {self.model_name!r}, got {kwargs['model']!r}"
+            )
+        if not self.calls:
+            raise AssertionError(
+                "the refinement pipeline issued an unexpected API request"
+            )
+        call = self.calls.pop(0)
+        if call.get("error"):
+            raise call["error"]
+        config = kwargs["config"]
+        tools = config.tools or []
+        if call.get("structured"):
+            if config.response_mime_type != "application/json":
+                raise AssertionError("structured request must require application/json")
+            if config.response_schema is not gemini_subs.RefinementResponse:
+                raise AssertionError(
+                    "structured request must use the refinement schema"
+                )
+            if tools:
+                raise AssertionError("structured refinement must not enable tools")
+            # Consume the response schema like the SDK structured-output boundary does.
+            config.response_schema.model_validate_json("".join(call["pieces"]))
+        elif call.get("youtube"):
+            if config.response_mime_type is not None:
+                raise AssertionError("YouTube request must use plain text output")
+            if config.response_schema is not None:
+                raise AssertionError("YouTube request must not use a response schema")
+            if tools:
+                raise AssertionError("YouTube request must not enable tools")
+        else:
+            if config.response_mime_type is not None:
+                raise AssertionError("research request must use plain text output")
+            if config.response_schema is not None:
+                raise AssertionError("research request must not use a response schema")
+            if not any(tool.google_search is not None for tool in tools):
+                raise AssertionError("research request must enable Google Search")
+        if call.get("verify_config"):
+            call["verify_config"](config)
+        if call.get("verify_contents"):
+            call["verify_contents"](kwargs["contents"])
+        candidates = call["candidates"]
+        return iter(
+            SimpleNamespace(
+                text=piece,
+                candidates=(candidates[index] if index < len(candidates) else None),
+            )
+            for index, piece in enumerate(call["pieces"])
+        )
 
 
 @pytest.fixture
@@ -657,6 +823,7 @@ def test_generation_config_meets_documented_request_contract(monkeypatch):
 
     assert contract["response_mime_type"] == "application/json"
     assert contract["automatic_function_calling"].disable is True
+    assert "tools" not in contract
     schema = contract["response_schema"]
     parsed = schema.model_validate(
         {"captions": [{"id": 0, "start": "0", "end": "1", "text": "Hi"}]}
@@ -672,11 +839,18 @@ def test_minimal_thinking_is_only_valid_for_flash_models():
         gemini_subs.validate_thinking_level_for_model("gemini-pro", "minimal")
 
 
-def test_generation_prompt_includes_clip_and_owner_timing():
-    prompt = gemini_subs.build_generation_prompt(12.0, 2.0, 10.0)
+def test_generation_prompt_includes_clip_owner_timing_and_source_title():
+    prompt = gemini_subs.build_generation_prompt(12.0, 2.0, 10.0, "Show Title")
 
     assert "12.000-second" in prompt
     assert "00:00:02.000 to 00:00:10.000" in prompt
+    assert "Source title: Show Title" in prompt
+
+
+def test_generation_prompt_omits_source_block_without_title():
+    prompt = gemini_subs.build_generation_prompt(12.0, 2.0, 10.0)
+
+    assert "SOURCE CONTEXT" not in prompt
 
 
 def test_valid_chunk_cache_skips_media_read_and_api(monkeypatch):
@@ -729,12 +903,21 @@ def test_chunk_request_saves_canonical_caption_array(tmp_path, monkeypatch):
             raise AssertionError("video part must contain the clip bytes")
         if not isinstance(prompt, str) or not prompt.strip():
             raise AssertionError("request must include the generation prompt")
+        if "Source title: Show Title" not in prompt:
+            raise AssertionError("generation prompt must include the source title")
 
     client = FakeGeminiClient("model", pieces, verify_contents)
     monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
     assert gemini_subs.process_chunk(
-        "key", "base", chunk, tmp_path, "model", "video/mp4", "high"
+        "key",
+        "base",
+        chunk,
+        tmp_path,
+        "model",
+        "video/mp4",
+        "high",
+        "Show Title",
     )
 
     saved = json.loads(
@@ -913,11 +1096,54 @@ def test_stitch_preserves_repeated_text_and_heals_cross_chunk_overlap(tmp_path):
     assert result[1].start == "00:00:05.000"
 
 
-def test_refinement_prompt_contains_complete_indexed_script():
+def test_refinement_prompt_contains_script_title_and_identity_context():
     script = "[37] 12:34:56.789 --> 12:34:58.012: Unique caption text"
-    prompt = gemini_subs.build_refinement_prompt(script)
+    prompt = gemini_subs.build_refinement_prompt(
+        script, "Show Title", "Jane Doe: Host of the show.", "Video observations"
+    )
 
     assert script in prompt
+    assert "Source title: Show Title" in prompt
+    assert "GROUNDED IDENTITY CONTEXT" in prompt
+    assert "Jane Doe: Host of the show." in prompt
+    assert "DIRECT VIDEO IDENTITY ANALYSIS" in prompt
+    assert "Video observations" in prompt
+
+
+def test_refinement_prompt_omits_optional_source_blocks():
+    prompt = gemini_subs.build_refinement_prompt("script")
+
+    assert "Source title:" not in prompt
+    assert "GROUNDED IDENTITY CONTEXT" not in prompt
+    assert "DIRECT VIDEO IDENTITY ANALYSIS" not in prompt
+
+
+def test_research_prompt_lists_urls_and_defers_youtube_analysis():
+    prompt = gemini_subs.build_identity_research_prompt(
+        "Show Title",
+        ["https://example.com/notes"],
+        ["https://www.youtube.com/watch?v=VIDEO_ID"],
+    )
+
+    assert "Show Title" in prompt
+    assert "- https://example.com/notes" in prompt
+    assert "https://www.youtube.com/watch?v=VIDEO_ID" in prompt
+    assert "separate pass" in prompt
+
+
+def test_research_prompt_omits_optional_sections():
+    prompt = gemini_subs.build_identity_research_prompt()
+
+    assert "SOURCE TITLE" not in prompt
+    assert "CONTEXT URLS" not in prompt
+    assert "YouTube" not in prompt
+
+
+def test_youtube_analysis_prompt_includes_title_and_observations():
+    prompt = gemini_subs.build_youtube_analysis_prompt("Show Title")
+
+    assert "Show Title" in prompt
+    assert "speaker-identification observations" in prompt
 
 
 @pytest.mark.parametrize(
@@ -949,19 +1175,53 @@ def test_global_refinement_changes_only_text_and_preserves_timestamps(
             ("00:00:02.000", "00:00:03.000", "Keep"),
         ],
     )
+    order = []
 
-    def verify_contents(contents):
+    def verify_research_contents(contents):
+        order.append("research")
+        assert isinstance(contents, str), (
+            "research request must be a single text prompt"
+        )
+        if "Show Title" not in contents:
+            raise AssertionError("research prompt must include the source title")
+
+    def verify_refinement_contents(contents):
+        order.append("refine")
+        assert isinstance(contents, str), (
+            "refinement request must be a single text prompt"
+        )
         if "[0] 00:00:00.000 --> 00:00:01.000: Old\nline" not in contents:
             raise AssertionError("refinement prompt must contain the indexed script")
+        if "Source title: Show Title" not in contents:
+            raise AssertionError("refinement prompt must include the source title")
+        if "Research text" not in contents:
+            raise AssertionError("refinement prompt must include the research text")
 
-    client = FakeGeminiClient(
-        "refiner", ['{"changes": [{"id": 0, "text": "New"}]}'], verify_contents
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                pieces=("Research text",),
+                queries=["who is in this video"],
+                sources=[("Site", "https://example.com/site")],
+                verify_contents=verify_research_contents,
+            ),
+            refinement_call(
+                ['{"changes": [{"id": 0, "text": "New"}]}'],
+                verify_contents=verify_refinement_contents,
+            ),
+        ],
     )
     monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
-    gemini_subs.global_refine_subtitles(source, output, "key", None, "refiner", "high")
+    gemini_subs.global_refine_subtitles(
+        source, output, "key", None, "refiner", "high", source_title="Show Title"
+    )
 
+    assert order == ["research", "refine"]
+    assert client.pending_calls == 0
     result = webvtt.read(output)
+    assert len(result) == 2
     assert [caption.text for caption in result] == ["New", "Keep"]
     assert [(caption.start, caption.end) for caption in result] == [
         ("00:00:00.000", "00:00:01.000"),
@@ -980,14 +1240,23 @@ def test_invalid_refinement_does_not_mutate_or_publish(tmp_path, monkeypatch):
             ("00:00:02.000", "00:00:03.000", "Second"),
         ],
     )
-    client = FakeGeminiClient(
+    client = FakeRefinementClient(
         "model",
         [
-            json.dumps(
-                {"changes": [{"id": 0, "text": "Changed"}, {"id": 2, "text": "Bad"}]}
-            )
+            research_call(queries=["who is the host"]),
+            refinement_call(
+                [
+                    json.dumps(
+                        {
+                            "changes": [
+                                {"id": 0, "text": "Changed"},
+                                {"id": 2, "text": "Bad"},
+                            ]
+                        }
+                    )
+                ]
+            ),
         ],
-        lambda _contents: None,
     )
     monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
 
@@ -1004,6 +1273,521 @@ def test_invalid_refinement_does_not_mutate_or_publish(tmp_path, monkeypatch):
     result = webvtt.read(source)
     assert [caption.text for caption in result] == ["First", "Second"]
     assert output.read_text(encoding="utf-8") == "previous"
+
+
+def test_research_enables_url_context_and_lists_urls_when_supplied(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "Only")])
+
+    def verify_contents(contents):
+        if "- https://example.com/notes" not in contents:
+            raise AssertionError("research prompt must list supplied context URLs")
+
+    def verify_config(config):
+        tools = config.tools or []
+        if not any(tool.url_context is not None for tool in tools):
+            raise AssertionError("ordinary context URLs must enable URL Context")
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                queries=["who is the host"],
+                urls=[("https://example.com/notes", "URL_RETRIEVAL_STATUS_SUCCESS")],
+                verify_contents=verify_contents,
+                verify_config=verify_config,
+            ),
+            refinement_call(['{"changes": []}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        source_title="Show Title",
+        context_urls=["https://example.com/notes"],
+    )
+
+    assert webvtt.read(output)[0].text == "Only"
+
+
+def test_refinement_without_search_grounding_fails_without_publication(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "First")])
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(),
+            youtube_call(),
+            refinement_call(['{"changes": [{"id": 0, "text": "Changed"}]}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=["https://www.youtube.com/watch?v=VIDEO_ID"],
+        )
+
+    assert "no Google Search grounding" in capsys.readouterr().out
+    assert client.pending_calls == 2
+    assert output.read_text(encoding="utf-8") == "previous"
+    assert [caption.text for caption in webvtt.read(source)] == ["First"]
+
+
+def test_refinement_fails_when_context_url_retrieval_fails(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "First")])
+    youtube_url = "https://www.youtube.com/watch?v=VIDEO_ID"
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                queries=["who is the host"],
+                urls=[("https://example.com/notes", "URL_RETRIEVAL_STATUS_PAYWALL")],
+            ),
+            youtube_call(),
+            refinement_call(['{"changes": []}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=["https://example.com/notes", youtube_url],
+        )
+
+    assert "retrieval failed with URL_RETRIEVAL_STATUS_PAYWALL" in (
+        capsys.readouterr().out
+    )
+    assert client.pending_calls == 2
+    assert output.read_text(encoding="utf-8") == "previous"
+
+
+def test_refinement_fails_when_context_url_retrieval_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "First")])
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(queries=["who is the host"]),
+            refinement_call(['{"changes": []}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=["https://example.com/notes"],
+        )
+
+    assert "was not retrieved" in capsys.readouterr().out
+    assert client.pending_calls == 1
+    assert output.read_text(encoding="utf-8") == "previous"
+
+
+def test_refinement_accepts_equivalent_retrieved_url_identity(tmp_path, monkeypatch):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "Only")])
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                queries=["who is the host"],
+                urls=[
+                    (
+                        "https://example.com/notes/",
+                        "URL_RETRIEVAL_STATUS_SUCCESS",
+                    )
+                ],
+            ),
+            refinement_call(['{"changes": []}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        context_urls=["https://example.com/notes"],
+    )
+
+    assert webvtt.read(output)[0].text == "Only"
+
+
+def test_youtube_context_url_becomes_separate_direct_video_analysis(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "Only")])
+    youtube_url = "https://www.youtube.com/watch?v=VIDEO_ID&t=30"
+    order = []
+
+    def verify_research_contents(contents):
+        order.append("research")
+        assert isinstance(contents, str), "research request must not attach video Parts"
+        if youtube_url not in contents:
+            raise AssertionError(
+                "research prompt must list the YouTube URL as an identifier"
+            )
+
+    def verify_youtube_contents(contents):
+        order.append("youtube")
+        video_parts = [part for part in contents if not isinstance(part, str)]
+        if [part.file_data.file_uri for part in video_parts] != [youtube_url]:
+            raise AssertionError("video Part must carry the YouTube URL")
+        if not isinstance(contents[-1], str) or not contents[-1].strip():
+            raise AssertionError("YouTube request must end with the text prompt")
+
+    def verify_refinement_contents(contents):
+        order.append("refine")
+        if "YouTube analysis" not in contents:
+            raise AssertionError(
+                "refinement prompt must include the YouTube analysis text"
+            )
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                queries=["who is in the video"],
+                sources=[("Site", "https://example.com/site")],
+                verify_contents=verify_research_contents,
+            ),
+            youtube_call(
+                pieces=("YouTube analysis",),
+                verify_contents=verify_youtube_contents,
+            ),
+            refinement_call(
+                ['{"changes": [{"id": 0, "text": "Refined"}]}'],
+                verify_contents=verify_refinement_contents,
+            ),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        context_urls=[youtube_url],
+    )
+
+    assert order == ["research", "youtube", "refine"]
+    assert client.pending_calls == 0
+    assert webvtt.read(output)[0].text == "Refined"
+    assert youtube_url in capsys.readouterr().out
+
+
+def test_youtube_analysis_sdk_failure_preserves_output(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "First")])
+    youtube_url = "https://www.youtube.com/watch?v=VIDEO_ID"
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(queries=["who is the host"]),
+            youtube_call(error=RuntimeError("video unavailable")),
+            refinement_call(['{"changes": [{"id": 0, "text": "Changed"}]}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    with pytest.raises(RuntimeError, match="video unavailable"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=[youtube_url],
+        )
+
+    assert youtube_url in capsys.readouterr().out
+    assert client.pending_calls == 1
+    assert output.read_text(encoding="utf-8") == "previous"
+    assert [caption.text for caption in webvtt.read(source)] == ["First"]
+
+
+def test_mixed_context_urls_split_youtube_from_ordinary(tmp_path, monkeypatch):
+    source = tmp_path / "source.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "Only")])
+    youtube_url = "https://youtu.be/VIDEO_ID"
+    ordinary_url = "https://example.com/notes?id=7"
+
+    def verify_research_contents(contents):
+        assert isinstance(contents, str), "research request must not attach video Parts"
+        if f"- {ordinary_url}" not in contents:
+            raise AssertionError("ordinary URL must stay in the research prompt")
+
+    def verify_research_config(config):
+        tools = config.tools or []
+        if not any(tool.url_context is not None for tool in tools):
+            raise AssertionError("ordinary URL must enable URL Context")
+
+    def verify_youtube_contents(contents):
+        video_parts = [part for part in contents if not isinstance(part, str)]
+        if [part.file_data.file_uri for part in video_parts] != [youtube_url]:
+            raise AssertionError("only the YouTube URL may be a video Part")
+
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(
+                queries=["who is the host"],
+                urls=[(ordinary_url, "URL_RETRIEVAL_STATUS_SUCCESS")],
+                verify_contents=verify_research_contents,
+                verify_config=verify_research_config,
+            ),
+            youtube_call(
+                pieces=("YouTube analysis",),
+                verify_contents=verify_youtube_contents,
+            ),
+            refinement_call(['{"changes": []}']),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        context_urls=[youtube_url, ordinary_url],
+    )
+
+    assert webvtt.read(output)[0].text == "Only"
+
+
+def test_refinement_requires_each_distinct_url_query():
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.verify_refinement_grounding(
+            ["who is the host"],
+            [],
+            {
+                "https://example.com/notes?id=1": "URL_RETRIEVAL_STATUS_SUCCESS",
+            },
+            [
+                "https://example.com/notes?id=1",
+                "https://example.com/notes?id=2",
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "not-a-url",
+        "ftp://example.com/file",
+        "http://",
+        "example.com/path",
+        "https:///missing-host",
+        "https://example.com:bad/path",
+        "https://example .com/path",
+    ],
+)
+def test_context_url_validation_rejects_malformed_values(url):
+    with pytest.raises(ValueError, match="context-url"):
+        gemini_subs.validate_context_urls([url])
+
+
+def test_context_url_validation_accepts_and_deduplicates_http_urls():
+    result = gemini_subs.validate_context_urls(
+        ["https://example.com/a", "https://example.com/a", "http://example.com/b"]
+    )
+
+    assert result == ["https://example.com/a", "http://example.com/b"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/watch?v=abc",
+        "https://youtube.com/watch?v=abc&t=30",
+        "https://m.youtube.com/watch?v=abc",
+        "https://youtu.be/abc",
+        "https://youtu.be/abc?t=30",
+    ],
+)
+def test_youtube_video_url_detection_accepts_watch_and_share_forms(url):
+    assert gemini_subs.is_youtube_video_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://youtube.com/channel/UC123",
+        "https://www.youtube.com/playlist?list=x",
+        "https://example.com/watch?v=abc",
+        "https://youtu.be/",
+        "https://notyoutube.com/watch?v=abc",
+    ],
+)
+def test_youtube_video_url_detection_rejects_other_pages(url):
+    assert not gemini_subs.is_youtube_video_url(url)
+
+
+def test_context_url_classification_preserves_queries():
+    youtube_urls, ordinary_urls = gemini_subs.classify_context_urls(
+        [
+            "https://youtu.be/abc?t=5",
+            "https://example.com/notes?id=1",
+            "https://www.youtube.com/watch?v=abc",
+        ]
+    )
+
+    assert youtube_urls == [
+        "https://youtu.be/abc?t=5",
+        "https://www.youtube.com/watch?v=abc",
+    ]
+    assert ordinary_urls == ["https://example.com/notes?id=1"]
+
+
+def test_refinement_rejects_malformed_context_url_before_api(tmp_path, monkeypatch):
+    source = tmp_path / "source.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "First")])
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("no API client may be created for malformed URLs")
+
+    monkeypatch.setattr(gemini_subs, "create_client", fail_if_called)
+
+    with pytest.raises(ValueError, match="context-url"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            tmp_path / "output.vtt",
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=["not-a-url"],
+        )
+
+
+def test_generation_rejects_malformed_context_url_before_media(tmp_path, monkeypatch):
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("media probing must not run for malformed context URLs")
+
+    monkeypatch.setattr(gemini_subs, "probe_video_format", fail_if_called)
+    config = gemini_subs.GenerationConfig(
+        video_path=tmp_path / "missing.webm",
+        output_path=tmp_path / "output.vtt",
+        model="gemini-flash",
+        api_key="key",
+        context_urls=("not-a-url",),
+    )
+
+    with pytest.raises(ValueError, match="context-url"):
+        gemini_subs.run_generation(config)
+
+
+def test_cli_rejects_malformed_context_url_before_refinement(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "source.vtt"
+    source.write_text("WEBVTT\n", encoding="utf-8")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("refinement must not run for malformed context URLs")
+
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", fail_if_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gemini_subs.py",
+            str(source),
+            "--refine-only",
+            "--api-key",
+            "key",
+            "--context-url",
+            "not-a-url",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        gemini_subs.main()
+
+    assert "Invalid --context-url" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("QWER boxing match [EP.38].webm", "QWER boxing match [EP.38]"),
+        ("[EP.7] guest story | inn.webm", "[EP.7] guest story | inn"),
+        ("QWER boxing match.webm.vtt", "QWER boxing match"),
+        ("show.ko.vtt", "show"),
+        ("show.en-US.vtt", "show"),
+        ("movie.webm.en.vtt", "movie"),
+        ("episode.BTS.webm", "episode.BTS"),
+        ("episode.bts.webm", "episode.bts"),
+        ("plain.vtt", "plain"),
+        ("plain.mp4", "plain"),
+    ],
+)
+def test_source_title_derivation_strips_media_subtitle_and_language_suffixes(
+    filename, expected
+):
+    assert gemini_subs.derive_source_title(Path(filename)) == expected
 
 
 def test_process_lock_blocks_second_owner_and_survives_release(tmp_path):
@@ -1127,7 +1911,7 @@ def test_refine_only_refines_in_place_without_running_video_pipeline(
     def fail_if_called(*_args):
         raise AssertionError("video pipeline must not run in refine-only mode")
 
-    def refine(_input_path, output_path, *_args):
+    def refine(_input_path, output_path, *_args, **_kwargs):
         Path(output_path).write_text("refined\n", encoding="utf-8")
 
     monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
@@ -1181,6 +1965,26 @@ def prepare_generation_config(
         thinking_level="high",
         refine_text=refine_text,
     ), work
+
+
+def test_generation_passes_source_title_to_chunks_and_refinement(tmp_path, monkeypatch):
+    config, _work = prepare_generation_config(tmp_path, monkeypatch)
+    received = {}
+
+    def stitch(_directory, path):
+        Path(path).write_text("stitched", encoding="utf-8")
+
+    def refine(_input_path, output_path, *_args, **kwargs):
+        received["refinement_title"] = kwargs["source_title"]
+        Path(output_path).write_text("refined", encoding="utf-8")
+
+    monkeypatch.setattr(gemini_subs, "stitch", stitch)
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+
+    gemini_subs.run_generation(config)
+
+    assert gemini_subs.process_chunks.call_args.args[-1] == "source"
+    assert received["refinement_title"] == "source"
 
 
 def test_successful_generation_without_refinement_cleans_work_before_unlock(
@@ -1242,7 +2046,7 @@ def test_refinement_failure_preserves_output_removes_staging_and_resume_state(
     def stitch(_directory, path):
         Path(path).write_text("stitched", encoding="utf-8")
 
-    def refine(input_path, *_args):
+    def refine(input_path, *_args, **_kwargs):
         received["path"] = Path(input_path)
         received["content"] = Path(input_path).read_text(encoding="utf-8")
         raise RuntimeError("refinement failed")

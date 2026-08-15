@@ -133,6 +133,13 @@ The direct CLI defaults are:
 - `--workers 7` API workers.
 - `--output output_subtitles.vtt`.
 - Text refinement enabled.
+- No `--context-url` values.
+
+Repeatable `--context-url` values supply grounding context to global refinement.
+Each value must be an absolute HTTP or HTTPS URL with a host.
+Malformed values are rejected before any media processing or API request.
+Public YouTube watch or share URLs are direct video inputs for a separate YouTube analysis pass.
+All other URLs use the URL Context tool.
 
 The `scripts/subtitle.sh` wrapper uses the CLI default API worker count.
 The number of overlap clip workers is automatic.
@@ -174,7 +181,9 @@ uv run python gemini_subs.py input.vtt --refine-only -o refined.vtt
 
 This mode skips video probing, splitting, overlap creation, and chunk generation.
 It sends the complete VTT script to the refinement model.
+It derives the source title from the input VTT filename.
 In-place VTT refinement is allowed because the write is atomic.
+Repeatable `--context-url` values add grounding context as in normal generation.
 
 ### CLI validation
 
@@ -256,9 +265,14 @@ The chunk prompt requires the model to:
 - Preserve syllable timing and real silence.
 - Keep captions sorted and non-overlapping.
 - Preserve cultural terms, names, brands, and wordplay.
-- Use speaker labels only when attribution is reliable.
+- Treat the source title as supporting context whose names are candidate identities, not proof for a specific line.
+- Use a person's name only when the clip establishes attribution, such as a visible label, title card, or spoken introduction.
+- Never identify a speaker from appearance alone.
+- Prefer stable descriptive roles when the role is known, and leave dialogue unlabeled when identity cannot be distinguished.
 - Keep on-screen text in square brackets and separate from dialogue.
 - Return only a JSON object with a `captions` array.
+
+Chunk requests do not enable Google Search or any other tool.
 
 The inline video warning threshold is 20 MiB.
 The warning does not stop processing.
@@ -349,15 +363,69 @@ The default pipeline writes a staging VTT before refinement.
 The staging file is in the output directory and has a random name ending in `.staging.vtt`.
 The previous final output remains unchanged until refinement succeeds.
 
+Refinement has up to three Gemini requests.
+
+### Grounded web identity research
+
+The first request researches speaker identities with plain text output.
+It uses the streamed `generate_content_stream` call without `response_mime_type` or `response_schema`.
+It always enables the built-in Google Search tool.
+The prompt requires at least one search and reputable evidence.
+It returns concise participant names in official English styling, roles, and evidence.
+Web evidence may establish speaker identity and canonical proper-name spelling only.
+It must never infer or change dialogue content, meaning, or events.
+
+The research prompt contains the derived source title.
+Repeatable `--context-url` values split into two groups:
+
+- Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, `m.youtube.com`, `youtu.be`) stay listed in the research prompt as identifiers only.
+  The prompt states that their video content is analyzed in a separate pass.
+  No video Parts are attached to this request.
+- Ordinary HTTP(S) URLs stay listed in the research prompt and enable the URL Context tool.
+  Every ordinary URL must appear in the retrieval metadata with a success status.
+
+Search grounding and URL retrieval metadata are collected from every stream chunk and candidate.
+The run fails before any later request when the research response has no Google Search grounding, when any ordinary context URL is missing from the retrieval metadata, or when a retrieval status is not success.
+There is no ungrounded fallback.
+Successful research prints the unique search queries, grounded source titles and URLs, and ordinary URL retrieval statuses.
+
+### Direct YouTube analysis
+
+The second request runs only when at least one YouTube context URL exists.
+It is a separate plain streamed request with direct `types.Part.from_uri(..., mime_type="video/*")` inputs and a concise prompt.
+It does not configure Google Search, URL Context, or a response schema.
+The prompt asks for participant identities, official names and roles, and timestamped speaker-identification observations for the subtitle refinement pass.
+It must never infer or change dialogue content, meaning, or events.
+Request completion is the success signal for public video retrieval.
+An invalid, private, or unavailable YouTube video raises an SDK error that stops refinement before publication.
+The run prints the accepted YouTube URLs.
+Without YouTube URLs this request is skipped.
+
+### Structured refinement
+
+The final request refines the complete subtitle script.
+It reuses the streamed `application/json` request with the `RefinementResponse` schema.
+It does not configure Google Search or URL Context.
+
 The refinement prompt contains every caption as:
 
 ```text
 [0] 00:00:00.000 --> 00:00:02.000: Subtitle text
 ```
 
+The prompt also contains the derived source title and the grounded web research text and the YouTube analysis text as clearly delimited identity context sections.
+Both sections are subordinate to explicit script introductions and title cards.
+
 The prompt forbids adding, deleting, merging, splitting, reordering, or retiming entries.
 It asks for only necessary text changes.
 It preserves speaker line breaks, labels, on-screen text markers, cultural terms, and meaningful content.
+
+Speaker-label auditing is the first refinement task, before ordinary text polishing.
+The prompt ranks identity evidence: explicit script introduction or title card first, the grounded identity context and the direct video analysis second, the source title last.
+It uses official English name styling consistently, treats abrupt label changes near chunk boundaries as likely generation errors, and normalizes confidently established identities.
+Unresolved conflicting identities become one stable descriptive role when the role is established, otherwise the uncertain label is removed.
+Identity is never inferred from appearance.
+Identity research may affect speaker identity and canonical proper-name spelling only, never dialogue meaning or events.
 
 The response must contain unique IDs within the existing caption range.
 Each replacement text must contain non-whitespace content.
@@ -458,6 +526,7 @@ If command options change, the manifest hash normally changes as well.
 Existing cache files are intentionally user-controlled and are not invalidated by code revisions.
 
 If a final refinement request fails, the staging file is removed and the previous requested output remains intact.
+This includes failures from invalid responses, missing Google Search grounding, failed or missing context URL retrieval, and unavailable YouTube video context.
 If chunk processing fails, no final stitch is attempted and the work directory remains available.
 
 ## Helper scripts
@@ -468,6 +537,8 @@ This script requires exactly one video path.
 It writes `<video path>.vtt`.
 It invokes the repository CLI through `uv run --project`.
 It uses the CLI default API worker count.
+When standard input is a terminal, it prompts once for an optional context URL and passes a nonblank value as `--context-url`.
+Noninteractive usage never prompts.
 
 ```bash
 ./scripts/subtitle.sh "input.webm"

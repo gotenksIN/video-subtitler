@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +56,25 @@ DEFAULT_CHUNK_MODEL = "gemini-3.7-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_API_WORKERS = 7
 REFINEMENT_THINKING_LEVEL = "medium"
+MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
+SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
+LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+
+
+def derive_source_title(path):
+    """Return a human-readable source title from a video or subtitle filename."""
+    name = Path(path).name
+    for suffix in SUBTITLE_SUFFIXES:
+        if name.lower().endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+            if "." in name and LANGUAGE_TAG_RE.fullmatch(name.rsplit(".", 1)[1]):
+                name = name.rsplit(".", 1)[0]
+            break
+    for suffix in MEDIA_SUFFIXES:
+        if name.lower().endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name.strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +92,7 @@ class GenerationConfig:
     workers: int = DEFAULT_API_WORKERS
     thinking_level: str | None = None
     refine_text: bool = True
+    context_urls: tuple[str, ...] = ()
 
     @property
     def chunk_thinking_level(self) -> str:
@@ -573,6 +594,7 @@ def process_chunks(
     model_name,
     chunk_mime,
     thinking_level,
+    source_title=None,
 ):
     windows = get_processing_windows(chunks, overlap_sec)
     if overlap_sec <= 0 or len(windows) <= 1:
@@ -597,6 +619,7 @@ def process_chunks(
                     model_name,
                     chunk_mime,
                     thinking_level,
+                    source_title,
                 ): chunk["clip_name"]
                 for chunk in processing_chunks
             }
@@ -649,6 +672,7 @@ def process_chunks(
                     model_name,
                     chunk_mime,
                     thinking_level,
+                    source_title,
                 )
             ] = processing_chunk["clip_name"]
 
@@ -773,6 +797,64 @@ def validate_thinking_level_for_model(model_name, thinking_level):
         )
 
 
+def validate_context_urls(urls):
+    """Return deduplicated absolute HTTP(S) URLs or raise with a clear message."""
+    validated = []
+    for raw in urls or []:
+        value = str(raw).strip()
+        if any(character.isspace() for character in value):
+            raise ValueError(
+                f"Invalid --context-url {value!r}: URL must not contain whitespace"
+            )
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError as e:
+            raise ValueError(f"Invalid --context-url {value!r}: {e}") from None
+        if parsed.scheme.lower() not in ("http", "https") or not hostname:
+            raise ValueError(
+                f"Invalid --context-url {value!r}: "
+                "expected an absolute HTTP or HTTPS URL with a host"
+            )
+        validated.append(value)
+    return list(dict.fromkeys(validated))
+
+
+def url_identity(url):
+    """Normalize a URL for retrieval matching while preserving its query."""
+    parsed = urllib.parse.urlsplit(url)
+    return (
+        parsed.scheme.lower(),
+        parsed.netloc.lower(),
+        parsed.path.rstrip("/"),
+        parsed.query,
+    )
+
+
+def is_youtube_video_url(url):
+    """Return True for a public YouTube watch or share URL."""
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if host == "youtu.be":
+        return bool(parsed.path.strip("/"))
+    return (
+        host == "youtube.com" or host.endswith(".youtube.com")
+    ) and parsed.path == "/watch"
+
+
+def classify_context_urls(urls):
+    """Split validated context URLs into YouTube video inputs and URL Context inputs."""
+    youtube_urls = []
+    ordinary_urls = []
+    for url in urls:
+        if is_youtube_video_url(url):
+            youtube_urls.append(url)
+        else:
+            ordinary_urls.append(url)
+    return youtube_urls, ordinary_urls
+
+
 def generate_content_config(thinking_level):
     kwargs = {
         "temperature": 0.0,
@@ -789,7 +871,17 @@ def generate_content_config(thinking_level):
     return types.GenerateContentConfig(**kwargs)
 
 
-def build_generation_prompt(clip_duration, owner_start_rel, owner_end_rel):
+def build_generation_prompt(
+    clip_duration, owner_start_rel, owner_end_rel, source_title=None
+):
+    source_block = ""
+    if source_title:
+        source_block = (
+            "SOURCE CONTEXT\n\n"
+            f"Source title: {source_title}\n"
+            "Names in the source title are candidate identities only. "
+            "They do not prove which speaker said a specific line.\n\n"
+        )
     return f"""You are an expert subtitle generator and translator.
 
 Watch this {clip_duration:.3f}-second video clip.
@@ -798,7 +890,7 @@ The main chunk window is {format_time(owner_start_rel)} to {format_time(owner_en
 
 Generate accurate, natural English subtitles for dialogue and meaningful on-screen text throughout the entire clip, including the context windows. Captions outside the main window will be filtered later.
 
-TIMING
+{source_block}TIMING
 
 1. Create timestamps relative to the beginning of the full clip, ranging from 00:00:00.000 to {format_time(clip_duration)}.
 2. For spoken dialogue, start at the exact first audible syllable and end at the exact end of the last audible syllable.
@@ -821,11 +913,11 @@ TRANSLATION
 
 SPEAKER LABELS
 
-16. Add speaker labels when the speaker is confidently identifiable from the video, dialogue, or established context.
-17. Prefer a known person's consistent name.
-18. When a name is unknown, use a stable descriptive role such as "Resident:", "Student:", "Shop Owner:", "Host:", or "Producer:".
-19. Do not use generic numbered labels such as "Speaker 1:".
-20. Never guess a person's identity. If attribution is uncertain, leave the dialogue unlabeled.
+16. Use a person's name only when the clip itself establishes attribution: a visible name label or title card, a spoken introduction, or other direct in-clip evidence.
+17. Never identify a speaker from appearance alone.
+18. When a name cannot be established, prefer a stable descriptive role such as "Host:", "Resident:", "Shop Owner:", or "Producer:" when the role is clear from the clip.
+19. Leave dialogue unlabeled when neither a name nor a stable role can be distinguished.
+20. Do not use generic numbered labels such as "Speaker 1:".
 21. Use the exact format "Name: Dialogue".
 22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line.
 23. Do not assign speaker labels to on-screen text.
@@ -852,7 +944,14 @@ FORMATTING
 
 
 def process_chunk(
-    api_key, base_url, chunk, chunk_dir, model_name, chunk_mime, thinking_level
+    api_key,
+    base_url,
+    chunk,
+    chunk_dir,
+    model_name,
+    chunk_mime,
+    thinking_level,
+    source_title=None,
 ):
     chunk_idx = chunk["idx"]
     clip_name = chunk["clip_name"]
@@ -867,7 +966,9 @@ def process_chunk(
         print(f"Skipping {clip_name} - already processed.")
         return True
 
-    prompt = build_generation_prompt(clip_duration, owner_start_rel, owner_end_rel)
+    prompt = build_generation_prompt(
+        clip_duration, owner_start_rel, owner_end_rel, source_title
+    )
 
     try:
         with open(chunk_path, "rb") as f:
@@ -1003,71 +1104,161 @@ def stitch(chunk_dir, output_vtt):
     )
 
 
-def build_refinement_prompt(full_script):
+def build_identity_research_prompt(source_title=None, context_urls=(), youtube_urls=()):
+    """Build the plain-text prompt for the grounded web identity research pass."""
+    title_block = ""
+    if source_title:
+        title_block = f"\nSOURCE TITLE\n\n{source_title}\n"
+    url_block = ""
+    if context_urls:
+        url_lines = "\n".join(f"- {url}" for url in context_urls)
+        url_block = (
+            "\nCONTEXT URLS\n\n"
+            f"{url_lines}\n"
+            "Read the content at these URLs. They may identify the participants.\n"
+        )
+    youtube_block = ""
+    if youtube_urls:
+        youtube_lines = "\n".join(f"- {url}" for url in youtube_urls)
+        youtube_block = (
+            "\nYOUTUBE VIDEO URLS\n\n"
+            f"{youtube_lines}\n"
+            "Do not open these URLs. Their video content is analyzed in a "
+            "separate pass. Treat the URLs as identifiers only.\n"
+        )
+    return f"""You research speaker identities for an English subtitle localization pass.
+
+Return a concise plain-text summary of the participants who speak in this video.
+For each participant return their name in official English styling, their role, and the evidence for that attribution.
+Evidence must come from reputable web sources.
+{title_block}{url_block}{youtube_block}REQUIREMENTS
+
+1. Use Google Search at least once and rely on reputable evidence.
+2. Cite the source for each attribution so the evidence can be reviewed.
+3. Rank identity evidence: reputable grounded web evidence first, the source title last.
+4. Web evidence may establish speaker identity and canonical proper-name spelling only. It must never infer or change dialogue content, meaning, or events.
+5. When identity cannot be established, state one stable descriptive role such as Host, Resident, Shop Owner, or Producer when the role is clear; otherwise state that the speaker stays unlabeled.
+6. Return plain text only, with no markdown formatting.
+"""
+
+
+def build_youtube_analysis_prompt(source_title=None):
+    """Build the plain-text prompt for the direct YouTube analysis pass."""
+    title_block = ""
+    if source_title:
+        title_block = f"\nSOURCE TITLE\n\n{source_title}\n"
+    return f"""You analyze public YouTube videos for an English subtitle localization pass.
+
+Watch the attached video content.
+Return concise plain text with:
+- Each participant's name in official English styling and their role.
+- Timestamped speaker-identification observations: when a visible label, title card, or spoken introduction establishes attribution, give the video timestamp and the evidence.
+
+These observations may establish speaker identity and canonical proper-name spelling only.
+They must never infer or change dialogue content, meaning, or events.
+{title_block}Return plain text only, with no markdown formatting.
+"""
+
+
+def build_refinement_prompt(
+    full_script, source_title=None, identity_context=None, youtube_context=None
+):
+    source_block = ""
+    if source_title:
+        source_block = (
+            "\nSource title: "
+            f"{source_title}\n"
+            "A name in the source title is a candidate identity, not proof "
+            "that a specific line was spoken by that person.\n"
+        )
+    identity_block = ""
+    if identity_context:
+        identity_block = (
+            "\nGROUNDED IDENTITY CONTEXT\n\n"
+            f"{identity_context}\n"
+            "The identity context above was researched with grounded web "
+            "evidence. It ranks below explicit script introductions and title "
+            "cards. It may establish speaker identity and canonical "
+            "proper-name spelling only. It must never change dialogue "
+            "meaning, events, or facts.\n"
+        )
+    youtube_block = ""
+    if youtube_context:
+        youtube_block = (
+            "\nDIRECT VIDEO IDENTITY ANALYSIS\n\n"
+            f"{youtube_context}\n"
+            "The analysis above was produced by a separate pass that watched "
+            "the source video content. It ranks below explicit script "
+            "introductions and title cards. It may establish speaker identity "
+            "and canonical proper-name spelling only. It must never change "
+            "dialogue meaning, events, or facts.\n"
+        )
     return f"""You are an expert English subtitle localization editor.
 
 Below is the complete subtitle script for a video.
 
 You do not have access to the source video or audio. Never infer or reconstruct source content that is not established by the provided script.
+{source_block}{identity_block}{youtube_block}Use the complete script as global context and correct only lines with a clear problem involving:
 
-Use the complete script as global context and correct only lines with a clear problem involving:
-
-1. Inconsistent character names, speaker labels, brands, foods, products, program titles, or recurring terms.
-2. Unnatural or ungrammatical English.
-3. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
-4. Clear continuity errors that can be resolved confidently from the script.
-5. Formatting artifacts such as stray quotation marks, raw OCR debris, or inconsistent punctuation.
+1. Speaker labels that are missing, inconsistent, conflicting, or attached to on-screen text. Audit speaker labels first, before polishing any text.
+2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
+3. Unnatural or ungrammatical English.
+4. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
+5. Clear continuity errors that can be resolved confidently from the script.
+6. Formatting artifacts such as stray quotation marks, raw OCR debris, or inconsistent punctuation.
 
 Do not rewrite the entire script. If a line is acceptable, leave it unchanged.
 
 SEMANTIC PRESERVATION
 
-6. Preserve each line's distinct semantic content.
-7. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
-8. Never replace a line with a duplicate or paraphrase of an adjacent line.
-9. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
-10. Do not infer what the original audio or on-screen text might have said.
-11. If a proposed correction is uncertain, leave the line unchanged.
-12. Do not merge, split, reorder, add, or remove subtitle entries.
-13. Do not alter IDs or timestamps.
+7. Preserve each line's distinct semantic content.
+8. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
+9. Never replace a line with a duplicate or paraphrase of an adjacent line.
+10. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
+11. Do not infer what the original audio or on-screen text might have said.
+12. If a proposed correction is uncertain, leave the line unchanged.
+13. Do not merge, split, reorder, add, or remove subtitle entries.
+14. Do not alter IDs or timestamps.
 
 TERMINOLOGY AND LOCALIZATION
 
-14. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
-15. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
-16. Do not replace understandable English with unexplained romanized source-language terms.
-17. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
-18. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
-19. Preserve visible footnote markers such as "*".
-20. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
+15. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
+16. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
+17. Do not replace understandable English with unexplained romanized source-language terms.
+18. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
+19. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
+20. Preserve visible footnote markers such as "*".
+21. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
 
 SPEAKER LABELS
 
-21. Preserve existing speaker labels.
-22. Normalize each known person's label consistently using clear evidence within the script.
-23. Normalize recurring descriptive roles consistently, such as "Resident:", "Student:", "Shop Owner:", "Host:", and "Producer:".
-24. Do not assign new speaker identities because the source video is unavailable.
-25. Do not replace a named speaker with a generic role unless the existing attribution is demonstrably inconsistent within the script.
-26. Do not remove a speaker label unless it is clearly attached to on-screen text.
+22. Rank speaker identity evidence in this order: an explicit introduction or title card within the script; the grounded identity context and the direct video analysis; the source title.
+23. Use each confidently established person's official English name styling consistently.
+24. Normalize labels when the evidence confidently establishes the identity.
+25. Treat an abrupt label change near a chunk boundary as a likely generation error and normalize it to the established identity.
+26. When conflicting identities are attached to one speaker and no identity is confidently established, replace them all with one stable descriptive role when the role is established in the script; otherwise remove the uncertain label.
 27. Preserve each speaker's turn when multiple speakers occur in one caption.
-28. Never add speaker labels to on-screen text.
+28. When consecutive lines within one caption have the same speaker label and form one continuous turn, keep the label only once. Preserve every sentence, its order, and readable line breaks. Do not merge separate captions or alternating speaker turns.
+29. Never infer identity from appearance.
+30. Never add speaker labels to on-screen text.
+31. The grounded identity context and the direct video analysis may establish speaker identity and canonical proper-name spelling only. They must never change dialogue meaning, events, or facts.
 
 ON-SCREEN TEXT
 
-29. Preserve square brackets around on-screen editorial text.
-30. Keep on-screen text distinct from dialogue.
-31. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
-32. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
-33. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
+32. Preserve square brackets around on-screen editorial text.
+33. Keep on-screen text distinct from dialogue.
+34. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
+35. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
+36. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
 
 FORMATTING AND OUTPUT
 
-34. Preserve line breaks when they distinguish multiple speakers.
-35. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
-36. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
-37. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
-38. Do not return unchanged entries.
-39. Do not return timestamps, markdown, or explanations.
+37. Preserve line breaks when they distinguish multiple speakers.
+38. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
+39. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
+40. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
+41. Do not return unchanged entries.
+42. Do not return timestamps, markdown, or explanations.
 
 SCRIPT
 
@@ -1087,9 +1278,153 @@ def validate_refinement_changes(changes, caption_count):
         seen_ids.add(change.id)
 
 
-def global_refine_subtitles(
-    input_vtt, output_vtt, api_key, base_url, model_name, thinking_level
+def build_research_config(thinking_level, ordinary_urls):
+    """Plain-text config that always enables Google Search grounding."""
+    tools = [types.Tool(google_search=types.GoogleSearch())]
+    if ordinary_urls:
+        tools.append(types.Tool(url_context=types.UrlContext()))
+    kwargs = {
+        "temperature": 0.0,
+        "tools": tools,
+    }
+    if thinking_level is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level.upper()
+        )
+    return types.GenerateContentConfig(**kwargs)
+
+
+def build_youtube_analysis_config(thinking_level):
+    """Plain-text config for the direct YouTube analysis pass. No tools."""
+    kwargs = {"temperature": 0.0}
+    if thinking_level is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level.upper()
+        )
+    return types.GenerateContentConfig(**kwargs)
+
+
+def build_refinement_config(thinking_level):
+    """Structured config for the script refinement pass. No tools."""
+    kwargs = {
+        "temperature": 0.0,
+        "response_mime_type": "application/json",
+        "response_schema": RefinementResponse,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+            disable=True
+        ),
+    }
+    if thinking_level is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level.upper()
+        )
+    return types.GenerateContentConfig(**kwargs)
+
+
+def collect_stream_metadata(response_stream):
+    """Collect response text and grounding metadata in one stream pass."""
+    full_text = ""
+    search_queries = []
+    grounded_sources = []
+    retrieved_urls = {}
+    for chunk in response_stream:
+        if chunk.text:
+            full_text += chunk.text
+        for candidate in chunk.candidates or []:
+            metadata = getattr(candidate, "grounding_metadata", None)
+            if metadata:
+                search_queries.extend(
+                    query for query in (metadata.web_search_queries or []) if query
+                )
+                for grounding_chunk in metadata.grounding_chunks or []:
+                    web = getattr(grounding_chunk, "web", None)
+                    uri = web and getattr(web, "uri", None)
+                    if uri:
+                        grounded_sources.append((getattr(web, "title", None), uri))
+            url_context = getattr(candidate, "url_context_metadata", None)
+            if url_context:
+                for entry in url_context.url_metadata or []:
+                    url = entry.retrieved_url
+                    if url:
+                        retrieved_urls[url] = entry.url_retrieval_status
+    return full_text, search_queries, grounded_sources, retrieved_urls
+
+
+def retrieval_status_value(status):
+    """Return the plain status string for a enum or raw value."""
+    return getattr(status, "value", status)
+
+
+def verify_refinement_grounding(
+    search_queries, grounded_sources, retrieved_urls, context_urls
 ):
+    """Fail refinement before publication when grounding requirements are unmet."""
+    if not search_queries and not grounded_sources:
+        print(
+            "Error: The identity research response has no Google Search grounding. "
+            "Failing without publishing output."
+        )
+        sys.exit(1)
+
+    retrieved_by_identity = {
+        url_identity(url): status for url, status in retrieved_urls.items()
+    }
+    for url in context_urls:
+        status = retrieved_by_identity.get(url_identity(url))
+        if status is None:
+            print(
+                f"Error: Context URL {url} was not retrieved. "
+                "Failing without publishing output."
+            )
+            sys.exit(1)
+        if (
+            str(retrieval_status_value(status)).upper()
+            != "URL_RETRIEVAL_STATUS_SUCCESS"
+        ):
+            print(
+                f"Error: Context URL {url} retrieval failed with "
+                f"{retrieval_status_value(status)}. "
+                "Failing without publishing output."
+            )
+            sys.exit(1)
+
+
+def print_refinement_grounding(
+    search_queries, grounded_sources, retrieved_urls, context_urls
+):
+    unique_queries = list(dict.fromkeys(search_queries))
+    if unique_queries:
+        print("Search queries:")
+        for query in unique_queries:
+            print(f"  - {query}")
+    unique_sources = list(dict.fromkeys(grounded_sources))
+    if unique_sources:
+        print("Grounded sources:")
+        for title, uri in unique_sources:
+            print(f"  - {title or 'Untitled'}: {uri}")
+    if context_urls:
+        print("Context URL retrieval:")
+        retrieved_by_identity = {
+            url_identity(url): (url, status) for url, status in retrieved_urls.items()
+        }
+        for url in context_urls:
+            entry = retrieved_by_identity.get(url_identity(url))
+            status = retrieval_status_value(entry[1]) if entry else "NOT RETRIEVED"
+            print(f"  - {url}: {status}")
+
+
+def global_refine_subtitles(
+    input_vtt,
+    output_vtt,
+    api_key,
+    base_url,
+    model_name,
+    thinking_level,
+    source_title=None,
+    context_urls=None,
+):
+    context_urls = validate_context_urls(context_urls)
+    youtube_urls, ordinary_urls = classify_context_urls(context_urls)
     print(f"Loading {input_vtt} for global refinement...")
     vtt = webvtt.read(input_vtt)
 
@@ -1099,34 +1434,79 @@ def global_refine_subtitles(
 
     full_script = "\n".join(script_lines)
 
-    prompt = build_refinement_prompt(full_script)
+    # 1. Grounded web identity research pass. Plain text with Google Search.
+    # No video Parts: YouTube content is analyzed in a separate request.
+    research_prompt = build_identity_research_prompt(
+        source_title, ordinary_urls, youtube_urls
+    )
+    with create_client(api_key, base_url) as client:
+        print(
+            "Researching speaker identities with Google Search "
+            "(this may take a minute)..."
+        )
+        research_stream = client.models.generate_content_stream(
+            model=model_name,
+            contents=research_prompt,
+            config=build_research_config(thinking_level, ordinary_urls),
+        )
+        (
+            research_text,
+            search_queries,
+            grounded_sources,
+            retrieved_urls,
+        ) = collect_stream_metadata(research_stream)
+
+    verify_refinement_grounding(
+        search_queries, grounded_sources, retrieved_urls, ordinary_urls
+    )
+    print_refinement_grounding(
+        search_queries, grounded_sources, retrieved_urls, ordinary_urls
+    )
+
+    # 2. Direct YouTube identity analysis. Only when YouTube context URLs
+    # exist. Plain text with video Parts and no tools; request completion is
+    # the success signal for public video retrieval.
+    youtube_analysis_text = ""
+    if youtube_urls:
+        print("YouTube video context (direct video input):")
+        for url in youtube_urls:
+            print(f"  - {url}")
+        with create_client(api_key, base_url) as client:
+            print(
+                "Analyzing YouTube videos for speaker identities "
+                "(this may take a minute)..."
+            )
+            youtube_contents = [
+                types.Part.from_uri(file_uri=url, mime_type="video/*")
+                for url in youtube_urls
+            ]
+            youtube_contents.append(build_youtube_analysis_prompt(source_title))
+            youtube_stream = client.models.generate_content_stream(
+                model=model_name,
+                contents=youtube_contents,
+                config=build_youtube_analysis_config(thinking_level),
+            )
+            youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
+
+    # 3. Structured refinement pass. No tools; the identity sections supply
+    # context.
+    prompt = build_refinement_prompt(
+        full_script, source_title, research_text, youtube_analysis_text
+    )
 
     with create_client(api_key, base_url) as client:
         print(
             "Sending script to Gemini for global refinement (this may take a minute)..."
         )
-        config_kwargs = {
-            "temperature": 0.0,
-            "response_mime_type": "application/json",
-            "response_schema": RefinementResponse,
-            "automatic_function_calling": types.AutomaticFunctionCallingConfig(
-                disable=True
-            ),
-        }
-        if thinking_level is not None:
-            config_kwargs["thinking_config"] = types.ThinkingConfig(
-                thinking_level=thinking_level.upper()
-            )
-
         response_stream = client.models.generate_content_stream(
             model=model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(**config_kwargs),
+            config=build_refinement_config(thinking_level),
         )
         full_json_text = ""
-        for chunk in response_stream:
-            if chunk.text:
-                full_json_text += chunk.text
+        for response_chunk in response_stream:
+            if response_chunk.text:
+                full_json_text += response_chunk.text
 
     try:
         refinements = RefinementResponse.model_validate_json(full_json_text)
@@ -1148,6 +1528,8 @@ def global_refine_subtitles(
 
 
 def validate_generation_config(config: GenerationConfig) -> None:
+    validate_context_urls(config.context_urls)
+
     if config.chunk_dur <= 0:
         raise ValueError("--chunk-dur must be greater than 0")
 
@@ -1178,6 +1560,7 @@ def run_generation(config: GenerationConfig) -> None:
     """Run the complete resumable generation lifecycle for one config."""
     validate_generation_config(config)
 
+    source_title = derive_source_title(config.video_path)
     clip_workers = suggested_clip_workers(config.workers)
     manifest, chunk_dir = build_manifest(config)
     os.makedirs(chunk_dir, exist_ok=True)
@@ -1210,6 +1593,7 @@ def run_generation(config: GenerationConfig) -> None:
             config.model,
             manifest["process_mime"],
             config.chunk_thinking_level,
+            source_title,
         )
         if failed:
             raise RuntimeError(
@@ -1235,6 +1619,8 @@ def run_generation(config: GenerationConfig) -> None:
                 config.base_url,
                 config.refine_model or config.model,
                 REFINEMENT_THINKING_LEVEL,
+                source_title=source_title,
+                context_urls=list(config.context_urls),
             )
         else:
             stitch(chunk_dir, str(config.output_path))
@@ -1323,8 +1709,26 @@ def main():
             "Lowest supported: minimal for Flash models, low otherwise."
         ),
     )
+    parser.add_argument(
+        "--context-url",
+        action="append",
+        default=None,
+        help=(
+            "Absolute HTTP(S) URL used as grounding context for global "
+            "refinement. Repeatable. Public YouTube watch or share URLs are "
+            "analyzed in a separate direct-video pass. Other URLs use the "
+            "URL Context tool and refinement fails if one is not retrieved "
+            "successfully."
+        ),
+    )
 
     args = parser.parse_args()
+
+    try:
+        context_urls = validate_context_urls(args.context_url)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     if args.refine_only:
         if not os.path.exists(args.video_file_or_vtt):
@@ -1342,6 +1746,8 @@ def main():
             args.base_url,
             args.refine_model or args.model,
             REFINEMENT_THINKING_LEVEL,
+            source_title=derive_source_title(Path(args.video_file_or_vtt)),
+            context_urls=context_urls,
         )
         sys.exit(0)
 
@@ -1357,6 +1763,7 @@ def main():
         workers=args.workers,
         thinking_level=args.thinking_level,
         refine_text=not args.disable_text_refine,
+        context_urls=tuple(context_urls),
     )
     try:
         run_generation(config)
