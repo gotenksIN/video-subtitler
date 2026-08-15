@@ -358,7 +358,9 @@ Speaker-labeled lines longer than 42 characters are wrapped before publication.
 Existing line breaks and unlabeled text remain unchanged.
 
 Midpoint ownership can lose or duplicate a cue when the model gives inconsistent boundary timing.
-Do not add heuristic text deduplication without a deterministic rule.
+For overlapping cues from adjacent owner chunks, stitching removes a later leading line when its normalized words exactly match a same-speaker suffix of the earlier cue.
+Matches require at least two words.
+Any nonduplicate lines in the later cue remain unchanged.
 Repeated dialogue can be intentional.
 
 ## Global refinement

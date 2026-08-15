@@ -203,6 +203,42 @@ def wrap_labeled_text(text):
     return "\n".join(lines)
 
 
+def remove_boundary_duplicate_prefix(previous_text, current_text):
+    label_pattern = r"^([^:\[\]]+): "
+
+    def normalized_lines(text):
+        label = None
+        lines = []
+        for line in text.splitlines():
+            match = re.match(label_pattern, line)
+            if match:
+                label = match.group(1).casefold()
+            elif line.lstrip().startswith("["):
+                label = None
+            words = tuple(
+                re.findall(r"\w+", re.sub(label_pattern, "", line).casefold())
+            )
+            lines.append((label, words))
+        return lines
+
+    previous_lines = normalized_lines(previous_text)
+    current_lines = current_text.splitlines()
+    current_normalized = normalized_lines(current_text)
+    while current_lines:
+        label, words = current_normalized[0]
+        if len(words) < 2 or not any(
+            label is not None
+            and label == previous_label
+            and len(previous_words) >= len(words)
+            and previous_words[-len(words) :] == words
+            for previous_label, previous_words in previous_lines[-1:]
+        ):
+            break
+        current_lines.pop(0)
+        current_normalized.pop(0)
+    return "\n".join(current_lines)
+
+
 def file_fingerprint(path):
     stat = os.stat(path)
     return {
@@ -1067,11 +1103,27 @@ def stitch(chunk_dir, output_vtt):
                     "start": abs_start,
                     "end": abs_end,
                     "text": cap["text"],
+                    "chunk_idx": chunk_idx,
                 }
             )
 
     captions_to_write.sort(key=lambda item: item["start"])
+    deduplicated = []
     for cap in captions_to_write:
+        if (
+            filter_generated_context
+            and deduplicated
+            and cap["chunk_idx"] == deduplicated[-1]["chunk_idx"] + 1
+            and cap["start"] < deduplicated[-1]["end"]
+        ):
+            cap["text"] = remove_boundary_duplicate_prefix(
+                deduplicated[-1]["text"], cap["text"]
+            )
+            if not cap["text"]:
+                continue
+        deduplicated.append(cap)
+
+    for cap in deduplicated:
         final_vtt.captions.append(
             webvtt.Caption(
                 format_time(cap["start"]),

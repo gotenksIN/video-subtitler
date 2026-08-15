@@ -1124,6 +1124,85 @@ def test_stitch_preserves_repeated_text_and_cross_chunk_overlap(tmp_path):
     assert result[1].end == "00:00:06.000"
 
 
+def test_stitch_removes_exact_boundary_echo_and_keeps_new_text(tmp_path):
+    write_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 5), ("chunk_001.mp4", 5, 10)],
+        overlap=1,
+    )
+    write_subtitles(
+        tmp_path,
+        0,
+        [
+            {
+                "start": "1",
+                "end": "5.5",
+                "text": "Host: Intro repeated phrase.",
+            }
+        ],
+    )
+    write_subtitles(
+        tmp_path,
+        1,
+        [
+            {
+                "start": "1",
+                "end": "2",
+                "text": "Host: Repeated phrase.\nGuest: Keep this reply.",
+            }
+        ],
+    )
+    output = tmp_path / "output.vtt"
+
+    gemini_subs.stitch(tmp_path, output)
+
+    assert [caption.text for caption in webvtt.read(output)] == [
+        "Host: Intro repeated phrase.",
+        "Guest: Keep this reply.",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("earlier_text", "later_text"),
+    [
+        ("Host: Repeat this phrase.", "Guest: Repeat this phrase."),
+        ("Repeat this phrase.", "Repeat this phrase."),
+        ("Host: Again.", "Host: Again."),
+        ("Host: Keep this phrase.", "Host: Keep that phrase."),
+        (
+            "Host: Repeat this phrase.\nGuest: Different reply.",
+            "Host: Repeat this phrase.",
+        ),
+    ],
+)
+def test_stitch_preserves_ambiguous_boundary_repetition(
+    tmp_path, earlier_text, later_text
+):
+    write_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 5), ("chunk_001.mp4", 5, 10)],
+        overlap=1,
+    )
+    write_subtitles(
+        tmp_path,
+        0,
+        [{"start": "1", "end": "5.5", "text": earlier_text}],
+    )
+    write_subtitles(
+        tmp_path,
+        1,
+        [{"start": "1", "end": "2", "text": later_text}],
+    )
+    output = tmp_path / "output.vtt"
+
+    gemini_subs.stitch(tmp_path, output)
+
+    assert [caption.text for caption in webvtt.read(output)] == [
+        earlier_text,
+        later_text,
+    ]
+
+
 def test_refinement_prompt_contains_script_title_and_identity_context():
     script = "[37] 12:34:56.789 --> 12:34:58.012: Unique caption text"
     prompt = gemini_subs.build_refinement_prompt(
