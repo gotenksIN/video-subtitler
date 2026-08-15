@@ -354,6 +354,8 @@ The remaining captions are sorted by absolute start time.
 Valid cross-chunk overlaps keep their timing.
 WebVTT renders overlapping cues concurrently.
 The resulting captions are written as WebVTT.
+Speaker-labeled lines longer than 42 characters are wrapped before publication.
+Existing line breaks and unlabeled text remain unchanged.
 
 Midpoint ownership can lose or duplicate a cue when the model gives inconsistent boundary timing.
 Do not add heuristic text deduplication without a deterministic rule.

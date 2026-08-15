@@ -392,6 +392,18 @@ def test_timestamp_formatter_rejects_negative_values():
         gemini_subs.format_time(-0.001)
 
 
+def test_wrap_labeled_text_wraps_only_long_speaker_lines():
+    labeled = "Speaker: This labeled subtitle needs a comfortable line break."
+    unlabeled = "[This long on-screen caption must keep its original formatting]"
+
+    result = gemini_subs.wrap_labeled_text(f"{labeled}\n{unlabeled}")
+    labeled_lines, unchanged_line = result.splitlines()[:-1], result.splitlines()[-1]
+
+    assert all(len(line) <= 42 for line in labeled_lines)
+    assert " ".join(labeled_lines) == labeled
+    assert unchanged_line == unlabeled
+
+
 def test_caption_validation_sorts_canonicalizes_and_preserves_overlap():
     result = gemini_subs.validate_captions(
         [

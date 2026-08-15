@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -186,6 +187,20 @@ def atomic_save_vtt(vtt, path):
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def wrap_labeled_text(text):
+    lines = []
+    for line in text.splitlines():
+        if len(line) > 42 and re.match(r"^[^:\[\]]+: ", line):
+            lines.extend(
+                textwrap.wrap(
+                    line, width=42, break_long_words=False, break_on_hyphens=False
+                )
+            )
+        else:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def file_fingerprint(path):
@@ -1059,7 +1074,9 @@ def stitch(chunk_dir, output_vtt):
     for cap in captions_to_write:
         final_vtt.captions.append(
             webvtt.Caption(
-                format_time(cap["start"]), format_time(cap["end"]), cap["text"]
+                format_time(cap["start"]),
+                format_time(cap["end"]),
+                wrap_labeled_text(cap["text"]),
             )
         )
 
@@ -1487,6 +1504,9 @@ def global_refine_subtitles(
 
     for change in changes:
         vtt[change.id].text = change.text
+
+    for caption in vtt:
+        caption.text = wrap_labeled_text(caption.text)
 
     atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
