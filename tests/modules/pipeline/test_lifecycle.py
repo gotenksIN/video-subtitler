@@ -1,0 +1,249 @@
+"""Complete generation lifecycle and recovery outcomes."""
+
+from pathlib import Path
+
+import pytest
+import webvtt
+
+import gemini_subs
+from tests.support.fakes import ScenarioGeminiClient, grounded_candidate
+from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
+
+
+def prepare_generation(
+    tmp_path, monkeypatch, refine_text=False, overlap=0.0, output_path=None
+):
+    video = tmp_path / "source.mp4"
+    video.write_bytes(b"fake video")
+    monkeypatch.setattr(
+        gemini_subs,
+        "probe_video_format",
+        lambda _path: (".mp4", "video/mp4", "h264"),
+    )
+    monkeypatch.setattr(gemini_subs, "CHUNK_ROOT", str(tmp_path / "work_root"))
+    tools = FakeMediaTools()
+    monkeypatch.setattr(gemini_subs.subprocess, "run", tools.run)
+    config = gemini_subs.GenerationConfig(
+        video_path=video,
+        output_path=output_path or tmp_path / "output.vtt",
+        model="model",
+        api_key="key",
+        chunk_dur=60,
+        overlap=overlap,
+        workers=2,
+        thinking_level="high",
+        refine_text=refine_text,
+    )
+    return config, tools
+
+
+def write_two_chunk_subtitles(monkeypatch):
+    def process(_key, _base, chunk, chunk_dir, *_args):
+        index = chunk["idx"]
+        write_chunk_subtitles(
+            chunk_dir,
+            index,
+            [{"id": 0, "start": "0.5", "end": "1.5", "text": f"Cue {index}"}],
+        )
+        return True
+
+    monkeypatch.setattr(gemini_subs, "process_chunk", process)
+
+
+def active_work_directory(tmp_path):
+    return next(iter((tmp_path / "work_root").iterdir()))
+
+
+def test_successful_generation_publishes_and_cleans_work(tmp_path, monkeypatch):
+    config, _tools = prepare_generation(tmp_path, monkeypatch)
+    write_two_chunk_subtitles(monkeypatch)
+
+    gemini_subs.run_generation(config)
+
+    result = webvtt.read(config.output_path)
+    assert [(c.start, c.end, c.text) for c in result] == [
+        ("00:00:00.500", "00:00:01.500", "Cue 0"),
+        ("00:00:02.500", "00:00:03.500", "Cue 1"),
+    ]
+    work = active_work_directory(tmp_path)
+    assert sorted(path.name for path in work.iterdir()) == [gemini_subs.LOCK_NAME]
+    assert not list(tmp_path.glob("*.staging.vtt"))
+    lock = gemini_subs.acquire_lock(work)
+    gemini_subs.release_lock(lock)
+
+
+def test_generation_releases_the_lock_after_work_cleanup(tmp_path, monkeypatch):
+    config, _tools = prepare_generation(tmp_path, monkeypatch)
+    write_two_chunk_subtitles(monkeypatch)
+    states = []
+    real_release = gemini_subs.release_lock
+
+    def observe_then_release(lock_file):
+        states.append(
+            sorted(path.name for path in active_work_directory(tmp_path).iterdir())
+        )
+        real_release(lock_file)
+
+    monkeypatch.setattr(gemini_subs, "release_lock", observe_then_release)
+
+    gemini_subs.run_generation(config)
+
+    assert states == [[gemini_subs.LOCK_NAME]]
+
+
+def test_failed_chunk_processing_keeps_resume_state_and_releases_lock(
+    tmp_path, monkeypatch
+):
+    config, _tools = prepare_generation(tmp_path, monkeypatch)
+
+    def process(_key, _base, chunk, chunk_dir, *_args):
+        if chunk["idx"] == 0:
+            write_chunk_subtitles(
+                chunk_dir,
+                0,
+                [{"id": 0, "start": "0.5", "end": "1.5", "text": "Cue 0"}],
+            )
+            return True
+        return False
+
+    monkeypatch.setattr(gemini_subs, "process_chunk", process)
+
+    with pytest.raises(RuntimeError, match="Failed to process 1 chunk"):
+        gemini_subs.run_generation(config)
+
+    work = active_work_directory(tmp_path)
+    names = sorted(path.name for path in work.iterdir())
+    assert "subtitle_chunk_000.json" in names
+    assert gemini_subs.SPLIT_COMPLETE_MARKER in names
+    assert not config.output_path.exists()
+    lock = gemini_subs.acquire_lock(work)
+    gemini_subs.release_lock(lock)
+
+
+def test_retry_resumes_failed_work_without_resplitting_and_publishes(
+    tmp_path, monkeypatch
+):
+    config, tools = prepare_generation(tmp_path, monkeypatch)
+    failed_once = False
+
+    def process(_key, _base, chunk, chunk_dir, *_args):
+        nonlocal failed_once
+        index = chunk["idx"]
+        if index == 1 and not failed_once:
+            failed_once = True
+            return False
+        write_chunk_subtitles(
+            chunk_dir,
+            index,
+            [{"id": 0, "start": "0.5", "end": "1.5", "text": f"Cue {index}"}],
+        )
+        return True
+
+    monkeypatch.setattr(gemini_subs, "process_chunk", process)
+
+    with pytest.raises(RuntimeError, match="Failed to process 1 chunk"):
+        gemini_subs.run_generation(config)
+    gemini_subs.run_generation(config)
+
+    assert len(tools.split_calls()) == 1
+    result = webvtt.read(config.output_path)
+    assert [c.text for c in result] == ["Cue 0", "Cue 1"]
+    work = active_work_directory(tmp_path)
+    assert sorted(path.name for path in work.iterdir()) == [gemini_subs.LOCK_NAME]
+
+
+def test_refinement_failure_preserves_output_and_resume_state(tmp_path, monkeypatch):
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    config, _tools = prepare_generation(
+        tmp_path, monkeypatch, refine_text=True, output_path=output
+    )
+    write_two_chunk_subtitles(monkeypatch)
+    seen = {}
+
+    def refine(input_path, *_args, **_kwargs):
+        seen["path"] = Path(input_path)
+        raise RuntimeError("refinement failed")
+
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+
+    with pytest.raises(RuntimeError, match="refinement failed"):
+        gemini_subs.run_generation(config)
+
+    assert output.read_text(encoding="utf-8") == "previous"
+    assert seen["path"].name.endswith(".staging.vtt")
+    assert seen["path"].parent == tmp_path
+    assert not list(tmp_path.glob("*.staging.vtt"))
+    work = active_work_directory(tmp_path)
+    names = sorted(path.name for path in work.iterdir())
+    assert gemini_subs.SPLIT_COMPLETE_MARKER in names
+    lock = gemini_subs.acquire_lock(work)
+    gemini_subs.release_lock(lock)
+
+
+def test_successful_refined_generation_publishes_through_staging(tmp_path, monkeypatch):
+    config, _tools = prepare_generation(tmp_path, monkeypatch, refine_text=True)
+    write_two_chunk_subtitles(monkeypatch)
+    received = {}
+
+    def refine(input_path, output_path, *_args, **kwargs):
+        received["provenance"] = kwargs.get("boundary_provenance", "missing")
+        value = webvtt.read(input_path)
+        value.captions[0].text = "Refined cue"
+        value.save(output_path)
+
+    monkeypatch.setattr(gemini_subs, "global_refine_subtitles", refine)
+
+    gemini_subs.run_generation(config)
+
+    result = webvtt.read(config.output_path)
+    assert [c.text for c in result] == ["Refined cue", "Cue 1"]
+    assert received["provenance"] is None
+    assert not list(tmp_path.glob("*.staging.vtt"))
+    work = active_work_directory(tmp_path)
+    assert sorted(path.name for path in work.iterdir()) == [gemini_subs.LOCK_NAME]
+
+
+def test_overlap_generation_with_refinement_publishes_deduplicated_output(
+    tmp_path, monkeypatch
+):
+    config, _tools = prepare_generation(
+        tmp_path, monkeypatch, refine_text=True, overlap=1.0
+    )
+    _tools.clip_bytes = lambda path: path.name.encode()
+
+    def chunk_response(contents):
+        clip_name = contents[0].inline_data.data.decode()
+        if "context_chunk_000" in clip_name:
+            return [
+                (
+                    '{"captions": [{"id": 0, "start": "1.2", "end": "2.4", '
+                    '"text": "Host: Shared phrase."}, {"id": 1, "start": "2.5", '
+                    '"end": "3", "text": "[Context banner]"}]}'
+                )
+            ]
+        return [
+            (
+                '{"captions": [{"id": 0, "start": "0.9", "end": "1.6", '
+                '"text": "Host: Shared phrase."}]}'
+            )
+        ]
+
+    client = ScenarioGeminiClient(
+        chunk_response,
+        research_spec={
+            "pieces": ["Research text"],
+            "candidates": [grounded_candidate(queries=["who is the host"])],
+        },
+        refinement_spec={"pieces": ['{"changes": []}'], "candidates": []},
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.run_generation(config)
+
+    result = webvtt.read(config.output_path)
+    assert [(c.start, c.end, c.text) for c in result] == [
+        ("00:00:01.200", "00:00:02.400", "Host: Shared phrase.")
+    ]
+    work = active_work_directory(tmp_path)
+    assert sorted(path.name for path in work.iterdir()) == [gemini_subs.LOCK_NAME]

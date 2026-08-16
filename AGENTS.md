@@ -61,7 +61,13 @@ Every tracked file in this repository has a defined responsibility.
 | --- | --- |
 | `AGENTS.md` | Authoritative behavioral and development specification for agents. |
 | `gemini_subs.py` | Main CLI, media pipeline, Gemini API calls, validation, stitching, and refinement. |
-| `tests/test_gemini_subs.py` | Unit and integration-style tests for `gemini_subs.py`. |
+| `tests/README.md` | Behavioral contract matrix, test boundaries, and review-only specifications. |
+| `tests/modules/core/` | Tests for subtitle values, payload validation, timestamps, and source titles. |
+| `tests/modules/media/` | Real FFmpeg and FFprobe integration tests for supported media behavior. |
+| `tests/modules/gemini/` | Scenario-based tests for Gemini requests, responses, grounding, and refinement. |
+| `tests/modules/pipeline/` | Tests for configuration, persisted state, scheduling, stitching, publication, and recovery. |
+| `tests/cli/` | Subprocess tests for CLI parsing, validation, exit status, and diagnostics. |
+| `tests/support/` | Shared stateful fakes and run-state builders for behavioral tests. |
 | `scripts/subtitle.sh` | Wrapper script that runs generation with terminal context URL prompting. |
 | `scripts/yt-dl.sh` | YouTube downloader that fetches VP9/WebM video via `yt-dlp`. |
 | `scripts/ffmpeg.sh` | Headless GPL static FFmpeg and FFprobe installer for Linux hosts. |
@@ -701,6 +707,11 @@ Do not use legacy `google-generativeai`.
 Do not add automatic cache revisions without approval.
 Do not change timing semantics casually.
 Do not remove failed-run artifacts that support resume.
+
+Organize tests by the intended module owner described in `tests/README.md`.
+Test observable values, artifacts, state, errors, exit behavior, and external request contracts.
+Do not test private calls, helper names, source text, prompt prose, exact FFmpeg command arrays, manifest representation, or worker formulas.
+Use real FFmpeg media fixtures and stateful Gemini scenario fakes at external boundaries.
 
 Use semantic line breaks in Markdown.
 Put each complete sentence on its own source line.
