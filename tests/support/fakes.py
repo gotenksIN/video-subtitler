@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from google.genai import types
 
-import gemini_subs
+from modules import core
 
 
 class StreamPiece(SimpleNamespace):
@@ -76,11 +76,11 @@ class ScenarioGeminiClient:
         self.requests.append(kwargs)
         config = kwargs["config"]
         schema = config.response_schema
-        if schema is gemini_subs.SubtitleResponse:
+        if schema is core.SubtitleResponse:
             pieces = list(self.chunk_responder(kwargs["contents"]))
             schema.model_validate_json("".join(pieces))
             return iter(StreamPiece(piece) for piece in pieces)
-        if schema is gemini_subs.RefinementResponse:
+        if schema is core.RefinementResponse:
             if config.tools:
                 raise AssertionError("structured refinement must not enable tools")
             pieces = list(self.refinement_spec["pieces"])

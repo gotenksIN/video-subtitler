@@ -6,7 +6,7 @@ from pathlib import Path
 
 import webvtt
 
-import gemini_subs
+from modules import io
 
 
 def make_manifest(overlap=0.0, codec="h264"):
@@ -24,7 +24,7 @@ def make_manifest(overlap=0.0, codec="h264"):
 
 
 def write_chunk_layout(directory, rows, overlap=0.0):
-    Path(directory, gemini_subs.MANIFEST_NAME).write_text(
+    Path(directory, io.MANIFEST_NAME).write_text(
         json.dumps(make_manifest(overlap)), encoding="utf-8"
     )
     Path(directory, "segments.csv").write_text(

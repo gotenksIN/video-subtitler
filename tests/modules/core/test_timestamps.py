@@ -2,7 +2,7 @@
 
 import pytest
 
-import gemini_subs
+from modules import core
 
 
 @pytest.mark.parametrize(
@@ -19,11 +19,11 @@ import gemini_subs
     ],
 )
 def test_parse_time_accepts_documented_shapes(value, seconds):
-    assert gemini_subs.parse_time(value) == seconds
+    assert core.parse_time(value) == seconds
 
 
 def test_parse_time_treats_decimal_commas_as_points():
-    assert gemini_subs.parse_time("00:00:01,500") == 1.5
+    assert core.parse_time("00:00:01,500") == 1.5
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ def test_parse_time_treats_decimal_commas_as_points():
 )
 def test_parse_time_rejects_negative_or_malformed_values(value):
     with pytest.raises(ValueError):
-        gemini_subs.parse_time(value)
+        core.parse_time(value)
 
 
 @pytest.mark.parametrize(
@@ -49,16 +49,16 @@ def test_parse_time_rejects_negative_or_malformed_values(value):
     ],
 )
 def test_format_time_rounds_to_milliseconds(seconds, formatted):
-    assert gemini_subs.format_time(seconds) == formatted
+    assert core.format_time(seconds) == formatted
 
 
 def test_format_time_rejects_negative_values():
     with pytest.raises(ValueError, match="Negative timestamp"):
-        gemini_subs.format_time(-0.001)
+        core.format_time(-0.001)
 
 
 @pytest.mark.parametrize("seconds", [0, 0.001, 1.234, 61.5, 3599.9999, 12345.678])
 def test_format_time_round_trips_within_half_a_millisecond(seconds):
-    reparsed = gemini_subs.parse_time(gemini_subs.format_time(seconds))
+    reparsed = core.parse_time(core.format_time(seconds))
 
     assert abs(reparsed - seconds) <= 0.0005

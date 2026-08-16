@@ -3,7 +3,7 @@
 import threading
 from pathlib import Path
 
-import gemini_subs
+from modules import gemini, media, pipeline
 
 CHUNKS = [
     {"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 2},
@@ -13,10 +13,10 @@ CHUNKS = [
 
 def run_pipeline(tmp_path, monkeypatch, process, attach=None, overlap=0, workers=2):
     if attach is None:
-        attach = gemini_subs.attach_overlap_clip
-    monkeypatch.setattr(gemini_subs, "attach_overlap_clip", attach)
-    monkeypatch.setattr(gemini_subs, "process_chunk", process)
-    return gemini_subs.process_chunks(
+        attach = media.attach_overlap_clip
+    monkeypatch.setattr(media, "attach_overlap_clip", attach)
+    monkeypatch.setattr(gemini, "process_chunk", process)
+    return pipeline.process_chunks(
         "key",
         None,
         "source.mp4",

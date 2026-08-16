@@ -13,15 +13,7 @@ import webvtt
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from gemini_subs import (
-    DEFAULT_API_WORKERS,
-    DEFAULT_CHUNK_MODEL,
-    GenerationConfig,
-    derive_source_title,
-    global_refine_subtitles,
-    parse_time,
-    run_generation,
-)
+from modules import core, gemini, pipeline
 
 
 def parse_args():
@@ -62,7 +54,7 @@ def parse_args():
     )
     parser.add_argument("--chunk-dur", type=int, default=60)
     parser.add_argument("--overlap", type=float, default=5.0)
-    parser.add_argument("--workers", type=int, default=DEFAULT_API_WORKERS)
+    parser.add_argument("--workers", type=int, default=pipeline.DEFAULT_API_WORKERS)
     parser.add_argument(
         "--thinking-level",
         choices=("minimal", "low", "medium", "high"),
@@ -115,10 +107,13 @@ def compare_reference(output_vtt, reference_vtt, start):
         word for caption in reference for word in normalize_text(caption.text)
     ]
     generated_intervals = merge_intervals(
-        [(parse_time(c.start), parse_time(c.end)) for c in generated]
+        [(core.parse_time(c.start), core.parse_time(c.end)) for c in generated]
     )
     reference_intervals = merge_intervals(
-        [(parse_time(c.start) - start, parse_time(c.end) - start) for c in reference]
+        [
+            (core.parse_time(c.start) - start, core.parse_time(c.end) - start)
+            for c in reference
+        ]
     )
     generated_seconds = sum(end - begin for begin, end in generated_intervals)
     reference_seconds = sum(end - begin for begin, end in reference_intervals)
@@ -151,7 +146,7 @@ def safe_model_name(model):
 
 
 def run_full_generation(args, model, output):
-    config = GenerationConfig(
+    config = pipeline.GenerationConfig(
         video_path=args.video_file,
         output_path=Path(output),
         model=model,
@@ -164,7 +159,7 @@ def run_full_generation(args, model, output):
         refine_text=False,
     )
     started = time.perf_counter()
-    run_generation(config)
+    pipeline.run_generation(config)
     return time.perf_counter() - started
 
 
@@ -179,7 +174,7 @@ def run_full_matrix(args):
                 sys.exit(2)
             cases.append((generation, refinement))
     else:
-        default_model = os.environ.get("GEMINI_MODEL", DEFAULT_CHUNK_MODEL)
+        default_model = os.environ.get("GEMINI_MODEL", gemini.DEFAULT_CHUNK_MODEL)
         cases = [(model, None) for model in (args.model or [default_model])]
 
     output_dir = args.output_dir or Path("benchmark_results")
@@ -240,14 +235,14 @@ def run_refinement(
         f"{safe_model_name(generation_model)}_to_{safe_model_name(refinement_model)}.final.vtt"
     )
     started = time.perf_counter()
-    global_refine_subtitles(
+    gemini.global_refine_subtitles(
         str(generated_vtt),
         str(final_vtt),
         args.api_key,
         args.base_url,
         refinement_model,
         "medium",
-        source_title=derive_source_title(args.video_file),
+        source_title=core.derive_source_title(args.video_file),
     )
     result["refinement_seconds"] = time.perf_counter() - started
     result["final_vtt"] = str(final_vtt)

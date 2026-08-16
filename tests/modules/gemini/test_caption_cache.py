@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-import gemini_subs
+from modules import gemini
 
 
 def test_cached_captions_load_with_canonical_validation(tmp_path):
@@ -14,7 +14,7 @@ def test_cached_captions_load_with_canonical_validation(tmp_path):
         encoding="utf-8",
     )
 
-    result = gemini_subs.load_cached_captions(cache, 5)
+    result = gemini.load_cached_captions(cache, 5)
 
     assert result == [
         {"id": 0, "start": "00:00:01.500", "end": "00:00:02.000", "text": "Hi"}
@@ -22,7 +22,7 @@ def test_cached_captions_load_with_canonical_validation(tmp_path):
 
 
 def test_missing_cached_captions_return_none(tmp_path):
-    assert gemini_subs.load_cached_captions(tmp_path / "missing.json", 5) is None
+    assert gemini.load_cached_captions(tmp_path / "missing.json", 5) is None
 
 
 @pytest.mark.parametrize(
@@ -44,5 +44,5 @@ def test_invalid_cached_captions_are_deleted_for_regeneration(tmp_path, contents
     cache = tmp_path / "subtitle_chunk_000.json"
     cache.write_text(contents, encoding="utf-8")
 
-    assert gemini_subs.load_cached_captions(cache, 10) is None
+    assert gemini.load_cached_captions(cache, 10) is None
     assert not cache.exists()

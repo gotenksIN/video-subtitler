@@ -60,12 +60,18 @@ Every tracked file in this repository has a defined responsibility.
 | Path | Responsibility |
 | --- | --- |
 | `AGENTS.md` | Authoritative behavioral and development specification for agents. |
-| `gemini_subs.py` | Main CLI, media pipeline, Gemini API calls, validation, stitching, and refinement. |
+| `gemini_subs.py` | CLI entry point: dotenv loading, argument parsing, validation, and dispatch. |
+| `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, and boundary deduplication. |
+| `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
+| `modules/media.py` | FFmpeg and FFprobe operations for probing, splitting, windows, and overlap clips. |
+| `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, caption cache, and global refinement. |
+| `modules/pipeline.py` | Generation configuration, locking, scheduling, stitching, and the run lifecycle. |
 | `tests/README.md` | Behavioral contract matrix, test boundaries, and review-only specifications. |
-| `tests/modules/core/` | Tests for subtitle values, payload validation, timestamps, and source titles. |
-| `tests/modules/media/` | Real FFmpeg and FFprobe integration tests for supported media behavior. |
-| `tests/modules/gemini/` | Scenario-based tests for Gemini requests, responses, grounding, and refinement. |
-| `tests/modules/pipeline/` | Tests for configuration, persisted state, scheduling, stitching, publication, and recovery. |
+| `tests/modules/core/` | Tests for subtitle values, payload validation, timestamps, source titles, context URLs, and boundary deduplication. |
+| `tests/modules/io/` | Tests for atomic JSON and VTT publication. |
+| `tests/modules/media/` | Real FFmpeg and FFprobe integration tests for probing, splitting, windows, overlap clips, and split cleanup. |
+| `tests/modules/gemini/` | Scenario-based tests for Gemini requests, responses, grounding, caption cache, and refinement. |
+| `tests/modules/pipeline/` | Tests for configuration, persisted state, locking, scheduling, stitching, recovery, and cleanup. |
 | `tests/cli/` | Subprocess tests for CLI parsing, validation, exit status, and diagnostics. |
 | `tests/support/` | Shared stateful fakes and run-state builders for behavioral tests. |
 | `scripts/subtitle.sh` | Wrapper script that runs generation with terminal context URL prompting. |
@@ -84,7 +90,12 @@ Every tracked file in this repository has a defined responsibility.
 | `docs/agents/triage-labels.md` | Issue triage label definitions. |
 | `temp_video_chunks/` | Resumable run state root. It is temporary and git-ignored. |
 
-Keep `gemini_subs.py` as one focused module unless the file becomes unmanageable.
+Keep the five modules in `modules/` on an acyclic dependency graph.
+`modules/core.py` and `modules/io.py` are foundations with no project-internal imports.
+`modules/media.py` and `modules/gemini.py` depend only on those foundations as applicable.
+`modules/pipeline.py` orchestrates media and Gemini and owns the run lifecycle.
+`gemini_subs.py` stays CLI-only: dotenv loading, argument parsing, validation, and dispatch.
+Import from the owning module directly and do not add compatibility re-exports.
 Use the standard library for small utilities.
 Do not add heavy media libraries when an FFmpeg subprocess is sufficient.
 
@@ -726,7 +737,7 @@ Run only checks relevant to the changed files.
 | --- | --- |
 | Documentation or instructions only | No code validation. Check Markdown semantics manually. |
 | `scripts/*.sh` | `shellcheck` on each changed shell script. |
-| `gemini_subs.py` | `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`. |
+| `gemini_subs.py` or `modules/*.py` | `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`. |
 | Core behavior or `tests/` | `uv run pytest`. |
 | CLI arguments in `gemini_subs.py` | `uv run python gemini_subs.py --help`. |
 | `scripts/benchmark.py` | Run `./scripts/benchmark.py --help` and `uv run ruff check .` when changed. |

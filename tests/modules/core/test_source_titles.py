@@ -2,7 +2,7 @@
 
 import pytest
 
-import gemini_subs
+from modules import core
 
 
 @pytest.mark.parametrize(
@@ -30,4 +30,4 @@ import gemini_subs
     ],
 )
 def test_derive_source_title(filename, expected):
-    assert gemini_subs.derive_source_title(filename) == expected
+    assert core.derive_source_title(filename) == expected

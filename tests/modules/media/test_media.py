@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-import gemini_subs
+from modules import io, media
 
 VIDEO_WIDTH = 160
 VIDEO_HEIGHT = 90
@@ -253,7 +253,7 @@ def _stream_types(ffprobe, path):
 
 
 def test_probe_video_format_identifies_supported_primary_codec(video_fixture):
-    assert gemini_subs.probe_video_format(str(video_fixture["path"])) == (
+    assert media.probe_video_format(str(video_fixture["path"])) == (
         video_fixture["ext"],
         video_fixture["mime"],
         video_fixture["codec"],
@@ -262,28 +262,28 @@ def test_probe_video_format_identifies_supported_primary_codec(video_fixture):
 
 def test_probe_video_format_rejects_unsupported_codec(mpeg4_video):
     with pytest.raises(RuntimeError, match="Video format not supported"):
-        gemini_subs.probe_video_format(str(mpeg4_video))
+        media.probe_video_format(str(mpeg4_video))
 
 
 def test_probe_video_format_reports_missing_input(media_tools, tmp_path):
     with pytest.raises(RuntimeError, match="Failed to probe video format"):
-        gemini_subs.probe_video_format(str(tmp_path / "missing.webm"))
+        media.probe_video_format(str(tmp_path / "missing.webm"))
 
 
 def test_split_creates_decodable_chunks_and_completion_marker(
     video_fixture, media_tools, tmp_path
 ):
     chunk_dir = tmp_path / "work"
-    gemini_subs.split_video(
+    media.split_video(
         str(video_fixture["path"]),
         str(chunk_dir),
         2,
         {"chunk_ext": video_fixture["ext"]},
     )
 
-    marker = chunk_dir / gemini_subs.SPLIT_COMPLETE_MARKER
+    marker = chunk_dir / media.SPLIT_COMPLETE_MARKER
     assert marker.read_text(encoding="utf-8") == "ok\n"
-    chunks = gemini_subs.list_chunks(str(chunk_dir))
+    chunks = media.list_chunks(str(chunk_dir))
     assert len(chunks) >= 2
     source_duration = _container_duration(media_tools["ffprobe"], video_fixture["path"])
     for position, chunk in enumerate(chunks):
@@ -308,17 +308,17 @@ def _split_artifacts(chunk_dir):
     return {
         path.name: (path.stat().st_size, path.stat().st_mtime_ns, path.read_bytes())
         for path in chunk_dir.iterdir()
-        if path.is_file() and path.name != gemini_subs.MANIFEST_NAME
+        if path.is_file() and path.name != io.MANIFEST_NAME
     }
 
 
 def test_completed_split_is_reused_unchanged(video_fixture, tmp_path):
     chunk_dir = tmp_path / "work"
     manifest = {"chunk_ext": video_fixture["ext"]}
-    gemini_subs.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
     before = _split_artifacts(chunk_dir)
 
-    gemini_subs.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
 
     assert _split_artifacts(chunk_dir) == before
 
@@ -328,17 +328,15 @@ def test_corrupted_chunk_triggers_split_regeneration(
 ):
     chunk_dir = tmp_path / "work"
     manifest = {"chunk_ext": video_fixture["ext"]}
-    gemini_subs.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
-    original_names = [
-        chunk["name"] for chunk in gemini_subs.list_chunks(str(chunk_dir))
-    ]
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+    original_names = [chunk["name"] for chunk in media.list_chunks(str(chunk_dir))]
     (chunk_dir / original_names[0]).write_bytes(b"")
 
-    gemini_subs.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
 
-    marker = chunk_dir / gemini_subs.SPLIT_COMPLETE_MARKER
+    marker = chunk_dir / media.SPLIT_COMPLETE_MARKER
     assert marker.read_text(encoding="utf-8") == "ok\n"
-    regenerated = gemini_subs.list_chunks(str(chunk_dir))
+    regenerated = media.list_chunks(str(chunk_dir))
     assert [chunk["name"] for chunk in regenerated] == original_names
     for chunk in regenerated:
         path = chunk_dir / chunk["name"]
@@ -349,32 +347,32 @@ def test_corrupted_chunk_triggers_split_regeneration(
 def test_failed_split_leaves_no_completion_marker(video_fixture, tmp_path):
     chunk_dir = tmp_path / "work"
     chunk_dir.mkdir()
-    (chunk_dir / gemini_subs.SPLIT_COMPLETE_MARKER).write_text("ok\n", encoding="utf-8")
+    (chunk_dir / media.SPLIT_COMPLETE_MARKER).write_text("ok\n", encoding="utf-8")
     (chunk_dir / "segments.csv").write_text("chunk_000.mp4,0,1\n", encoding="utf-8")
 
     with pytest.raises(subprocess.CalledProcessError):
-        gemini_subs.split_video(
+        media.split_video(
             str(tmp_path / "missing-source.mp4"),
             str(chunk_dir),
             2,
             {"chunk_ext": video_fixture["ext"]},
         )
 
-    assert not (chunk_dir / gemini_subs.SPLIT_COMPLETE_MARKER).exists()
+    assert not (chunk_dir / media.SPLIT_COMPLETE_MARKER).exists()
 
 
 def test_generated_media_keeps_audio_and_excludes_source_subtitles(
     h264_video_with_subtitles, media_tools, tmp_path
 ):
     chunk_dir = tmp_path / "work"
-    gemini_subs.split_video(
+    media.split_video(
         str(h264_video_with_subtitles),
         str(chunk_dir),
         2,
         {"chunk_ext": ".mp4"},
     )
 
-    for chunk in gemini_subs.list_chunks(str(chunk_dir)):
+    for chunk in media.list_chunks(str(chunk_dir)):
         assert _stream_types(media_tools["ffprobe"], chunk_dir / chunk["name"]) == [
             "video",
             "audio",
@@ -387,7 +385,7 @@ def test_segment_index_is_the_source_of_chunk_timing(tmp_path):
         encoding="utf-8",
     )
 
-    assert gemini_subs.list_chunks(str(tmp_path)) == [
+    assert media.list_chunks(str(tmp_path)) == [
         {
             "idx": 0,
             "name": "chunk_000.mp4",
@@ -406,7 +404,7 @@ def test_segment_index_is_the_source_of_chunk_timing(tmp_path):
 
 
 def test_segment_index_missing_means_no_chunks(tmp_path):
-    assert gemini_subs.list_chunks(str(tmp_path)) == []
+    assert media.list_chunks(str(tmp_path)) == []
 
 
 def test_processing_windows_add_context_and_clamp_at_video_edges():
@@ -415,7 +413,7 @@ def test_processing_windows_add_context_and_clamp_at_video_edges():
         {"idx": 1, "name": "chunk_001.mp4", "start": 10.0, "end": 18.0},
     ]
 
-    windows = gemini_subs.get_processing_windows(chunks, 2.0)
+    windows = media.get_processing_windows(chunks, 2.0)
 
     assert [(w["clip_start"], w["clip_end"]) for w in windows] == [
         (0.0, 12.0),
@@ -432,7 +430,7 @@ def test_processing_windows_add_context_and_clamp_at_video_edges():
 def test_processing_windows_without_overlap_match_owner_intervals():
     chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 5.0, "end": 9.0}]
 
-    windows = gemini_subs.get_processing_windows(chunks, 0)
+    windows = media.get_processing_windows(chunks, 0)
 
     assert len(windows) == 1
     assert (windows[0]["clip_start"], windows[0]["clip_end"]) == (5.0, 9.0)
@@ -443,11 +441,11 @@ def test_processing_windows_without_overlap_match_owner_intervals():
 
 
 def test_processing_windows_without_chunks_is_empty():
-    assert gemini_subs.get_processing_windows([], 2.0) == []
+    assert media.get_processing_windows([], 2.0) == []
 
 
 def _write_overlap_manifest(chunk_dir, codec):
-    (chunk_dir / gemini_subs.MANIFEST_NAME).write_text(
+    (chunk_dir / io.MANIFEST_NAME).write_text(
         json.dumps({"video_codec": codec}), encoding="utf-8"
     )
 
@@ -460,7 +458,7 @@ def test_overlap_clip_is_decodable_and_keeps_primary_codec(
     _write_overlap_manifest(chunk_dir, video_fixture["codec"])
     clip_start, clip_end = 1.0, 5.0
 
-    name = gemini_subs.create_overlap_clip(
+    name = media.create_overlap_clip(
         str(video_fixture["path"]),
         str(chunk_dir),
         0,
@@ -483,13 +481,13 @@ def test_valid_overlap_clip_is_reused_without_reencoding(video_fixture, tmp_path
     chunk_dir = tmp_path / "work"
     chunk_dir.mkdir()
     _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    first = gemini_subs.create_overlap_clip(
+    first = media.create_overlap_clip(
         str(video_fixture["path"]), str(chunk_dir), 0, 1.0, 5.0, video_fixture["ext"]
     )
     clip = chunk_dir / first
     before = (clip.stat().st_size, clip.stat().st_mtime_ns, clip.read_bytes())
 
-    second = gemini_subs.create_overlap_clip(
+    second = media.create_overlap_clip(
         str(video_fixture["path"]), str(chunk_dir), 0, 1.0, 5.0, video_fixture["ext"]
     )
 
@@ -503,14 +501,14 @@ def test_corrupted_overlap_clip_is_regenerated_without_tmp_files(
     chunk_dir = tmp_path / "work"
     chunk_dir.mkdir()
     _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    name = gemini_subs.create_overlap_clip(
+    name = media.create_overlap_clip(
         str(video_fixture["path"]), str(chunk_dir), 2, 1.0, 4.0, video_fixture["ext"]
     )
     clip = chunk_dir / name
     clip.write_bytes(b"corrupted clip")
     (chunk_dir / f"{name}.tmp").write_bytes(b"stale temporary")
 
-    regenerated = gemini_subs.create_overlap_clip(
+    regenerated = media.create_overlap_clip(
         str(video_fixture["path"]), str(chunk_dir), 2, 1.0, 4.0, video_fixture["ext"]
     )
 
@@ -535,7 +533,7 @@ def test_attach_with_overlap_builds_a_decodable_context_clip(
         "clip_end": 4.0,
     }
 
-    result = gemini_subs.attach_overlap_clip(
+    result = media.attach_overlap_clip(
         str(video_fixture["path"]),
         str(chunk_dir),
         chunk,
@@ -551,9 +549,7 @@ def test_attach_with_overlap_builds_a_decodable_context_clip(
 def test_attach_without_overlap_selects_the_stream_copy_chunk(tmp_path):
     chunk = {"idx": 1, "name": "chunk_001.mp4", "start": 0.0, "end": 2.0}
 
-    result = gemini_subs.attach_overlap_clip(
-        "source.mp4", str(tmp_path), chunk, 0, ".mp4"
-    )
+    result = media.attach_overlap_clip("source.mp4", str(tmp_path), chunk, 0, ".mp4")
 
     assert result["clip_name"] == "chunk_001.mp4"
     assert not (tmp_path / "context_chunk_001.mp4").exists()
@@ -570,4 +566,4 @@ def test_attach_without_overlap_selects_the_stream_copy_chunk(tmp_path):
 )
 def test_overlap_encoding_rejects_container_or_codec_mismatch(ext, codec, message):
     with pytest.raises(ValueError, match=message):
-        gemini_subs.overlap_codec_args(ext, codec, threads=2)
+        media.overlap_codec_args(ext, codec, threads=2)

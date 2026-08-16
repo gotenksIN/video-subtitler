@@ -3,7 +3,7 @@
 import pytest
 import webvtt
 
-import gemini_subs
+from modules import core
 
 
 def vtt_with(captions):
@@ -22,7 +22,7 @@ def test_boundary_dedup_removes_exact_echo_caption_and_aligns_indices():
         ]
     )
 
-    indices = gemini_subs.dedup_boundary_overlap(value, [0, 1])
+    indices = core.dedup_boundary_overlap(value, [0, 1])
 
     assert [caption.text for caption in value] == ["Host: We repeat this phrase."]
     assert indices == [0]
@@ -44,7 +44,7 @@ def test_boundary_dedup_keeps_fresh_text_after_removing_echo_prefix():
         ]
     )
 
-    indices = gemini_subs.dedup_boundary_overlap(value, [0, 1])
+    indices = core.dedup_boundary_overlap(value, [0, 1])
 
     assert [caption.text for caption in value] == [
         "Host: Intro before the repeated boundary\nphrase",
@@ -61,7 +61,7 @@ def test_boundary_dedup_preserves_surviving_timestamps():
         ]
     )
 
-    gemini_subs.dedup_boundary_overlap(value, [0, 1])
+    core.dedup_boundary_overlap(value, [0, 1])
 
     assert [(caption.start, caption.end) for caption in value] == [
         ("00:00:01.000", "00:00:05.000")
@@ -76,7 +76,7 @@ def test_boundary_dedup_requires_time_overlap():
         ]
     )
 
-    indices = gemini_subs.dedup_boundary_overlap(value, [0, 1])
+    indices = core.dedup_boundary_overlap(value, [0, 1])
 
     assert len(value.captions) == 2
     assert indices == [0, 1]
@@ -90,7 +90,7 @@ def test_boundary_dedup_requires_adjacent_owner_chunks():
         ]
     )
 
-    indices = gemini_subs.dedup_boundary_overlap(value, [0, 0])
+    indices = core.dedup_boundary_overlap(value, [0, 0])
 
     assert len(value.captions) == 2
     assert indices == [0, 0]
@@ -105,7 +105,7 @@ def test_boundary_dedup_compares_against_the_previous_survivor():
         ]
     )
 
-    indices = gemini_subs.dedup_boundary_overlap(value, [0, 1, 2])
+    indices = core.dedup_boundary_overlap(value, [0, 1, 2])
 
     assert [caption.text for caption in value] == [
         "Host: We repeat this phrase.",
@@ -118,11 +118,11 @@ def test_boundary_dedup_rejects_mismatched_index_count():
     value = vtt_with([("00:00:00.000", "00:00:01.000", "Host: Repeat this phrase.")])
 
     with pytest.raises(ValueError, match="one chunk index per caption"):
-        gemini_subs.dedup_boundary_overlap(value, [])
+        core.dedup_boundary_overlap(value, [])
 
 
 def test_boundary_dedup_rejects_mismatched_timing_count():
     value = vtt_with([("00:00:00.000", "00:00:01.000", "Host: Repeat this phrase.")])
 
     with pytest.raises(ValueError, match="one timing per caption"):
-        gemini_subs.dedup_boundary_overlap(value, [0], timings=[])
+        core.dedup_boundary_overlap(value, [0], timings=[])

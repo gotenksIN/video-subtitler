@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import webvtt
 from google.genai import types
 
+from modules import gemini
+
 
 @dataclass(frozen=True)
 class RecordedRequest:
@@ -134,10 +136,8 @@ def refinement_call(pieces, error=None):
 
 
 def use_client(monkeypatch, client):
-    """Route every create_client call in gemini_subs to one scripted fake."""
-    import gemini_subs
-
-    monkeypatch.setattr(gemini_subs, "create_client", lambda *args, **kwargs: client)
+    """Route every create_client call in modules.gemini to one scripted fake."""
+    monkeypatch.setattr(gemini, "create_client", lambda *args, **kwargs: client)
 
 
 def write_vtt(path, captions):

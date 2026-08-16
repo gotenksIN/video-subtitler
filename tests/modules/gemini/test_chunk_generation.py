@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-import gemini_subs
+from modules import core, gemini
 from tests.support.gemini_fakes import ScriptedGeminiClient, chunk_call, use_client
 
 
@@ -26,7 +26,7 @@ def test_chunk_request_streams_clip_bytes_and_publishes_canonical_captions(
     client = ScriptedGeminiClient([chunk_call(pieces)])
     use_client(monkeypatch, client)
 
-    assert gemini_subs.process_chunk(
+    assert gemini.process_chunk(
         "key",
         "base",
         chunk_state(idx=3),
@@ -43,7 +43,7 @@ def test_chunk_request_streams_clip_bytes_and_publishes_canonical_captions(
     assert video_part.inline_data.mime_type == "video/mp4"
     assert video_part.inline_data.data == b"video bytes"
     assert request.config.response_mime_type == "application/json"
-    assert request.config.response_schema is gemini_subs.SubtitleResponse
+    assert request.config.response_schema is core.SubtitleResponse
 
     saved = json.loads(
         (tmp_path / "subtitle_chunk_003.json").read_text(encoding="utf-8")
@@ -84,7 +84,7 @@ def test_valid_caption_cache_preserves_the_published_result(tmp_path, monkeypatc
     )
     use_client(monkeypatch, client)
 
-    assert gemini_subs.process_chunk(
+    assert gemini.process_chunk(
         "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
     )
     assert cache.read_text(encoding="utf-8") == original
@@ -103,7 +103,7 @@ def test_invalid_captions_cache_is_regenerated_via_api(tmp_path, monkeypatch):
     )
     use_client(monkeypatch, client)
 
-    assert gemini_subs.process_chunk(
+    assert gemini.process_chunk(
         "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
     )
 
@@ -125,7 +125,7 @@ def test_invalid_chunk_response_fails_without_publishing(tmp_path, monkeypatch, 
     use_client(monkeypatch, client)
 
     assert (
-        gemini_subs.process_chunk(
+        gemini.process_chunk(
             "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
         )
         is False
@@ -142,7 +142,7 @@ def test_chunk_sdk_failure_fails_without_publishing(tmp_path, monkeypatch):
     use_client(monkeypatch, client)
 
     assert (
-        gemini_subs.process_chunk(
+        gemini.process_chunk(
             "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
         )
         is False
@@ -153,11 +153,11 @@ def test_chunk_sdk_failure_fails_without_publishing(tmp_path, monkeypatch):
 
 def test_large_inline_clip_warns_about_request_size(tmp_path, monkeypatch, capsys):
     (tmp_path / "clip.mp4").write_bytes(b"v" * 11)
-    monkeypatch.setattr(gemini_subs, "INLINE_VIDEO_WARNING_BYTES", 10)
+    monkeypatch.setattr(gemini, "INLINE_VIDEO_WARNING_BYTES", 10)
     client = ScriptedGeminiClient([chunk_call(['{"captions": []}'])])
     use_client(monkeypatch, client)
 
-    assert gemini_subs.process_chunk(
+    assert gemini.process_chunk(
         "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
     )
     assert "Warning" in capsys.readouterr().out

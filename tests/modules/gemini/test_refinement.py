@@ -5,7 +5,7 @@ import json
 import pytest
 from google.genai import types
 
-import gemini_subs
+from modules import gemini
 from tests.support.gemini_fakes import (
     ScriptedGeminiClient,
     grounding_candidate,
@@ -38,9 +38,7 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
-        source, output, "key", None, "refiner", "medium"
-    )
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
     refinement = client.requests[1]
     assert (
@@ -70,9 +68,7 @@ def test_refinement_without_changes_publishes_identical_script(tmp_path, monkeyp
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
-        source, output, "key", None, "refiner", "medium"
-    )
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
     assert read_captions(output) == [
         ("00:00:00.000", "00:00:01.000", "First"),
@@ -93,7 +89,7 @@ def test_refinement_stream_pieces_are_assembled_before_parsing(tmp_path, monkeyp
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(source, output, "key", None, "refiner", "high")
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert read_captions(output)[0][2] == "Assembled"
 
@@ -115,9 +111,7 @@ def test_identity_research_requests_grounded_plain_text(tmp_path, monkeypatch, c
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
-        source, output, "key", None, "refiner", "medium"
-    )
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
     research = client.requests[0]
     assert research.model == "refiner"
@@ -148,9 +142,7 @@ def test_identity_research_collects_grounding_from_later_stream_chunks(
     client = ScriptedGeminiClient([research, refinement_call(['{"changes": []}'])])
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
-        source, output, "key", None, "refiner", "medium"
-    )
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
     assert "Official page: https://example.com/show" in capsys.readouterr().out
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
@@ -173,9 +165,7 @@ def test_missing_search_grounding_fails_before_publication(
     use_client(monkeypatch, client)
 
     with pytest.raises(SystemExit, match="1"):
-        gemini_subs.global_refine_subtitles(
-            source, output, "key", None, "refiner", "high"
-        )
+        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert "no Google Search grounding" in capsys.readouterr().out
     assert len(client.requests) == 1
@@ -197,7 +187,7 @@ def test_missing_context_url_retrieval_fails_before_publication(
     use_client(monkeypatch, client)
 
     with pytest.raises(SystemExit, match="1"):
-        gemini_subs.global_refine_subtitles(
+        gemini.global_refine_subtitles(
             source,
             output,
             "key",
@@ -234,7 +224,7 @@ def test_failed_context_url_retrieval_fails_before_publication(
     use_client(monkeypatch, client)
 
     with pytest.raises(SystemExit, match="1"):
-        gemini_subs.global_refine_subtitles(
+        gemini.global_refine_subtitles(
             source,
             output,
             "key",
@@ -272,7 +262,7 @@ def test_equivalent_retrieved_url_identity_is_accepted(tmp_path, monkeypatch):
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
+    gemini.global_refine_subtitles(
         source,
         output,
         "key",
@@ -303,7 +293,7 @@ def test_ordinary_context_urls_enable_url_context_tool(tmp_path, monkeypatch):
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
+    gemini.global_refine_subtitles(
         source,
         output,
         "key",
@@ -333,7 +323,7 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
+    gemini.global_refine_subtitles(
         source,
         output,
         "key",
@@ -382,7 +372,7 @@ def test_ordinary_and_youtube_context_use_their_separate_retrieval_paths(
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
+    gemini.global_refine_subtitles(
         source,
         output,
         "key",
@@ -415,7 +405,7 @@ def test_youtube_analysis_is_skipped_without_youtube_urls(tmp_path, monkeypatch)
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(source, output, "key", None, "refiner", "high")
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert len(client.requests) == 2
     assert client.requests[1].config.response_mime_type == "application/json"
@@ -437,7 +427,7 @@ def test_youtube_analysis_sdk_failure_preserves_previous_output(tmp_path, monkey
     use_client(monkeypatch, client)
 
     with pytest.raises(RuntimeError, match="video unavailable"):
-        gemini_subs.global_refine_subtitles(
+        gemini.global_refine_subtitles(
             source,
             output,
             "key",
@@ -467,9 +457,7 @@ def test_research_sdk_failure_preserves_previous_output(tmp_path, monkeypatch):
     use_client(monkeypatch, client)
 
     with pytest.raises(RuntimeError, match="search unavailable"):
-        gemini_subs.global_refine_subtitles(
-            source, output, "key", None, "refiner", "high"
-        )
+        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert len(client.requests) == 1
     assert output.read_text(encoding="utf-8") == "previous"
@@ -496,9 +484,7 @@ def test_invalid_refinement_json_preserves_source_and_output(
     use_client(monkeypatch, client)
 
     with pytest.raises(SystemExit, match="1"):
-        gemini_subs.global_refine_subtitles(
-            source, output, "key", None, "refiner", "high"
-        )
+        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert "Raw response:" in capsys.readouterr().out
     assert read_captions(source)[0][2] == "First"
@@ -531,9 +517,7 @@ def test_invalid_refinement_changes_rejected_without_mutation(
     use_client(monkeypatch, client)
 
     with pytest.raises(SystemExit, match="1"):
-        gemini_subs.global_refine_subtitles(
-            source, output, "key", None, "refiner", "high"
-        )
+        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert read_captions(source) == [
         ("00:00:00.000", "00:00:01.000", "First"),
@@ -567,7 +551,7 @@ def test_refinement_removes_boundary_duplicate_created_by_a_text_change(
     )
     use_client(monkeypatch, client)
 
-    gemini_subs.global_refine_subtitles(
+    gemini.global_refine_subtitles(
         source,
         output,
         "key",
@@ -594,7 +578,7 @@ def test_mismatched_provenance_is_rejected_before_any_request(tmp_path, monkeypa
     use_client(monkeypatch, client)
 
     with pytest.raises(ValueError, match="one chunk index per caption"):
-        gemini_subs.global_refine_subtitles(
+        gemini.global_refine_subtitles(
             source,
             output,
             "key",

@@ -3,7 +3,7 @@
 import pytest
 import webvtt
 
-import gemini_subs
+from modules import core, pipeline
 from tests.support.workdir import write_chunk_layout, write_chunk_subtitles
 
 
@@ -31,7 +31,7 @@ def test_stitch_offsets_captions_and_filters_context_by_midpoint(tmp_path):
         overlap=2,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [(c.start, c.end, c.text) for c in result] == [
@@ -48,7 +48,7 @@ def test_stitch_rejects_missing_or_unexpected_results_without_publishing(tmp_pat
     output = tmp_path / "output.vtt"
 
     with pytest.raises(ValueError) as error:
-        gemini_subs.stitch(tmp_path, output)
+        pipeline.stitch(tmp_path, output)
 
     message = str(error.value)
     assert "missing chunk indices: [0]" in message
@@ -70,7 +70,7 @@ def test_stitch_preserves_multiline_text_without_inserting_breaks(tmp_path):
         overlap=0,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     caption = webvtt.read(output)[0]
     assert (caption.start, caption.end) == ("00:00:01.000", "00:00:03.000")
@@ -89,7 +89,7 @@ def test_stitch_keeps_repeated_text_and_overlapping_cues_without_overlap_mode(tm
         overlap=0,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [c.text for c in result] == ["Again", "Again"]
@@ -123,7 +123,7 @@ def test_stitch_removes_exact_boundary_echo_and_keeps_new_text(tmp_path):
         overlap=1,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [c.text for c in result] == [
@@ -167,7 +167,7 @@ def test_stitch_preserves_ambiguous_boundary_repetition(
         overlap=1,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [c.text for c in result] == [earlier_text, later_text]
@@ -192,7 +192,7 @@ def test_stitch_removes_a_complete_two_turn_boundary_echo(tmp_path):
         overlap=1,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [caption.text for caption in result] == [
@@ -213,7 +213,7 @@ def test_stitch_publishes_an_empty_vtt_when_all_captions_are_context(tmp_path):
         overlap=2,
     )
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert len(result) == 0
@@ -225,7 +225,7 @@ def test_stitch_works_without_a_manifest_file(tmp_path):
     write_chunk_subtitles(tmp_path, 0, [{"start": "1", "end": "2", "text": "Only"}])
     output = tmp_path / "output.vtt"
 
-    provenance = gemini_subs.stitch(tmp_path, output)
+    provenance = pipeline.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [c.text for c in result] == ["Only"]
@@ -242,4 +242,4 @@ def test_boundary_dedup_requires_one_index_per_caption():
     )
 
     with pytest.raises(ValueError, match="one chunk index per caption"):
-        gemini_subs.dedup_boundary_overlap(value, [0])
+        core.dedup_boundary_overlap(value, [0])

@@ -3,15 +3,15 @@
 import pytest
 from pydantic import ValidationError
 
-import gemini_subs
+from modules import core
 
 
 def caption(caption_id, start, end, text="Text"):
-    return gemini_subs.Caption(id=caption_id, start=start, end=end, text=text)
+    return core.Caption(id=caption_id, start=start, end=end, text=text)
 
 
 def test_subtitle_response_accepts_documented_caption_shape():
-    response = gemini_subs.SubtitleResponse.model_validate(
+    response = core.SubtitleResponse.model_validate(
         {"captions": [{"id": 0, "start": "0", "end": "1", "text": "Hi"}]}
     )
 
@@ -33,11 +33,11 @@ def test_subtitle_response_accepts_documented_caption_shape():
 )
 def test_subtitle_response_rejects_malformed_payloads(payload):
     with pytest.raises(ValidationError):
-        gemini_subs.SubtitleResponse.model_validate(payload)
+        core.SubtitleResponse.model_validate(payload)
 
 
 def test_refinement_response_accepts_documented_change_shape():
-    response = gemini_subs.RefinementResponse.model_validate(
+    response = core.RefinementResponse.model_validate(
         {"changes": [{"id": 0, "text": "Fixed"}]}
     )
 
@@ -46,7 +46,7 @@ def test_refinement_response_accepts_documented_change_shape():
 
 
 def test_caption_validation_sorts_and_canonicalizes_timestamps():
-    result = gemini_subs.validate_captions(
+    result = core.validate_captions(
         [caption(2, "1", "3", "Later"), caption(1, "00:00:00,250", "2", "Earlier")],
         5,
     )
@@ -58,7 +58,7 @@ def test_caption_validation_sorts_and_canonicalizes_timestamps():
 
 
 def test_caption_validation_preserves_cues_that_start_at_the_same_time():
-    result = gemini_subs.validate_captions(
+    result = core.validate_captions(
         [caption(1, "1", "2", "Shorter"), caption(0, "1", "3", "Longer")], 5
     )
 
@@ -69,14 +69,14 @@ def test_caption_validation_preserves_cues_that_start_at_the_same_time():
 def test_caption_validation_preserves_multiline_text_verbatim():
     text = "Host: One line\n[On-screen card]\nGuest: Another line"
 
-    result = gemini_subs.validate_captions([caption(0, "1", "2", text)], 5)
+    result = core.validate_captions([caption(0, "1", "2", text)], 5)
 
     assert result[0]["text"] == text
 
 
 def test_caption_validation_rejects_duplicate_ids():
     with pytest.raises(ValueError, match="Duplicate caption IDs"):
-        gemini_subs.validate_captions([caption(0, "0", "1"), caption(0, "2", "3")], 10)
+        core.validate_captions([caption(0, "0", "1"), caption(0, "2", "3")], 10)
 
 
 @pytest.mark.parametrize(
@@ -86,16 +86,16 @@ def test_caption_validation_rejects_duplicate_ids():
 )
 def test_caption_validation_rejects_non_positive_intervals(start, end):
     with pytest.raises(ValueError, match="Invalid caption timing"):
-        gemini_subs.validate_captions([caption(0, start, end)], 10)
+        core.validate_captions([caption(0, start, end)], 10)
 
 
 def test_caption_validation_rejects_negative_start_times():
     with pytest.raises(ValueError, match="Negative timestamp"):
-        gemini_subs.validate_captions([caption(0, "-0.5", "1")], 10)
+        core.validate_captions([caption(0, "-0.5", "1")], 10)
 
 
 def test_caption_validation_clamps_end_overrun_within_tolerance():
-    result = gemini_subs.validate_captions([caption(0, "9", "10.4")], 10)
+    result = core.validate_captions([caption(0, "9", "10.4")], 10)
 
     assert result[0]["start"] == "00:00:09.000"
     assert result[0]["end"] == "00:00:10.000"
@@ -103,45 +103,45 @@ def test_caption_validation_clamps_end_overrun_within_tolerance():
 
 def test_caption_validation_rejects_end_overrun_beyond_tolerance():
     with pytest.raises(ValueError, match="exceeds chunk duration"):
-        gemini_subs.validate_captions([caption(0, "9", "10.6")], 10)
+        core.validate_captions([caption(0, "9", "10.6")], 10)
 
 
 def test_caption_validation_rejects_clamp_that_invalidates_interval():
     with pytest.raises(ValueError, match="exceeds chunk duration"):
-        gemini_subs.validate_captions([caption(0, "10.2", "10.4")], 10)
+        core.validate_captions([caption(0, "10.2", "10.4")], 10)
 
 
 def test_caption_validation_rejects_intervals_collapsed_by_rounding():
     with pytest.raises(ValueError, match="non-positive interval"):
-        gemini_subs.validate_captions([caption(0, "9.9996", "10.4")], 10)
+        core.validate_captions([caption(0, "9.9996", "10.4")], 10)
 
 
 def test_caption_validation_accepts_empty_caption_list():
-    assert gemini_subs.validate_captions([], 10) == []
+    assert core.validate_captions([], 10) == []
 
 
 def test_refinement_change_validation_accepts_valid_changes():
     changes = [
-        gemini_subs.RefinedCaption(id=0, text="One"),
-        gemini_subs.RefinedCaption(id=2, text="Two"),
+        core.RefinedCaption(id=0, text="One"),
+        core.RefinedCaption(id=2, text="Two"),
     ]
 
-    gemini_subs.validate_refinement_changes(changes, 3)
+    core.validate_refinement_changes(changes, 3)
 
 
 @pytest.mark.parametrize(
     "changes",
     [
         [
-            gemini_subs.RefinedCaption(id=0, text="One"),
-            gemini_subs.RefinedCaption(id=0, text="Two"),
+            core.RefinedCaption(id=0, text="One"),
+            core.RefinedCaption(id=0, text="Two"),
         ],
-        [gemini_subs.RefinedCaption(id=2, text="Out of range")],
-        [gemini_subs.RefinedCaption(id=-1, text="Negative")],
-        [gemini_subs.RefinedCaption(id=0, text="   ")],
+        [core.RefinedCaption(id=2, text="Out of range")],
+        [core.RefinedCaption(id=-1, text="Negative")],
+        [core.RefinedCaption(id=0, text="   ")],
     ],
     ids=["duplicate", "out of range", "negative", "empty text"],
 )
 def test_refinement_change_validation_rejects_invalid_changes(changes):
     with pytest.raises(ValueError):
-        gemini_subs.validate_refinement_changes(changes, 2)
+        core.validate_refinement_changes(changes, 2)
