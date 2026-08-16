@@ -1114,12 +1114,12 @@ def test_stitch_preserves_repeated_text_and_cross_chunk_overlap(tmp_path):
     assert provenance is None
 
 
-def test_stitch_reflows_complete_turns_without_losing_boundaries(tmp_path):
+def test_stitch_preserves_text_for_player_layout(tmp_path):
     text = (
-        "Host: This generic turn includes several ordinary\n"
+        "Host: This generic turn is deliberately longer than forty-two characters\n"
         "[On-screen banner remains unchanged]\n"
         "Plain unlabeled line remains unchanged\n"
-        "Guest: This separate turn also needs a comfortable line break"
+        "Guest: This separate turn remains unchanged"
     )
     write_layout(tmp_path, [("chunk_000.mp4", 0, 5)])
     write_subtitles(tmp_path, 0, [{"start": "1", "end": "3", "text": text}])
@@ -1128,23 +1128,8 @@ def test_stitch_reflows_complete_turns_without_losing_boundaries(tmp_path):
     gemini_subs.stitch(tmp_path, output)
 
     caption = webvtt.read(output)[0]
-    lines = caption.text.splitlines()
     assert (caption.start, caption.end) == ("00:00:01.000", "00:00:03.000")
-    assert " ".join(caption.text.split()) == " ".join(text.split())
-    assert sum(line.startswith("Host:") for line in lines) == 1
-    assert sum(line.startswith("Guest:") for line in lines) == 1
-    assert all(len(line.split()) != 1 for line in lines[1:-1])
-    assert "[On-screen banner remains unchanged]" in lines
-    assert "Plain unlabeled line remains unchanged" in lines
-    assert all(
-        len(line) <= 42
-        for line in lines
-        if line
-        not in {
-            "[On-screen banner remains unchanged]",
-            "Plain unlabeled line remains unchanged",
-        }
-    )
+    assert caption.text == text
 
 
 def test_stitch_removes_exact_boundary_echo_and_keeps_new_text(tmp_path):
@@ -1374,7 +1359,7 @@ def test_global_refinement_changes_only_text_and_preserves_timestamps(
             "Host: Intro before the repeated boundary\nphrase",
             "Host: Repeated boundary\nphrase",
             [0, 1],
-            ["Host: Intro before the repeated\nboundary phrase"],
+            ["Host: Intro before the repeated boundary\nphrase"],
         ),
         (
             "Host: Shared opening.\nGuest: Shared response.",

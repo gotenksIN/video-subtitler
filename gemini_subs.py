@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import textwrap
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,51 +187,6 @@ def atomic_save_vtt(vtt, path):
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)
-
-
-def reflow_speaker_turns(text):
-    """Reflow each complete labeled speaker turn at 42 characters.
-
-    A labeled line plus its following unlabeled continuation lines form one
-    turn until another speaker label or an on-screen bracket line begins.
-    The turn's words are wrapped as one block. On-screen bracket lines,
-    purely unlabeled text, and speaker turn boundaries are preserved.
-    """
-    output_lines = []
-    turn_lines = []
-
-    def flush_turn():
-        joined = " ".join(" ".join(turn_lines).split())
-        wrapped = textwrap.wrap(
-            joined, width=42, break_long_words=False, break_on_hyphens=False
-        )
-        if len(wrapped) > 1 and len(wrapped[-1].split()) == 1:
-            preceding, separator, moved_word = wrapped[-2].rpartition(" ")
-            balanced_last = f"{moved_word} {wrapped[-1]}"
-            if separator and len(balanced_last) <= 42:
-                wrapped[-2] = preceding
-                wrapped[-1] = balanced_last
-        output_lines.extend(wrapped)
-        turn_lines.clear()
-
-    for line in text.splitlines():
-        if SPEAKER_LABEL_RE.match(line):
-            if turn_lines:
-                flush_turn()
-            turn_lines.append(line)
-        elif line.lstrip().startswith("["):
-            if turn_lines:
-                flush_turn()
-            output_lines.append(line)
-        elif turn_lines:
-            turn_lines.append(line)
-        else:
-            output_lines.append(line)
-
-    if turn_lines:
-        flush_turn()
-
-    return "\n".join(output_lines)
 
 
 def remove_boundary_duplicate_prefix(previous_text, current_text):
@@ -1240,9 +1194,6 @@ def stitch(chunk_dir, output_vtt):
     if filter_generated_context:
         provenance = dedup_boundary_overlap(final_vtt, chunk_indices, timings)
 
-    for caption in final_vtt.captions:
-        caption.text = reflow_speaker_turns(caption.text)
-
     atomic_save_vtt(final_vtt, output_vtt)
     print(
         f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions."
@@ -1677,9 +1628,6 @@ def global_refine_subtitles(
 
     if boundary_provenance is not None:
         dedup_boundary_overlap(vtt, boundary_provenance)
-
-    for caption in vtt:
-        caption.text = reflow_speaker_turns(caption.text)
 
     atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")

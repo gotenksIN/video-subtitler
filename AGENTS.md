@@ -353,12 +353,8 @@ This removes context duplicates without changing the caption text.
 The remaining captions are sorted by absolute start time.
 Valid cross-chunk overlaps keep their timing.
 WebVTT renders overlapping cues concurrently.
-Each complete labeled speaker turn is reflowed at 42 characters before publication.
-A labeled line plus its following unlabeled continuation lines form one turn until another speaker label or an on-screen bracket line begins.
-The turn's words are joined and wrapped as one block.
-When possible within the width limit, wrapping avoids a one-word final line.
-On-screen bracket lines and purely unlabeled text are preserved exactly.
-Separate speaker turns stay separate blocks.
+The resulting captions are written as WebVTT without inserting presentation line breaks.
+Players wrap long lines for their viewport.
 When generated overlap filtering is active, stitch returns the surviving per-caption chunk indices as in-memory provenance for refinement.
 Otherwise it returns None.
 
@@ -444,7 +440,7 @@ Validation happens before any caption is changed.
 Invalid JSON or invalid changes fail the run and preserve the previous output.
 
 The model refinement response changes text only and never changes timestamps.
-For generation with overlap, the validated model changes are applied first, and then the exact boundary dedup runs again using the stitch provenance before reflow and publication.
+For generation with overlap, the validated model changes are applied first, and then the exact boundary dedup runs again using the stitch provenance before publication.
 This postprocess may remove an exact duplicate cue but does not retime surviving cues.
 Refinement-only runs and benchmark runs omit provenance and skip this dedup.
 The final VTT is saved atomically.
