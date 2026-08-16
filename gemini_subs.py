@@ -60,6 +60,7 @@ REFINEMENT_THINKING_LEVEL = "medium"
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+SPEAKER_LABEL_RE = re.compile(r"^([^:\[\]]+): ")
 
 
 def derive_source_title(path):
@@ -189,54 +190,167 @@ def atomic_save_vtt(vtt, path):
         tmp_path.unlink(missing_ok=True)
 
 
-def wrap_labeled_text(text):
-    lines = []
+def reflow_speaker_turns(text):
+    """Reflow each complete labeled speaker turn at 42 characters.
+
+    A labeled line plus its following unlabeled continuation lines form one
+    turn until another speaker label or an on-screen bracket line begins.
+    The turn's words are wrapped as one block. On-screen bracket lines,
+    purely unlabeled text, and speaker turn boundaries are preserved.
+    """
+    output_lines = []
+    turn_lines = []
+
+    def flush_turn():
+        joined = " ".join(" ".join(turn_lines).split())
+        wrapped = textwrap.wrap(
+            joined, width=42, break_long_words=False, break_on_hyphens=False
+        )
+        if len(wrapped) > 1 and len(wrapped[-1].split()) == 1:
+            preceding, separator, moved_word = wrapped[-2].rpartition(" ")
+            balanced_last = f"{moved_word} {wrapped[-1]}"
+            if separator and len(balanced_last) <= 42:
+                wrapped[-2] = preceding
+                wrapped[-1] = balanced_last
+        output_lines.extend(wrapped)
+        turn_lines.clear()
+
     for line in text.splitlines():
-        if len(line) > 42 and re.match(r"^[^:\[\]]+: ", line):
-            lines.extend(
-                textwrap.wrap(
-                    line, width=42, break_long_words=False, break_on_hyphens=False
-                )
-            )
+        if SPEAKER_LABEL_RE.match(line):
+            if turn_lines:
+                flush_turn()
+            turn_lines.append(line)
+        elif line.lstrip().startswith("["):
+            if turn_lines:
+                flush_turn()
+            output_lines.append(line)
+        elif turn_lines:
+            turn_lines.append(line)
         else:
-            lines.append(line)
-    return "\n".join(lines)
+            output_lines.append(line)
+
+    if turn_lines:
+        flush_turn()
+
+    return "\n".join(output_lines)
 
 
 def remove_boundary_duplicate_prefix(previous_text, current_text):
-    label_pattern = r"^([^:\[\]]+): "
+    def normalize_words(line):
+        return tuple(re.findall(r"\w+", SPEAKER_LABEL_RE.sub("", line).casefold()))
 
-    def normalized_lines(text):
-        label = None
-        lines = []
-        for line in text.splitlines():
-            match = re.match(label_pattern, line)
+    def normalized_elements(text):
+        elements = []
+        active_turn = None
+        lines = text.splitlines()
+
+        def flush_turn(end):
+            nonlocal active_turn
+            if active_turn is not None:
+                label, words, start = active_turn
+                elements.append((label, tuple(words), start, end))
+                active_turn = None
+
+        for position, line in enumerate(lines):
+            match = SPEAKER_LABEL_RE.match(line)
             if match:
-                label = match.group(1).casefold()
+                flush_turn(position)
+                active_turn = (
+                    match.group(1).casefold(),
+                    list(normalize_words(line)),
+                    position,
+                )
             elif line.lstrip().startswith("["):
-                label = None
-            words = tuple(
-                re.findall(r"\w+", re.sub(label_pattern, "", line).casefold())
-            )
-            lines.append((label, words))
-        return lines
+                flush_turn(position)
+                elements.append((None, (), position, position + 1))
+            elif active_turn is not None:
+                active_turn[1].extend(normalize_words(line))
+            else:
+                elements.append((None, (), position, position + 1))
 
-    previous_lines = normalized_lines(previous_text)
-    current_lines = current_text.splitlines()
-    current_normalized = normalized_lines(current_text)
-    while current_lines:
-        label, words = current_normalized[0]
-        if len(words) < 2 or not any(
-            label is not None
-            and label == previous_label
-            and len(previous_words) >= len(words)
-            and previous_words[-len(words) :] == words
-            for previous_label, previous_words in previous_lines[-1:]
-        ):
+        flush_turn(len(lines))
+        return elements
+
+    previous_turns = []
+    for element in reversed(normalized_elements(previous_text)):
+        if element[0] is None:
             break
-        current_lines.pop(0)
-        current_normalized.pop(0)
+        previous_turns.append(element)
+    previous_turns.reverse()
+
+    current_turns = []
+    for element in normalized_elements(current_text):
+        if element[0] is None:
+            break
+        current_turns.append(element)
+
+    current_lines = current_text.splitlines()
+    for count in range(min(len(previous_turns), len(current_turns)), 0, -1):
+        previous_suffix = previous_turns[-count:]
+        current_prefix = current_turns[:count]
+        exact_turns = count > 1
+        if all(
+            len(current_words) >= 2
+            and previous_label == current_label
+            and (
+                previous_words == current_words
+                if exact_turns
+                else len(previous_words) >= len(current_words)
+                and previous_words[-len(current_words) :] == current_words
+            )
+            for (previous_label, previous_words, *_), (
+                current_label,
+                current_words,
+                *_,
+            ) in zip(previous_suffix, current_prefix)
+        ):
+            del current_lines[: current_prefix[-1][3]]
+            break
     return "\n".join(current_lines)
+
+
+def dedup_boundary_overlap(vtt, chunk_indices, timings=None):
+    """Remove exact boundary echoes between consecutive owner chunks.
+
+    Captions must be sorted by start time. Each element of chunk_indices is
+    the owner chunk index of the caption at the same position. When a
+    caption belongs to the owner chunk directly after the previous
+    surviving caption and overlaps it in time, exact same-speaker
+    word-suffix echoes are removed from the start of its text. Captions
+    whose text becomes empty are removed. Returns the surviving chunk
+    indices aligned with the surviving captions.
+    """
+    if len(vtt.captions) != len(chunk_indices):
+        raise ValueError(
+            "boundary dedup requires one chunk index per caption: "
+            f"{len(vtt.captions)} captions, {len(chunk_indices)} indices"
+        )
+    if timings is not None and len(vtt.captions) != len(timings):
+        raise ValueError("boundary dedup requires one timing per caption")
+
+    survivors = []
+    surviving_indices = []
+    surviving_ends = []
+    for position, (caption, chunk_idx) in enumerate(zip(vtt.captions, chunk_indices)):
+        if timings is None:
+            start = parse_time(caption.start)
+            end = parse_time(caption.end)
+        else:
+            start, end = timings[position]
+        if (
+            survivors
+            and chunk_idx == surviving_indices[-1] + 1
+            and start < surviving_ends[-1]
+        ):
+            text = remove_boundary_duplicate_prefix(survivors[-1].text, caption.text)
+            if not text:
+                continue
+            caption.text = text
+        survivors.append(caption)
+        surviving_indices.append(chunk_idx)
+        surviving_ends.append(end)
+    vtt.captions = survivors
+    return surviving_indices
 
 
 def file_fingerprint(path):
@@ -1041,6 +1155,11 @@ def load_manifest(chunk_dir):
 
 
 def stitch(chunk_dir, output_vtt):
+    """Stitch chunk results into one VTT.
+
+    Returns the surviving per-caption owner chunk indices when generated
+    overlap filtering applies boundary dedup, else None.
+    """
     print("Stitching chunks into final VTT...")
     final_vtt = webvtt.WebVTT()
     captions_to_write = []
@@ -1108,34 +1227,27 @@ def stitch(chunk_dir, output_vtt):
             )
 
     captions_to_write.sort(key=lambda item: item["start"])
-    deduplicated = []
+    chunk_indices = [cap["chunk_idx"] for cap in captions_to_write]
+    timings = [(cap["start"], cap["end"]) for cap in captions_to_write]
     for cap in captions_to_write:
-        if (
-            filter_generated_context
-            and deduplicated
-            and cap["chunk_idx"] == deduplicated[-1]["chunk_idx"] + 1
-            and cap["start"] < deduplicated[-1]["end"]
-        ):
-            cap["text"] = remove_boundary_duplicate_prefix(
-                deduplicated[-1]["text"], cap["text"]
-            )
-            if not cap["text"]:
-                continue
-        deduplicated.append(cap)
-
-    for cap in deduplicated:
         final_vtt.captions.append(
             webvtt.Caption(
-                format_time(cap["start"]),
-                format_time(cap["end"]),
-                wrap_labeled_text(cap["text"]),
+                format_time(cap["start"]), format_time(cap["end"]), cap["text"]
             )
         )
+
+    provenance = None
+    if filter_generated_context:
+        provenance = dedup_boundary_overlap(final_vtt, chunk_indices, timings)
+
+    for caption in final_vtt.captions:
+        caption.text = reflow_speaker_turns(caption.text)
 
     atomic_save_vtt(final_vtt, output_vtt)
     print(
         f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions."
     )
+    return provenance
 
 
 def build_identity_research_prompt(source_title=None, context_urls=(), youtube_urls=()):
@@ -1456,11 +1568,17 @@ def global_refine_subtitles(
     thinking_level,
     source_title=None,
     context_urls=None,
+    boundary_provenance=None,
 ):
     context_urls = validate_context_urls(context_urls)
     youtube_urls, ordinary_urls = classify_context_urls(context_urls)
     print(f"Loading {input_vtt} for global refinement...")
     vtt = webvtt.read(input_vtt)
+    if boundary_provenance is not None and len(vtt) != len(boundary_provenance):
+        raise ValueError(
+            "boundary dedup requires one chunk index per caption: "
+            f"{len(vtt)} captions, {len(boundary_provenance)} indices"
+        )
 
     script_lines = []
     for i, caption in enumerate(vtt):
@@ -1557,8 +1675,11 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
+    if boundary_provenance is not None:
+        dedup_boundary_overlap(vtt, boundary_provenance)
+
     for caption in vtt:
-        caption.text = wrap_labeled_text(caption.text)
+        caption.text = reflow_speaker_turns(caption.text)
 
     atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
@@ -1648,7 +1769,7 @@ def run_generation(config: GenerationConfig) -> None:
             )
             staging_vtt = Path(staging_name)
             os.close(fd)
-            stitch(chunk_dir, staging_vtt)
+            provenance = stitch(chunk_dir, staging_vtt)
             global_refine_subtitles(
                 staging_vtt,
                 str(output_path),
@@ -1658,6 +1779,7 @@ def run_generation(config: GenerationConfig) -> None:
                 REFINEMENT_THINKING_LEVEL,
                 source_title=source_title,
                 context_urls=list(config.context_urls),
+                boundary_provenance=provenance,
             )
         else:
             stitch(chunk_dir, str(config.output_path))

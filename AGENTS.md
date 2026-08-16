@@ -353,13 +353,18 @@ This removes context duplicates without changing the caption text.
 The remaining captions are sorted by absolute start time.
 Valid cross-chunk overlaps keep their timing.
 WebVTT renders overlapping cues concurrently.
-The resulting captions are written as WebVTT.
-Speaker-labeled lines longer than 42 characters are wrapped before publication.
-Existing line breaks and unlabeled text remain unchanged.
+Each complete labeled speaker turn is reflowed at 42 characters before publication.
+A labeled line plus its following unlabeled continuation lines form one turn until another speaker label or an on-screen bracket line begins.
+The turn's words are joined and wrapped as one block.
+When possible within the width limit, wrapping avoids a one-word final line.
+On-screen bracket lines and purely unlabeled text are preserved exactly.
+Separate speaker turns stay separate blocks.
+When generated overlap filtering is active, stitch returns the surviving per-caption chunk indices as in-memory provenance for refinement.
+Otherwise it returns None.
 
 Midpoint ownership can lose or duplicate a cue when the model gives inconsistent boundary timing.
-For overlapping cues from adjacent owner chunks, stitching removes a later leading line when its normalized words exactly match a same-speaker suffix of the earlier cue.
-Matches require at least two words.
+For overlapping cues from adjacent owner chunks, stitching removes later leading speaker turns when their normalized words and speakers exactly match a suffix of the earlier cue.
+Every matched turn requires at least two words.
 Any nonduplicate lines in the later cue remain unchanged.
 Repeated dialogue can be intentional.
 
@@ -438,8 +443,10 @@ Each replacement text must contain non-whitespace content.
 Validation happens before any caption is changed.
 Invalid JSON or invalid changes fail the run and preserve the previous output.
 
-Refinement changes text only.
-It never changes timestamps.
+The model refinement response changes text only and never changes timestamps.
+For generation with overlap, the validated model changes are applied first, and then the exact boundary dedup runs again using the stitch provenance before reflow and publication.
+This postprocess may remove an exact duplicate cue but does not retime surviving cues.
+Refinement-only runs and benchmark runs omit provenance and skip this dedup.
 The final VTT is saved atomically.
 
 ## Persistent work state

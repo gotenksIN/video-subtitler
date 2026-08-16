@@ -392,18 +392,6 @@ def test_timestamp_formatter_rejects_negative_values():
         gemini_subs.format_time(-0.001)
 
 
-def test_wrap_labeled_text_wraps_only_long_speaker_lines():
-    labeled = "Speaker: This labeled subtitle needs a comfortable line break."
-    unlabeled = "[This long on-screen caption must keep its original formatting]"
-
-    result = gemini_subs.wrap_labeled_text(f"{labeled}\n{unlabeled}")
-    labeled_lines, unchanged_line = result.splitlines()[:-1], result.splitlines()[-1]
-
-    assert all(len(line) <= 42 for line in labeled_lines)
-    assert " ".join(labeled_lines) == labeled
-    assert unchanged_line == unlabeled
-
-
 def test_caption_validation_sorts_canonicalizes_and_preserves_overlap():
     result = gemini_subs.validate_captions(
         [
@@ -1079,7 +1067,7 @@ def test_stitch_applies_clip_offset_and_half_open_midpoint_ownership(tmp_path):
     )
     output = tmp_path / "output.vtt"
 
-    gemini_subs.stitch(tmp_path, output)
+    provenance = gemini_subs.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [caption.text for caption in result] == [
@@ -1092,6 +1080,7 @@ def test_stitch_applies_clip_offset_and_half_open_midpoint_ownership(tmp_path):
         "00:00:09.000",
         "00:00:12.000",
     ]
+    assert provenance == [0, 1, 1]
 
 
 def test_stitch_rejects_missing_and_unexpected_chunk_results(tmp_path):
@@ -1114,7 +1103,7 @@ def test_stitch_preserves_repeated_text_and_cross_chunk_overlap(tmp_path):
     write_subtitles(tmp_path, 1, [{"start": "0", "end": "1", "text": "Again"}])
     output = tmp_path / "output.vtt"
 
-    gemini_subs.stitch(tmp_path, output)
+    provenance = gemini_subs.stitch(tmp_path, output)
 
     result = webvtt.read(output)
     assert [caption.text for caption in result] == ["Again", "Again"]
@@ -1122,6 +1111,40 @@ def test_stitch_preserves_repeated_text_and_cross_chunk_overlap(tmp_path):
     assert result[0].end == "00:00:05.500"
     assert result[1].start == "00:00:05.000"
     assert result[1].end == "00:00:06.000"
+    assert provenance is None
+
+
+def test_stitch_reflows_complete_turns_without_losing_boundaries(tmp_path):
+    text = (
+        "Host: This generic turn includes several ordinary\n"
+        "[On-screen banner remains unchanged]\n"
+        "Plain unlabeled line remains unchanged\n"
+        "Guest: This separate turn also needs a comfortable line break"
+    )
+    write_layout(tmp_path, [("chunk_000.mp4", 0, 5)])
+    write_subtitles(tmp_path, 0, [{"start": "1", "end": "3", "text": text}])
+    output = tmp_path / "output.vtt"
+
+    gemini_subs.stitch(tmp_path, output)
+
+    caption = webvtt.read(output)[0]
+    lines = caption.text.splitlines()
+    assert (caption.start, caption.end) == ("00:00:01.000", "00:00:03.000")
+    assert " ".join(caption.text.split()) == " ".join(text.split())
+    assert sum(line.startswith("Host:") for line in lines) == 1
+    assert sum(line.startswith("Guest:") for line in lines) == 1
+    assert all(len(line.split()) != 1 for line in lines[1:-1])
+    assert "[On-screen banner remains unchanged]" in lines
+    assert "Plain unlabeled line remains unchanged" in lines
+    assert all(
+        len(line) <= 42
+        for line in lines
+        if line
+        not in {
+            "[On-screen banner remains unchanged]",
+            "Plain unlabeled line remains unchanged",
+        }
+    )
 
 
 def test_stitch_removes_exact_boundary_echo_and_keeps_new_text(tmp_path):
@@ -1148,18 +1171,19 @@ def test_stitch_removes_exact_boundary_echo_and_keeps_new_text(tmp_path):
             {
                 "start": "1",
                 "end": "2",
-                "text": "Host: Repeated phrase.\nGuest: Keep this reply.",
+                "text": "Host: Repeated phrase.\nHost: Keep this detail.",
             }
         ],
     )
     output = tmp_path / "output.vtt"
 
-    gemini_subs.stitch(tmp_path, output)
+    provenance = gemini_subs.stitch(tmp_path, output)
 
     assert [caption.text for caption in webvtt.read(output)] == [
         "Host: Intro repeated phrase.",
-        "Guest: Keep this reply.",
+        "Host: Keep this detail.",
     ]
+    assert provenance == [0, 1]
 
 
 @pytest.mark.parametrize(
@@ -1195,12 +1219,13 @@ def test_stitch_preserves_ambiguous_boundary_repetition(
     )
     output = tmp_path / "output.vtt"
 
-    gemini_subs.stitch(tmp_path, output)
+    provenance = gemini_subs.stitch(tmp_path, output)
 
     assert [caption.text for caption in webvtt.read(output)] == [
         earlier_text,
         later_text,
     ]
+    assert provenance == [0, 1]
 
 
 def test_refinement_prompt_contains_script_title_and_identity_context():
@@ -1334,6 +1359,141 @@ def test_global_refinement_changes_only_text_and_preserves_timestamps(
         ("00:00:00.000", "00:00:01.000"),
         ("00:00:02.000", "00:00:03.000"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("earlier_text", "refined_text", "provenance", "expected_texts"),
+    [
+        (
+            "Host: First unique sentence",
+            "Host: First unique sentence",
+            [0, 1],
+            ["Host: First unique sentence"],
+        ),
+        (
+            "Host: Intro before the repeated boundary\nphrase",
+            "Host: Repeated boundary\nphrase",
+            [0, 1],
+            ["Host: Intro before the repeated\nboundary phrase"],
+        ),
+        (
+            "Host: Shared opening.\nGuest: Shared response.",
+            "Host: Shared opening.\nGuest: Shared response.",
+            [0, 1],
+            ["Host: Shared opening.\nGuest: Shared response."],
+        ),
+        (
+            "Host: Shared opening.\nGuest: Shared response.",
+            ("Host: Shared opening.\nGuest: Shared response.\nNarrator: Fresh detail."),
+            [0, 1],
+            [
+                "Host: Shared opening.\nGuest: Shared response.",
+                "Narrator: Fresh detail.",
+            ],
+        ),
+        (
+            "Host: Shared opening.\nGuest: Yes.",
+            "Host: Shared opening.\nGuest: Yes.",
+            [0, 1],
+            [
+                "Host: Shared opening.\nGuest: Yes.",
+                "Host: Shared opening.\nGuest: Yes.",
+            ],
+        ),
+        (
+            "Host: Shared opening.\n[On-screen card]",
+            "Host: Shared opening.",
+            [0, 1],
+            ["Host: Shared opening.\n[On-screen card]", "Host: Shared opening."],
+        ),
+        (
+            "Host: Shared opening.\n[On-screen card]\nGuest: Shared response.",
+            "Host: Shared opening.\n[On-screen card]\nGuest: Shared response.",
+            [0, 1],
+            [
+                "Host: Shared opening.\n[On-screen card]\nGuest: Shared response.",
+                "Host: Shared opening.\n[On-screen card]\nGuest: Shared response.",
+            ],
+        ),
+        (
+            "Host: First unique sentence",
+            "Host: First unique sentence\nGuest: New follow-up line",
+            [0, 1],
+            ["Host: First unique sentence", "Guest: New follow-up line"],
+        ),
+        (
+            "Host: Repeated words",
+            "Host: Repeated words\nHost: New detail",
+            [0, 1],
+            ["Host: Repeated words", "Host: New detail"],
+        ),
+        (
+            "Host: First unique sentence",
+            "Host: First unique sentence",
+            None,
+            ["Host: First unique sentence", "Host: First unique sentence"],
+        ),
+    ],
+)
+def test_refinement_applies_boundary_cleanup(
+    tmp_path, monkeypatch, earlier_text, refined_text, provenance, expected_texts
+):
+    source = tmp_path / "staging.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(
+        source,
+        [
+            ("00:00:00.000", "00:00:04.000", earlier_text),
+            ("00:00:03.000", "00:00:05.000", "Guest: Different text"),
+        ],
+    )
+    client = FakeRefinementClient(
+        "refiner",
+        [
+            research_call(queries=["who is the host"]),
+            refinement_call(
+                [json.dumps({"changes": [{"id": 1, "text": refined_text}]})]
+            ),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        boundary_provenance=provenance,
+    )
+
+    result = webvtt.read(output)
+    assert [caption.text for caption in result] == expected_texts
+    assert [(caption.start, caption.end) for caption in result] == [
+        ("00:00:00.000", "00:00:04.000"),
+        ("00:00:03.000", "00:00:05.000"),
+    ][: len(expected_texts)]
+
+
+def test_refinement_rejects_mismatched_provenance_before_publication(tmp_path):
+    source = tmp_path / "staging.vtt"
+    output = tmp_path / "output.vtt"
+    write_vtt(source, [("00:00:00.000", "00:00:01.000", "Only cue")])
+    output.write_text("previous output", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="one chunk index per caption"):
+        gemini_subs.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            boundary_provenance=[],
+        )
+
+    assert output.read_text(encoding="utf-8") == "previous output"
 
 
 def test_invalid_refinement_does_not_mutate_or_publish(tmp_path, monkeypatch):
@@ -2092,6 +2252,51 @@ def test_generation_passes_source_title_to_chunks_and_refinement(tmp_path, monke
 
     assert gemini_subs.process_chunks.call_args.args[-1] == "source"
     assert received["refinement_title"] == "source"
+
+
+def test_generation_removes_boundary_echo_created_by_refinement(tmp_path, monkeypatch):
+    config, work = prepare_generation_config(tmp_path, monkeypatch)
+    chunks = [
+        {"idx": 0, "name": "chunk_000.mp4", "start": 0, "end": 5},
+        {"idx": 1, "name": "chunk_001.mp4", "start": 5, "end": 10},
+    ]
+    write_layout(
+        work,
+        [(chunk["name"], chunk["start"], chunk["end"]) for chunk in chunks],
+        overlap=1,
+    )
+    write_subtitles(
+        work,
+        0,
+        [{"start": "1", "end": "5.5", "text": "Host: Shared phrase."}],
+    )
+    write_subtitles(
+        work,
+        1,
+        [{"start": "1", "end": "2", "text": "Guest: Different phrase."}],
+    )
+    manifest = make_manifest(overlap=1)
+    monkeypatch.setattr(
+        gemini_subs, "build_manifest", lambda _config: (manifest, str(work))
+    )
+    monkeypatch.setattr(gemini_subs, "list_chunks", lambda _path: chunks)
+    client = FakeRefinementClient(
+        "model",
+        [
+            research_call(queries=["who is the host"]),
+            refinement_call(
+                ['{"changes": [{"id": 1, "text": "Host: Shared phrase."}]}']
+            ),
+        ],
+    )
+    monkeypatch.setattr(gemini_subs, "create_client", lambda *_args: client)
+
+    gemini_subs.run_generation(config)
+
+    result = webvtt.read(config.output_path)
+    assert [(caption.start, caption.end, caption.text) for caption in result] == [
+        ("00:00:01.000", "00:00:05.500", "Host: Shared phrase.")
+    ]
 
 
 def test_successful_generation_without_refinement_cleans_work_before_unlock(
