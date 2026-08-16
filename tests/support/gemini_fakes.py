@@ -54,10 +54,6 @@ class ScriptedGeminiClient:
     def models(self):
         return self
 
-    @property
-    def pending(self):
-        return len(self._pending)
-
     def generate_content_stream(self, **kwargs):
         if not self._pending:
             raise AssertionError("the pipeline issued an unexpected Gemini request")

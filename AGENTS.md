@@ -167,6 +167,8 @@ Each value must be an absolute HTTP or HTTPS URL with a host.
 Malformed values are rejected before any media processing or API request.
 Duplicate values are removed while preserving their first occurrence.
 Public YouTube watch or share URLs are direct video inputs for a separate YouTube analysis pass.
+Watch URLs use the `youtube.com`, `www.youtube.com`, or `m.youtube.com` host, the `/watch` path, and a nonempty `v` query parameter.
+Share URLs use the `youtu.be` host and exactly one nonempty path segment.
 All other URLs use the URL Context tool.
 
 The `scripts/subtitle.sh` wrapper uses the CLI default API worker count.
@@ -212,6 +214,7 @@ It sends the complete VTT script to the refinement model.
 It derives the source title from the input VTT filename.
 In-place VTT refinement is allowed because the write is atomic.
 Repeatable `--context-url` values add grounding context as in normal generation.
+Refinement failures print `Error: ...` and exit 1 without a traceback, matching generation mode.
 
 ### CLI validation
 
@@ -283,6 +286,13 @@ ffmpeg -y -i <video_file> -map 0:v:0 -map 0:a? -sn -c copy \
 Stream copy cuts at keyframes.
 Actual chunk duration can differ from the requested duration.
 The segment index `segments.csv` is the source of truth for chunk start and end times.
+
+Each row must contain a nonempty chunk name and numeric start and end timestamps.
+Invalid timestamps are non-finite values, negative starts, or non-positive durations.
+When any nonblank row is malformed or has invalid timestamps, the complete index is invalid.
+A partial index is never reused; the split regenerates it.
+A reusable index must list exactly the stored `chunk_NNN.mp4` or `chunk_NNN.webm` files.
+Missing or unexpected chunk files invalidate the split.
 
 Each parsed segment has:
 
@@ -548,6 +558,12 @@ This postprocess may remove an exact duplicate cue but does not retime surviving
 Refinement-only runs and benchmark runs omit provenance and skip this post-refinement boundary dedup.
 The final VTT is saved atomically.
 
+Gemini operations are reusable library functions and report failures to callers.
+Missing Google Search grounding, missing or failed context URL retrieval, unavailable YouTube video context, and invalid refinement responses raise `RuntimeError` with diagnostic text.
+They never terminate the process directly.
+The CLI modes convert these errors into `Error: ...` messages and exit status 1 without a traceback.
+Generation and refinement-only modes behave the same way.
+
 ## Persistent work state and caching
 
 The work directory is:
@@ -623,6 +639,8 @@ On retry:
 
 1. A valid split marker and non-empty listed chunks skip FFmpeg splitting.
 2. An invalid split removes the marker and old split artifacts before regeneration.
+   A malformed `segments.csv` row invalidates the complete index, so the split regenerates instead of reusing a partial index.
+   A valid-looking index that omits or adds a stored chunk is also invalid.
 3. A valid overlap clip is reused after its container duration is checked with FFprobe.
 4. A valid subtitle JSON file is loaded without an additional API request.
 5. Invalid JSON or invalid caption timing is deleted and regenerated.
@@ -737,12 +755,19 @@ Run only checks relevant to the changed files.
 | --- | --- |
 | Documentation or instructions only | No code validation. Check Markdown semantics manually. |
 | `scripts/*.sh` | `shellcheck` on each changed shell script. |
-| `gemini_subs.py` or `modules/*.py` | `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`. |
-| Core behavior or `tests/` | `uv run pytest`. |
-| CLI arguments in `gemini_subs.py` | `uv run python gemini_subs.py --help`. |
+| `modules/core.py` | `uv run pytest tests/modules/core`. |
+| `modules/io.py` | `uv run pytest tests/modules/io`. |
+| `modules/media.py` | `uv run pytest tests/modules/media`. |
+| `modules/gemini.py` | `uv run pytest tests/modules/gemini`. |
+| `modules/pipeline.py` | `uv run pytest tests/modules/pipeline`. |
+| `gemini_subs.py` | `uv run pytest tests/cli` and `uv run python gemini_subs.py --help`. |
+| `tests/` | Run the changed test file or its owning module directory. |
+| Python production or test files | `uv run ruff check .`, `uv run ruff format --check .`, and `uv run python -m compileall -q .`. |
 | `scripts/benchmark.py` | Run `./scripts/benchmark.py --help` and `uv run ruff check .` when changed. |
 
-The full test suite is run with:
+When a change affects more than one module, run each affected module's test directory.
+The full suite is not required unless the user requests it or the change has no clear module boundary.
+Run the full suite with:
 
 ```bash
 uv run pytest

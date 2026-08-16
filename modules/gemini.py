@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 
 import webvtt
 from google import genai
@@ -14,11 +13,8 @@ INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 DEFAULT_CHUNK_MODEL = "gemini-3.7-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "medium"
-
-
-def default_chunk_thinking_level(model_name):
-    return "high"
 
 
 def validate_thinking_level_for_model(model_name, thinking_level):
@@ -446,11 +442,10 @@ def verify_refinement_grounding(
 ):
     """Fail refinement before publication when grounding requirements are unmet."""
     if not search_queries and not grounded_sources:
-        print(
-            "Error: The identity research response has no Google Search grounding. "
+        raise RuntimeError(
+            "The identity research response has no Google Search grounding. "
             "Failing without publishing output."
         )
-        sys.exit(1)
 
     retrieved_by_identity = {
         core.url_identity(url): status for url, status in retrieved_urls.items()
@@ -458,21 +453,19 @@ def verify_refinement_grounding(
     for url in context_urls:
         status = retrieved_by_identity.get(core.url_identity(url))
         if status is None:
-            print(
-                f"Error: Context URL {url} was not retrieved. "
+            raise RuntimeError(
+                f"Context URL {url} was not retrieved. "
                 "Failing without publishing output."
             )
-            sys.exit(1)
         if (
             str(retrieval_status_value(status)).upper()
             != "URL_RETRIEVAL_STATUS_SUCCESS"
         ):
-            print(
-                f"Error: Context URL {url} retrieval failed with "
+            raise RuntimeError(
+                f"Context URL {url} retrieval failed with "
                 f"{retrieval_status_value(status)}. "
                 "Failing without publishing output."
             )
-            sys.exit(1)
 
 
 def print_refinement_grounding(
@@ -605,10 +598,10 @@ def global_refine_subtitles(
         refinements = core.RefinementResponse.model_validate_json(full_json_text)
         core.validate_refinement_changes(refinements.changes, len(vtt))
     except ValueError as e:
-        print(f"Error parsing or validating model response: {e}")
-        print("Raw response:")
-        print(full_json_text)
-        sys.exit(1)
+        raise RuntimeError(
+            "Parsing or validating the model refinement response failed: "
+            f"{e}\nRaw response:\n{full_json_text}"
+        ) from e
 
     changes = refinements.changes
     print(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")

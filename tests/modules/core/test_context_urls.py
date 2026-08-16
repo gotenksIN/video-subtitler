@@ -51,6 +51,10 @@ def test_youtube_video_url_detection_accepts_watch_and_share_forms(url):
         "https://www.youtube.com/playlist?list=x",
         "https://example.com/watch?v=abc",
         "https://youtu.be/",
+        "https://youtu.be/abc/extra",
+        "https://youtube.com/watch",
+        "https://youtube.com/watch?v=",
+        "https://music.youtube.com/watch?v=abc",
         "https://notyoutube.com/watch?v=abc",
     ],
 )

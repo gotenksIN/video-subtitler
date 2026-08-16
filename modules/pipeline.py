@@ -39,7 +39,7 @@ class GenerationConfig:
     @property
     def chunk_thinking_level(self) -> str:
         """Resolved chunk thinking level used by the manifest and API calls."""
-        return self.thinking_level or gemini.default_chunk_thinking_level(self.model)
+        return self.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
 
 
 def build_manifest(config: GenerationConfig):

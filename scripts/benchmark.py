@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument("--workers", type=int, default=pipeline.DEFAULT_API_WORKERS)
     parser.add_argument(
         "--thinking-level",
-        choices=("minimal", "low", "medium", "high"),
+        choices=gemini.THINKING_LEVELS,
         default=None,
         help=(
             "Gemini thinking level. Default: high. "

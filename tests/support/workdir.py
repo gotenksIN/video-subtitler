@@ -4,8 +4,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import webvtt
-
 from modules import io
 
 
@@ -37,14 +35,6 @@ def write_chunk_subtitles(directory, index, captions):
     Path(directory, f"subtitle_chunk_{index:03d}.json").write_text(
         json.dumps(captions), encoding="utf-8"
     )
-
-
-def write_vtt_file(path, captions):
-    value = webvtt.WebVTT()
-    value.captions.extend(
-        webvtt.Caption(start, end, text) for start, end, text in captions
-    )
-    value.save(path)
 
 
 class FakeMediaTools:

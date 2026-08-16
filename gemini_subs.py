@@ -112,16 +112,20 @@ def main():
                 "Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
             )
             sys.exit(1)
-        gemini.global_refine_subtitles(
-            args.video_file_or_vtt,
-            args.output,
-            args.api_key,
-            args.base_url,
-            args.refine_model or args.model,
-            gemini.REFINEMENT_THINKING_LEVEL,
-            source_title=core.derive_source_title(Path(args.video_file_or_vtt)),
-            context_urls=context_urls,
-        )
+        try:
+            gemini.global_refine_subtitles(
+                args.video_file_or_vtt,
+                args.output,
+                args.api_key,
+                args.base_url,
+                args.refine_model or args.model,
+                gemini.REFINEMENT_THINKING_LEVEL,
+                source_title=core.derive_source_title(Path(args.video_file_or_vtt)),
+                context_urls=context_urls,
+            )
+        except Exception as e:  # noqa: BLE001 - Convert refinement failures to CLI errors.
+            print(f"Error: {e}")
+            sys.exit(1)
         sys.exit(0)
 
     config = pipeline.GenerationConfig(

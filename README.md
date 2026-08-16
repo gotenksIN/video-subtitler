@@ -137,7 +137,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
 - `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
   Repeat the option to supply several URLs.
-  Public YouTube watch or share URLs (`youtube.com` and `youtu.be`) become direct video inputs for a separate YouTube analysis pass.
+  Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, or `m.youtube.com` with a `/watch` path and nonempty `v` query, or `youtu.be` with exactly one path segment) become direct video inputs for a separate YouTube analysis pass.
   Other URLs use the URL Context tool.
   Refinement fails if any other URL is not retrieved successfully.
   An invalid, private, or unavailable YouTube video fails the analysis request before publication.
@@ -152,18 +152,36 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - Set `--overlap 0` to disable overlap re-encoding and process stream-copy chunks directly.
 - Keep inline video requests below 20 MiB; reduce `--chunk-dur` if chunk uploads fail.
 - When a chunk fails validation or API processing, stitching stops and the work directory is preserved for retry.
+  A malformed segment index or missing chunk file invalidates the split and regenerates it on retry.
   Successful runs clean up the temporary work directory.
 - Output WebVTT files are ignored by Git by default.
   Move or rename files to track specific subtitle outputs.
 
-## Development checks
+## Development
+
+Production code is organized into modular components under `modules/`.
+`modules/pipeline.py` orchestrates generation and `gemini_subs.py` parses and dispatches CLI requests.
+Tests under `tests/` mirror these module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
+
+Run code quality checks and tests:
 
 ```bash
+# Lint, format, and static analysis
 shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh
 uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall -q .
+
+# Run targeted module tests or the complete test suite
+uv run pytest tests/modules/core
+uv run pytest tests/modules/io
+uv run pytest tests/modules/media
+uv run pytest tests/modules/gemini
+uv run pytest tests/modules/pipeline
+uv run pytest tests/cli
 uv run pytest
-uv run gemini_subs.py --help
+
+# Verify CLI entry points
+uv run python gemini_subs.py --help
 ./scripts/benchmark.py --help
 ```

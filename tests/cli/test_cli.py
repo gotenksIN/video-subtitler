@@ -258,5 +258,6 @@ def test_refine_only_with_unparsable_vtt_fails_before_any_api_request(tmp_path):
 
     assert process.returncode == 1
     text = output(process)
-    assert "Invalid format" in text
+    assert "Error: Invalid format" in text
     assert "Researching speaker identities" not in text
+    assert "Traceback" not in text

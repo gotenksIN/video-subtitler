@@ -1,5 +1,6 @@
 """FFmpeg and FFprobe operations for probing, splitting, and overlap clips."""
 
+import math
 import os
 import re
 import subprocess
@@ -57,10 +58,20 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
 
     complete_marker = os.path.join(chunk_dir, SPLIT_COMPLETE_MARKER)
     chunks = list_chunks(chunk_dir)
-    split_is_valid = chunks and all(
-        os.path.isfile(path := os.path.join(chunk_dir, chunk["name"]))
-        and os.path.getsize(path) > 0
-        for chunk in chunks
+    listed_chunks = {chunk["name"] for chunk in chunks}
+    stored_chunks = {
+        name
+        for name in os.listdir(chunk_dir)
+        if re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
+        and os.path.isfile(os.path.join(chunk_dir, name))
+    }
+    split_is_valid = (
+        bool(chunks)
+        and listed_chunks == stored_chunks
+        and all(
+            os.path.getsize(os.path.join(chunk_dir, chunk["name"])) > 0
+            for chunk in chunks
+        )
     )
     if os.path.exists(complete_marker) and split_is_valid:
         print("Chunks already exist, skipping splitting.")
@@ -108,20 +119,33 @@ def list_chunks(chunk_dir):
     chunks = []
     with open(csv_path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
-            parts = line.strip().split(",")
-            if len(parts) >= 3:
-                name = parts[0]
+            row = line.strip()
+            if not row:
+                continue
+            parts = row.split(",")
+            if len(parts) < 3 or not parts[0]:
+                return []
+            try:
                 start = float(parts[1])
                 end = float(parts[2])
-                chunks.append(
-                    {
-                        "idx": i,
-                        "name": name,
-                        "start": start,
-                        "end": end,
-                        "duration": end - start,
-                    }
-                )
+            except ValueError:
+                return []
+            if (
+                not math.isfinite(start)
+                or not math.isfinite(end)
+                or start < 0
+                or end <= start
+            ):
+                return []
+            chunks.append(
+                {
+                    "idx": i,
+                    "name": parts[0],
+                    "start": start,
+                    "end": end,
+                    "duration": end - start,
+                }
+            )
     return chunks
 
 

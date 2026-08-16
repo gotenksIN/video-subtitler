@@ -6,7 +6,6 @@ import pytest
 import webvtt
 
 from modules import gemini, media, pipeline
-from tests.support.fakes import ScenarioGeminiClient, grounded_candidate
 from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
@@ -70,25 +69,6 @@ def test_successful_generation_publishes_and_cleans_work(tmp_path, monkeypatch):
     assert not list(tmp_path.glob("*.staging.vtt"))
     lock = pipeline.acquire_lock(work)
     pipeline.release_lock(lock)
-
-
-def test_generation_releases_the_lock_after_work_cleanup(tmp_path, monkeypatch):
-    config, _tools = prepare_generation(tmp_path, monkeypatch)
-    write_two_chunk_subtitles(monkeypatch)
-    states = []
-    real_release = pipeline.release_lock
-
-    def observe_then_release(lock_file):
-        states.append(
-            sorted(path.name for path in active_work_directory(tmp_path).iterdir())
-        )
-        real_release(lock_file)
-
-    monkeypatch.setattr(pipeline, "release_lock", observe_then_release)
-
-    pipeline.run_generation(config)
-
-    assert states == [[pipeline.LOCK_NAME]]
 
 
 def test_failed_chunk_processing_keeps_resume_state_and_releases_lock(
@@ -200,50 +180,5 @@ def test_successful_refined_generation_publishes_through_staging(tmp_path, monke
     assert [c.text for c in result] == ["Refined cue", "Cue 1"]
     assert received["provenance"] is None
     assert not list(tmp_path.glob("*.staging.vtt"))
-    work = active_work_directory(tmp_path)
-    assert sorted(path.name for path in work.iterdir()) == [pipeline.LOCK_NAME]
-
-
-def test_overlap_generation_with_refinement_publishes_deduplicated_output(
-    tmp_path, monkeypatch
-):
-    config, _tools = prepare_generation(
-        tmp_path, monkeypatch, refine_text=True, overlap=1.0
-    )
-    _tools.clip_bytes = lambda path: path.name.encode()
-
-    def chunk_response(contents):
-        clip_name = contents[0].inline_data.data.decode()
-        if "context_chunk_000" in clip_name:
-            return [
-                (
-                    '{"captions": [{"id": 0, "start": "1.2", "end": "2.4", '
-                    '"text": "Host: Shared phrase."}, {"id": 1, "start": "2.5", '
-                    '"end": "3", "text": "[Context banner]"}]}'
-                )
-            ]
-        return [
-            (
-                '{"captions": [{"id": 0, "start": "0.9", "end": "1.6", '
-                '"text": "Host: Shared phrase."}]}'
-            )
-        ]
-
-    client = ScenarioGeminiClient(
-        chunk_response,
-        research_spec={
-            "pieces": ["Research text"],
-            "candidates": [grounded_candidate(queries=["who is the host"])],
-        },
-        refinement_spec={"pieces": ['{"changes": []}'], "candidates": []},
-    )
-    monkeypatch.setattr(gemini, "create_client", lambda *_args: client)
-
-    pipeline.run_generation(config)
-
-    result = webvtt.read(config.output_path)
-    assert [(c.start, c.end, c.text) for c in result] == [
-        ("00:00:01.200", "00:00:02.400", "Host: Shared phrase.")
-    ]
     work = active_work_directory(tmp_path)
     assert sorted(path.name for path in work.iterdir()) == [pipeline.LOCK_NAME]

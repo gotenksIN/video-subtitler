@@ -197,10 +197,11 @@ def is_youtube_video_url(url):
     parsed = urllib.parse.urlsplit(url)
     host = (parsed.hostname or "").lower()
     if host == "youtu.be":
-        return bool(parsed.path.strip("/"))
-    return (
-        host == "youtube.com" or host.endswith(".youtube.com")
-    ) and parsed.path == "/watch"
+        return len([part for part in parsed.path.split("/") if part]) == 1
+    if host not in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        return False
+    video_ids = urllib.parse.parse_qs(parsed.query).get("v", [])
+    return parsed.path == "/watch" and bool(video_ids and video_ids[0])
 
 
 def classify_context_urls(urls):

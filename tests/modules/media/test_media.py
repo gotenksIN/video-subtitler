@@ -344,6 +344,33 @@ def test_corrupted_chunk_triggers_split_regeneration(
         assert _container_duration(media_tools["ffprobe"], path) > 0
 
 
+@pytest.mark.parametrize("corruption", ["malformed", "truncated"])
+def test_invalid_segment_index_triggers_split_regeneration(
+    video_fixture, media_tools, tmp_path, corruption
+):
+    chunk_dir = tmp_path / "work"
+    manifest = {"chunk_ext": video_fixture["ext"]}
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+    original_names = [chunk["name"] for chunk in media.list_chunks(str(chunk_dir))]
+    if corruption == "malformed":
+        index = f"{original_names[0]},0,not-a-number\n"
+        (chunk_dir / "segments.csv").write_text(index, encoding="utf-8")
+    else:
+        index = f"{original_names[0]},0,1\n"
+        (chunk_dir / "segments.csv").write_text(index, encoding="utf-8")
+
+    media.split_video(str(video_fixture["path"]), str(chunk_dir), 2, manifest)
+
+    marker = chunk_dir / media.SPLIT_COMPLETE_MARKER
+    assert marker.read_text(encoding="utf-8") == "ok\n"
+    regenerated = media.list_chunks(str(chunk_dir))
+    assert [chunk["name"] for chunk in regenerated] == original_names
+    for chunk in regenerated:
+        path = chunk_dir / chunk["name"]
+        assert path.stat().st_size > 0
+        assert _container_duration(media_tools["ffprobe"], path) > 0
+
+
 def test_failed_split_leaves_no_completion_marker(video_fixture, tmp_path):
     chunk_dir = tmp_path / "work"
     chunk_dir.mkdir()

@@ -148,9 +148,7 @@ def test_identity_research_collects_grounding_from_later_stream_chunks(
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
 
 
-def test_missing_search_grounding_fails_before_publication(
-    tmp_path, monkeypatch, capsys
-):
+def test_missing_search_grounding_fails_before_publication(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
     )
@@ -164,18 +162,15 @@ def test_missing_search_grounding_fails_before_publication(
     )
     use_client(monkeypatch, client)
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(RuntimeError, match="no Google Search grounding"):
         gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
-    assert "no Google Search grounding" in capsys.readouterr().out
     assert len(client.requests) == 1
     assert output.read_text(encoding="utf-8") == "previous"
     assert read_captions(source)[0][2] == "First"
 
 
-def test_missing_context_url_retrieval_fails_before_publication(
-    tmp_path, monkeypatch, capsys
-):
+def test_missing_context_url_retrieval_fails_before_publication(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
     )
@@ -186,7 +181,7 @@ def test_missing_context_url_retrieval_fails_before_publication(
     )
     use_client(monkeypatch, client)
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(RuntimeError, match="was not retrieved"):
         gemini.global_refine_subtitles(
             source,
             output,
@@ -197,14 +192,11 @@ def test_missing_context_url_retrieval_fails_before_publication(
             context_urls=["https://example.com/notes"],
         )
 
-    assert "was not retrieved" in capsys.readouterr().out
     assert len(client.requests) == 1
     assert output.read_text(encoding="utf-8") == "previous"
 
 
-def test_failed_context_url_retrieval_fails_before_publication(
-    tmp_path, monkeypatch, capsys
-):
+def test_failed_context_url_retrieval_fails_before_publication(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
     )
@@ -223,7 +215,9 @@ def test_failed_context_url_retrieval_fails_before_publication(
     )
     use_client(monkeypatch, client)
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(
+        RuntimeError, match="retrieval failed with URL_RETRIEVAL_STATUS_PAYWALL"
+    ):
         gemini.global_refine_subtitles(
             source,
             output,
@@ -234,9 +228,6 @@ def test_failed_context_url_retrieval_fails_before_publication(
             context_urls=["https://example.com/notes"],
         )
 
-    assert "retrieval failed with URL_RETRIEVAL_STATUS_PAYWALL" in (
-        capsys.readouterr().out
-    )
     assert len(client.requests) == 1
     assert output.read_text(encoding="utf-8") == "previous"
 
@@ -463,9 +454,7 @@ def test_research_sdk_failure_preserves_previous_output(tmp_path, monkeypatch):
     assert output.read_text(encoding="utf-8") == "previous"
 
 
-def test_invalid_refinement_json_preserves_source_and_output(
-    tmp_path, monkeypatch, capsys
-):
+def test_invalid_refinement_json_preserves_source_and_output(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt",
         [
@@ -483,10 +472,9 @@ def test_invalid_refinement_json_preserves_source_and_output(
     )
     use_client(monkeypatch, client)
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(RuntimeError, match=r"Raw response:\nnot json"):
         gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
-    assert "Raw response:" in capsys.readouterr().out
     assert read_captions(source)[0][2] == "First"
     assert output.read_text(encoding="utf-8") == "previous"
 
@@ -516,7 +504,9 @@ def test_invalid_refinement_changes_rejected_without_mutation(
     )
     use_client(monkeypatch, client)
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(
+        RuntimeError, match="Parsing or validating the model refinement response failed"
+    ):
         gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert read_captions(source) == [

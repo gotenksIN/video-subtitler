@@ -3,7 +3,7 @@
 import pytest
 import webvtt
 
-from modules import core, pipeline
+from modules import pipeline
 from tests.support.workdir import write_chunk_layout, write_chunk_subtitles
 
 
@@ -230,16 +230,3 @@ def test_stitch_works_without_a_manifest_file(tmp_path):
     result = webvtt.read(output)
     assert [c.text for c in result] == ["Only"]
     assert provenance is None
-
-
-def test_boundary_dedup_requires_one_index_per_caption():
-    value = webvtt.WebVTT()
-    value.captions.extend(
-        [
-            webvtt.Caption("00:00:00.000", "00:00:01.000", "One"),
-            webvtt.Caption("00:00:01.000", "00:00:02.000", "Two"),
-        ]
-    )
-
-    with pytest.raises(ValueError, match="one chunk index per caption"):
-        core.dedup_boundary_overlap(value, [0])

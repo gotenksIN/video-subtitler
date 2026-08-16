@@ -22,7 +22,7 @@ Each test imports behavior from its owning module.
 | --- | --- |
 | Core | Accepted timestamp forms, exact millisecond rounding, invalid interval rejection, caption ordering, end clamping, payload validation, multiline text preservation, source-title derivation, context URL validation and classification, and boundary deduplication. |
 | Io | Atomic JSON and VTT publication with failure-safe target preservation. |
-| Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment timing, split recovery, edge-clamped windows, decodable overlap clips for VP9, H.264, and HEVC, and split artifact cleanup. |
+| Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment index validation, split recovery, edge-clamped windows, decodable overlap clips for VP9, H.264, and HEVC, and split artifact cleanup. |
 | Gemini | Client and request configuration, tool routing, structured response validation, streamed response assembly, grounding requirements, URL retrieval status, direct YouTube inputs, caption cache behavior, text-only refinement, and failure-safe output. |
 | Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent outcomes, midpoint ownership, provenance, staging, recovery, and failed-run retention. |
 | CLI | Help, parsing errors, validation precedence, environment configuration, mode-specific preflight behavior, stable diagnostic meaning, and exit status. |
