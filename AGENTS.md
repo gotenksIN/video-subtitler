@@ -733,6 +733,10 @@ Use ASCII for documentation, code, and comments unless existing content requires
 Keep comments rare and explain non-obvious behavior.
 Use atomic output publication for final files.
 Do not use legacy `google-generativeai`.
+When a Gemini request does not require automatic function calling, construct its config with `build_content_config()` so AFC is disabled explicitly instead of relying on the SDK default.
+This requirement applies to structured, plain-text, tool-enabled, and tool-free requests that do not require automatic function calling.
+Test each Gemini request type at the adapter boundary.
+Assert the behaviorally required request configuration, including disabled AFC, without binding coverage to config builder structure.
 Do not add automatic cache revisions without approval.
 Do not change timing semantics casually.
 Do not remove failed-run artifacts that support resume.

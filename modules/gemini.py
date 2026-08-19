@@ -33,20 +33,25 @@ def create_client(api_key, base_url):
     return genai.Client(**kwargs)
 
 
+def build_content_config(**kwargs):
+    """Build a config with AFC disabled for direct Models requests."""
+    kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
+        disable=True
+    )
+    return types.GenerateContentConfig(**kwargs)
+
+
 def generate_content_config(thinking_level):
     kwargs = {
         "temperature": 0.0,
         "response_mime_type": "application/json",
         "response_schema": core.SubtitleResponse,
-        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
-            disable=True
-        ),
     }
     if thinking_level is not None:
         kwargs["thinking_config"] = types.ThinkingConfig(
             thinking_level=thinking_level.upper()
         )
-    return types.GenerateContentConfig(**kwargs)
+    return build_content_config(**kwargs)
 
 
 def build_generation_prompt(
@@ -373,7 +378,7 @@ def build_research_config(thinking_level, ordinary_urls):
         kwargs["thinking_config"] = types.ThinkingConfig(
             thinking_level=thinking_level.upper()
         )
-    return types.GenerateContentConfig(**kwargs)
+    return build_content_config(**kwargs)
 
 
 def build_youtube_analysis_config(thinking_level):
@@ -383,7 +388,7 @@ def build_youtube_analysis_config(thinking_level):
         kwargs["thinking_config"] = types.ThinkingConfig(
             thinking_level=thinking_level.upper()
         )
-    return types.GenerateContentConfig(**kwargs)
+    return build_content_config(**kwargs)
 
 
 def build_refinement_config(thinking_level):
@@ -392,15 +397,12 @@ def build_refinement_config(thinking_level):
         "temperature": 0.0,
         "response_mime_type": "application/json",
         "response_schema": core.RefinementResponse,
-        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
-            disable=True
-        ),
     }
     if thinking_level is not None:
         kwargs["thinking_config"] = types.ThinkingConfig(
             thinking_level=thinking_level.upper()
         )
-    return types.GenerateContentConfig(**kwargs)
+    return build_content_config(**kwargs)
 
 
 def collect_stream_metadata(response_stream):

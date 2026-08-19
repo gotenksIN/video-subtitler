@@ -10,6 +10,14 @@ from google.genai import types
 from modules import core, gemini
 
 
+def test_content_config_always_disables_automatic_function_calling():
+    config = gemini.build_content_config(
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False)
+    )
+
+    assert config.automatic_function_calling.disable is True
+
+
 def test_generation_config_requires_structured_json_without_tools():
     config = gemini.generate_content_config("high")
 
@@ -35,6 +43,7 @@ def test_research_config_always_enables_google_search_as_plain_text():
     assert all(tool.url_context is None for tool in tools)
     assert config.response_mime_type is None
     assert config.response_schema is None
+    assert config.automatic_function_calling.disable is True
     assert config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     assert config.temperature == 0.0
 
@@ -53,6 +62,7 @@ def test_youtube_analysis_config_is_plain_text_without_tools():
     assert config.tools is None
     assert config.response_mime_type is None
     assert config.response_schema is None
+    assert config.automatic_function_calling.disable is True
     assert config.thinking_config.thinking_level == types.ThinkingLevel.LOW
     assert config.temperature == 0.0
 
