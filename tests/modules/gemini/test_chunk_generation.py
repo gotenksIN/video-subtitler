@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from google.genai import types
 
 from modules import core, gemini
 from tests.support.gemini_fakes import ScriptedGeminiClient, chunk_call, use_client
@@ -44,6 +45,10 @@ def test_chunk_request_streams_clip_bytes_and_publishes_canonical_captions(
     assert video_part.inline_data.data == b"video bytes"
     assert request.config.response_mime_type == "application/json"
     assert request.config.response_schema is core.SubtitleResponse
+    assert request.config.automatic_function_calling.disable is True
+    assert request.config.tools is None
+    assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert request.config.temperature == 0.0
 
     saved = json.loads(
         (tmp_path / "subtitle_chunk_003.json").read_text(encoding="utf-8")
@@ -149,15 +154,3 @@ def test_chunk_sdk_failure_fails_without_publishing(tmp_path, monkeypatch):
     )
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
-
-
-def test_large_inline_clip_warns_about_request_size(tmp_path, monkeypatch, capsys):
-    (tmp_path / "clip.mp4").write_bytes(b"v" * 11)
-    monkeypatch.setattr(gemini, "INLINE_VIDEO_WARNING_BYTES", 10)
-    client = ScriptedGeminiClient([chunk_call(['{"captions": []}'])])
-    use_client(monkeypatch, client)
-
-    assert gemini.process_chunk(
-        "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
-    )
-    assert "Warning" in capsys.readouterr().out

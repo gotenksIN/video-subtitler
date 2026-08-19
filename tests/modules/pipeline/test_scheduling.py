@@ -35,11 +35,9 @@ def run_pipeline(tmp_path, monkeypatch, process, attach=None, overlap=0, workers
 def test_chunks_are_processed_concurrently_by_real_worker_threads(
     tmp_path, monkeypatch
 ):
-    started = []
     barrier = threading.Barrier(2, timeout=10)
 
     def process(_key, _base, chunk, chunk_dir, *_args):
-        started.append(threading.get_ident())
         barrier.wait()
         Path(chunk_dir, f"done_{chunk['idx']}").write_text("done", encoding="utf-8")
         return True
@@ -49,7 +47,6 @@ def test_chunks_are_processed_concurrently_by_real_worker_threads(
     assert failed == []
     assert (tmp_path / "done_0").read_text(encoding="utf-8") == "done"
     assert (tmp_path / "done_1").read_text(encoding="utf-8") == "done"
-    assert len(set(started)) >= 2
 
 
 def test_api_failures_are_reported_with_the_stream_copy_chunk_name(

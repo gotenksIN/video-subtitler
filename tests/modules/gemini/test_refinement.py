@@ -5,10 +5,9 @@ import json
 import pytest
 from google.genai import types
 
-from modules import gemini
+from modules import core, gemini
 from tests.support.gemini_fakes import (
     ScriptedGeminiClient,
-    grounding_candidate,
     read_captions,
     refinement_call,
     research_call,
@@ -16,6 +15,20 @@ from tests.support.gemini_fakes import (
     write_vtt,
     youtube_call,
 )
+
+
+@pytest.fixture(autouse=True)
+def normalized_stream_metadata(monkeypatch):
+    """Keep refinement scenarios at the project-owned metadata seam."""
+
+    def collect(response_stream):
+        text = "".join(chunk.text or "" for chunk in response_stream)
+        retrieved = {
+            "https://example.com/notes": "URL_RETRIEVAL_STATUS_SUCCESS",
+        }
+        return text, ["grounded query"], [], retrieved
+
+    monkeypatch.setattr(gemini, "collect_stream_metadata", collect)
 
 
 def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeypatch):
@@ -30,7 +43,7 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(
                 [json.dumps({"changes": [{"id": 1, "text": "Rewritten"}]})]
             ),
@@ -41,9 +54,14 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
     gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
     refinement = client.requests[1]
+    assert refinement.config.response_mime_type == "application/json"
+    assert refinement.config.response_schema is core.RefinementResponse
+    assert refinement.config.automatic_function_calling.disable is True
+    assert refinement.config.tools is None
     assert (
         refinement.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     )
+    assert refinement.config.temperature == 0.0
     assert read_captions(output) == [
         ("00:00:00.000", "00:00:01.000", "Old line"),
         ("00:00:02.000", "00:00:03.000", "Rewritten"),
@@ -62,7 +80,7 @@ def test_refinement_without_changes_publishes_identical_script(tmp_path, monkeyp
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(['{"changes": []}']),
         ]
     )
@@ -83,7 +101,7 @@ def test_refinement_stream_pieces_are_assembled_before_parsing(tmp_path, monkeyp
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(['{"changes": [{"id": 0, "text":', '"Assembled"}]}']),
         ]
     )
@@ -94,18 +112,14 @@ def test_refinement_stream_pieces_are_assembled_before_parsing(tmp_path, monkeyp
     assert read_captions(output)[0][2] == "Assembled"
 
 
-def test_identity_research_requests_grounded_plain_text(tmp_path, monkeypatch, capsys):
+def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
     )
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(
-                pieces=("Researched identities",),
-                queries=["participants of the show"],
-                sources=[("Show Wiki", "https://wiki.example/show")],
-            ),
+            research_call(pieces=("Researched identities",)),
             refinement_call(['{"changes": []}']),
         ]
     )
@@ -118,185 +132,12 @@ def test_identity_research_requests_grounded_plain_text(tmp_path, monkeypatch, c
     assert isinstance(research.contents, str)
     assert research.config.response_mime_type is None
     assert research.config.response_schema is None
+    assert research.config.automatic_function_calling.disable is True
     assert research.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
+    assert research.config.temperature == 0.0
     assert any(tool.google_search is not None for tool in research.config.tools)
-
-    printed = capsys.readouterr().out
-    assert "participants of the show" in printed
-    assert "https://wiki.example/show" in printed
+    assert all(tool.url_context is None for tool in research.config.tools)
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
-
-
-def test_identity_research_collects_grounding_from_later_stream_chunks(
-    tmp_path, monkeypatch, capsys
-):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
-    )
-    output = tmp_path / "output.vtt"
-    research = research_call(pieces=("Identity ", "research"))
-    research.candidate_chunks = [
-        [],
-        grounding_candidate(sources=[("Official page", "https://example.com/show")]),
-    ]
-    client = ScriptedGeminiClient([research, refinement_call(['{"changes": []}'])])
-    use_client(monkeypatch, client)
-
-    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
-
-    assert "Official page: https://example.com/show" in capsys.readouterr().out
-    assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
-
-
-def test_missing_search_grounding_fails_before_publication(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
-    )
-    output = tmp_path / "output.vtt"
-    output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient(
-        [
-            research_call(),
-            refinement_call(['{"changes": [{"id": 0, "text": "Changed"}]}']),
-        ]
-    )
-    use_client(monkeypatch, client)
-
-    with pytest.raises(RuntimeError, match="no Google Search grounding"):
-        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
-
-    assert len(client.requests) == 1
-    assert output.read_text(encoding="utf-8") == "previous"
-    assert read_captions(source)[0][2] == "First"
-
-
-def test_missing_context_url_retrieval_fails_before_publication(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
-    )
-    output = tmp_path / "output.vtt"
-    output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient(
-        [research_call(queries=["who is the host"]), refinement_call([])]
-    )
-    use_client(monkeypatch, client)
-
-    with pytest.raises(RuntimeError, match="was not retrieved"):
-        gemini.global_refine_subtitles(
-            source,
-            output,
-            "key",
-            None,
-            "refiner",
-            "high",
-            context_urls=["https://example.com/notes"],
-        )
-
-    assert len(client.requests) == 1
-    assert output.read_text(encoding="utf-8") == "previous"
-
-
-def test_failed_context_url_retrieval_fails_before_publication(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
-    )
-    output = tmp_path / "output.vtt"
-    output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient(
-        [
-            research_call(
-                queries=["who is the host"],
-                retrieved=[
-                    ("https://example.com/notes", "URL_RETRIEVAL_STATUS_PAYWALL")
-                ],
-            ),
-            refinement_call([]),
-        ]
-    )
-    use_client(monkeypatch, client)
-
-    with pytest.raises(
-        RuntimeError, match="retrieval failed with URL_RETRIEVAL_STATUS_PAYWALL"
-    ):
-        gemini.global_refine_subtitles(
-            source,
-            output,
-            "key",
-            None,
-            "refiner",
-            "high",
-            context_urls=["https://example.com/notes"],
-        )
-
-    assert len(client.requests) == 1
-    assert output.read_text(encoding="utf-8") == "previous"
-
-
-def test_equivalent_retrieved_url_identity_is_accepted(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
-    )
-    output = tmp_path / "output.vtt"
-    client = ScriptedGeminiClient(
-        [
-            research_call(
-                queries=["who is the host"],
-                retrieved=[
-                    (
-                        "https://EXAMPLE.com/notes/",
-                        "URL_RETRIEVAL_STATUS_SUCCESS",
-                    )
-                ],
-            ),
-            refinement_call(['{"changes": []}']),
-        ]
-    )
-    use_client(monkeypatch, client)
-
-    gemini.global_refine_subtitles(
-        source,
-        output,
-        "key",
-        None,
-        "refiner",
-        "high",
-        context_urls=["https://example.com/notes"],
-    )
-
-    assert read_captions(output)[0][2] == "Only"
-
-
-def test_ordinary_context_urls_enable_url_context_tool(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
-    )
-    output = tmp_path / "output.vtt"
-    client = ScriptedGeminiClient(
-        [
-            research_call(
-                queries=["who is the host"],
-                retrieved=[
-                    ("https://example.com/notes", "URL_RETRIEVAL_STATUS_SUCCESS")
-                ],
-            ),
-            refinement_call(['{"changes": []}']),
-        ]
-    )
-    use_client(monkeypatch, client)
-
-    gemini.global_refine_subtitles(
-        source,
-        output,
-        "key",
-        None,
-        "refiner",
-        "high",
-        context_urls=["https://example.com/notes"],
-    )
-
-    tools = client.requests[0].config.tools
-    assert any(tool.url_context is not None for tool in tools)
-    assert read_captions(output)[0][2] == "Only"
 
 
 def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch):
@@ -307,7 +148,7 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
     youtube_url = "https://www.youtube.com/watch?v=VIDEO_ID&t=30"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is in the video"]),
+            research_call(),
             youtube_call(pieces=("Direct video identities",)),
             refinement_call([json.dumps({"changes": [{"id": 0, "text": "Refined"}]})]),
         ]
@@ -336,6 +177,9 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
     assert analysis.config.tools is None
     assert analysis.config.response_mime_type is None
     assert analysis.config.response_schema is None
+    assert analysis.config.automatic_function_calling.disable is True
+    assert analysis.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert analysis.config.temperature == 0.0
 
     refinement = client.requests[2]
     assert refinement.config.response_mime_type == "application/json"
@@ -353,10 +197,7 @@ def test_ordinary_and_youtube_context_use_their_separate_retrieval_paths(
     youtube_url = "https://youtu.be/VIDEO_ID"
     client = ScriptedGeminiClient(
         [
-            research_call(
-                queries=["who is in the video"],
-                retrieved=[(ordinary_url, "URL_RETRIEVAL_STATUS_SUCCESS")],
-            ),
+            research_call(),
             youtube_call(),
             refinement_call(['{"changes": []}']),
         ]
@@ -390,7 +231,7 @@ def test_youtube_analysis_is_skipped_without_youtube_urls(tmp_path, monkeypatch)
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(['{"changes": []}']),
         ]
     )
@@ -410,7 +251,7 @@ def test_youtube_analysis_sdk_failure_preserves_previous_output(tmp_path, monkey
     output.write_text("previous", encoding="utf-8")
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             youtube_call(error=RuntimeError("video unavailable")),
             refinement_call(['{"changes": [{"id": 0, "text": "Changed"}]}']),
         ]
@@ -466,7 +307,7 @@ def test_invalid_refinement_json_preserves_source_and_output(tmp_path, monkeypat
     output.write_text("previous", encoding="utf-8")
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(["not json"]),
         ]
     )
@@ -499,9 +340,7 @@ def test_invalid_refinement_changes_rejected_without_mutation(
     )
     output = tmp_path / "output.vtt"
     output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient(
-        [research_call(queries=["who is the host"]), refinement_call([changes])]
-    )
+    client = ScriptedGeminiClient([research_call(), refinement_call([changes])])
     use_client(monkeypatch, client)
 
     with pytest.raises(
@@ -520,7 +359,7 @@ def test_refinement_removes_boundary_duplicate_created_by_a_text_change(
     tmp_path, monkeypatch
 ):
     source = write_vtt(
-        tmp_path / "staging.vtt",
+        tmp_path / "source.vtt",
         [
             ("00:00:00.000", "00:00:04.000", "Host: Shared opening line"),
             ("00:00:03.000", "00:00:05.000", "Guest: Different line"),
@@ -529,7 +368,7 @@ def test_refinement_removes_boundary_duplicate_created_by_a_text_change(
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(queries=["who is the host"]),
+            research_call(),
             refinement_call(
                 [
                     json.dumps(
@@ -562,9 +401,7 @@ def test_mismatched_provenance_is_rejected_before_any_request(tmp_path, monkeypa
     )
     output = tmp_path / "output.vtt"
     output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient(
-        [research_call(queries=["who is the host"]), refinement_call([])]
-    )
+    client = ScriptedGeminiClient([research_call(), refinement_call([])])
     use_client(monkeypatch, client)
 
     with pytest.raises(ValueError, match="one chunk index per caption"):

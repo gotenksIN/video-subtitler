@@ -1,7 +1,5 @@
 """Complete generation lifecycle and recovery outcomes."""
 
-from pathlib import Path
-
 import pytest
 import webvtt
 
@@ -66,7 +64,6 @@ def test_successful_generation_publishes_and_cleans_work(tmp_path, monkeypatch):
     ]
     work = active_work_directory(tmp_path)
     assert sorted(path.name for path in work.iterdir()) == [pipeline.LOCK_NAME]
-    assert not list(tmp_path.glob("*.staging.vtt"))
     lock = pipeline.acquire_lock(work)
     pipeline.release_lock(lock)
 
@@ -139,10 +136,8 @@ def test_refinement_failure_preserves_output_and_resume_state(tmp_path, monkeypa
         tmp_path, monkeypatch, refine_text=True, output_path=output
     )
     write_two_chunk_subtitles(monkeypatch)
-    seen = {}
 
-    def refine(input_path, *_args, **_kwargs):
-        seen["path"] = Path(input_path)
+    def refine(_input_path, *_args, **_kwargs):
         raise RuntimeError("refinement failed")
 
     monkeypatch.setattr(gemini, "global_refine_subtitles", refine)
@@ -151,9 +146,6 @@ def test_refinement_failure_preserves_output_and_resume_state(tmp_path, monkeypa
         pipeline.run_generation(config)
 
     assert output.read_text(encoding="utf-8") == "previous"
-    assert seen["path"].name.endswith(".staging.vtt")
-    assert seen["path"].parent == tmp_path
-    assert not list(tmp_path.glob("*.staging.vtt"))
     work = active_work_directory(tmp_path)
     names = sorted(path.name for path in work.iterdir())
     assert media.SPLIT_COMPLETE_MARKER in names
@@ -161,13 +153,11 @@ def test_refinement_failure_preserves_output_and_resume_state(tmp_path, monkeypa
     pipeline.release_lock(lock)
 
 
-def test_successful_refined_generation_publishes_through_staging(tmp_path, monkeypatch):
+def test_successful_refined_generation_publishes_output(tmp_path, monkeypatch):
     config, _tools = prepare_generation(tmp_path, monkeypatch, refine_text=True)
     write_two_chunk_subtitles(monkeypatch)
-    received = {}
 
-    def refine(input_path, output_path, *_args, **kwargs):
-        received["provenance"] = kwargs.get("boundary_provenance", "missing")
+    def refine(input_path, output_path, *_args, **_kwargs):
         value = webvtt.read(input_path)
         value.captions[0].text = "Refined cue"
         value.save(output_path)
@@ -178,7 +168,5 @@ def test_successful_refined_generation_publishes_through_staging(tmp_path, monke
 
     result = webvtt.read(config.output_path)
     assert [c.text for c in result] == ["Refined cue", "Cue 1"]
-    assert received["provenance"] is None
-    assert not list(tmp_path.glob("*.staging.vtt"))
     work = active_work_directory(tmp_path)
     assert sorted(path.name for path in work.iterdir()) == [pipeline.LOCK_NAME]

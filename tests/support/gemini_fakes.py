@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import webvtt
-from google.genai import types
 
 from modules import gemini
 
@@ -25,10 +24,9 @@ class RecordedRequest:
 
 @dataclass
 class StreamCall:
-    """One scripted streaming response with optional candidate metadata."""
+    """One scripted streaming response."""
 
     pieces: list = field(default_factory=list)
-    candidate_chunks: list = field(default_factory=list)
     error: Exception | None = None
 
 
@@ -71,33 +69,8 @@ class ScriptedGeminiClient:
 
     @staticmethod
     def _stream(call):
-        for index, piece in enumerate(call.pieces):
-            candidates = (
-                call.candidate_chunks[index]
-                if index < len(call.candidate_chunks)
-                else []
-            )
-            yield SimpleNamespace(text=piece, candidates=list(candidates))
-
-
-def grounding_candidate(queries=(), sources=(), retrieved=()):
-    """Build one candidate carrying search and URL retrieval metadata."""
-    grounding = types.GroundingMetadata(
-        web_search_queries=list(queries),
-        grounding_chunks=[
-            types.GroundingChunk(web=types.GroundingChunkWeb(title=title, uri=uri))
-            for title, uri in sources
-        ],
-    )
-    url_context = types.UrlContextMetadata(
-        url_metadata=[
-            types.UrlMetadata(retrieved_url=url, url_retrieval_status=status)
-            for url, status in retrieved
-        ]
-    )
-    return [
-        types.Candidate(grounding_metadata=grounding, url_context_metadata=url_context)
-    ]
+        for piece in call.pieces:
+            yield SimpleNamespace(text=piece)
 
 
 def chunk_call(pieces, error=None):
@@ -105,20 +78,9 @@ def chunk_call(pieces, error=None):
     return StreamCall(pieces=list(pieces), error=error)
 
 
-def research_call(
-    pieces=("Research text",),
-    queries=(),
-    sources=(),
-    retrieved=(),
-    error=None,
-):
+def research_call(pieces=("Research text",), error=None):
     """One scripted grounded identity research response."""
-    candidates = (
-        grounding_candidate(queries, sources, retrieved)
-        if queries or sources or retrieved
-        else []
-    )
-    return StreamCall(pieces=list(pieces), candidate_chunks=[candidates], error=error)
+    return StreamCall(pieces=list(pieces), error=error)
 
 
 def youtube_call(pieces=("YouTube analysis",), error=None):

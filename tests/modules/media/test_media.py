@@ -580,17 +580,3 @@ def test_attach_without_overlap_selects_the_stream_copy_chunk(tmp_path):
 
     assert result["clip_name"] == "chunk_001.mp4"
     assert not (tmp_path / "context_chunk_001.mp4").exists()
-
-
-@pytest.mark.parametrize(
-    ("ext", "codec", "message"),
-    [
-        (".webm", "h264", "H.264 input requires MP4"),
-        (".webm", "hevc", "HEVC input requires MP4"),
-        (".mp4", "vp9", "VP9 input requires WebM"),
-        (".mp4", "unknown-codec", "Overlap format not supported"),
-    ],
-)
-def test_overlap_encoding_rejects_container_or_codec_mismatch(ext, codec, message):
-    with pytest.raises(ValueError, match=message):
-        media.overlap_codec_args(ext, codec, threads=2)

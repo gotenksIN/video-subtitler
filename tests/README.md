@@ -11,7 +11,7 @@ Each test imports behavior from its owning module.
 | `tests/modules/core/` | `modules/core.py` | Subtitle payloads, timestamp semantics, source titles, context URLs, and boundary deduplication. |
 | `tests/modules/io/` | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
 | `tests/modules/media/` | `modules/media.py` | Real FFmpeg and FFprobe probing, splitting, stream mapping, windows, overlap clips, and split cleanup. |
-| `tests/modules/gemini/` | `modules/gemini.py` | Gemini request contracts, streamed responses, grounding, caption cache, chunk generation, and refinement. |
+| `tests/modules/gemini/` | `modules/gemini.py` | Gemini request contracts, caption cache, chunk generation, and refinement outcomes. |
 | `tests/modules/pipeline/` | `modules/pipeline.py` | Configuration policy, persisted run state, locking, scheduling, stitching, recovery, and cleanup. |
 | `tests/cli/` | `gemini_subs.py` | Subprocess argument parsing, validation, exit status, and diagnostics. |
 | `tests/support/` | Test infrastructure | Scenario fakes and persistent-state builders shared by behavioral tests. |
@@ -23,8 +23,8 @@ Each test imports behavior from its owning module.
 | Core | Accepted timestamp forms, exact millisecond rounding, invalid interval rejection, caption ordering, end clamping, payload validation, multiline text preservation, source-title derivation, context URL validation and classification, and boundary deduplication. |
 | Io | Atomic JSON and VTT publication with failure-safe target preservation. |
 | Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment index validation, split recovery, edge-clamped windows, decodable overlap clips for VP9, H.264, and HEVC, and split artifact cleanup. |
-| Gemini | Client and request configuration, tool routing, structured response validation, streamed response assembly, grounding requirements, URL retrieval status, direct YouTube inputs, caption cache behavior, text-only refinement, and failure-safe output. |
-| Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent outcomes, midpoint ownership, provenance, staging, recovery, and failed-run retention. |
+| Gemini | Client boundary translation, outbound request configuration, tool routing, structured response validation, streamed text assembly, direct YouTube inputs, caption cache behavior, text-only refinement, SDK failure propagation, and failure-safe output. |
+| Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent filesystem outcomes, midpoint ownership, stitch provenance, final publication, recovery, and failed-run retention. |
 | CLI | Help, parsing errors, validation precedence, environment configuration, mode-specific preflight behavior, stable diagnostic meaning, and exit status. |
 
 Tests assert returned values, files, parsed WebVTT captions, persisted state, diagnostics, exit status, and requests sent across external API boundaries.
@@ -50,9 +50,14 @@ The following details remain specified in `AGENTS.md` but are not frozen by auto
 - Manifest JSON representation and hash construction.
 - Exact FFmpeg argument arrays.
 - Worker-count and thread-allocation formulas.
+- Nested Gemini SDK response, candidate, grounding, and URL metadata shapes.
+- Gemini SDK event normalization into project-owned stream metadata.
+- Direct helper outputs that executable adapter and lifecycle tests already cover.
+- Thread identities, executor details, and other concurrency mechanisms.
+- Internal staging filenames and directories.
 
 Review these details against `AGENTS.md` when their implementation changes.
-Do not add source-text, prompt snapshot, complete command-array, private-call, or helper-name assertions.
+Do not add source-text, prompt snapshot, complete command-array, private-call, helper-name, or provider event-shape assertions.
 
 ## Commands
 
