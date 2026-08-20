@@ -18,6 +18,7 @@ SCRUBBED_ENV = (
     "GEMINI_API_BASE",
     "GEMINI_MODEL",
     "GEMINI_REFINE_MODEL",
+    "GEMINI_AUDIO_REFINE_MODEL",
 )
 
 
@@ -72,6 +73,14 @@ def test_unknown_option_is_a_usage_error(tmp_path):
     assert "unrecognized arguments" in output(process)
 
 
+def test_removed_overlap_option_is_a_usage_error(tmp_path):
+    video = make_video(tmp_path)
+    process = run_cli(str(video), "--overlap", "5", cwd=tmp_path)
+
+    assert process.returncode == 2
+    assert "unrecognized arguments" in output(process)
+
+
 def test_invalid_thinking_level_choice_is_a_usage_error(tmp_path):
     video = make_video(tmp_path)
     process = run_cli(str(video), "--thinking-level", "extreme", cwd=tmp_path)
@@ -93,11 +102,6 @@ def test_non_integer_chunk_duration_is_a_usage_error(tmp_path):
     [
         (("--chunk-dur", "0"), "chunk-dur must be greater than 0"),
         (("--workers", "0"), "workers must be greater than 0"),
-        (("--overlap", "-1"), "overlap must be greater than or equal to 0"),
-        (
-            ("--chunk-dur", "5", "--overlap", "5"),
-            "overlap must be smaller than --chunk-dur",
-        ),
         (
             ("--model", "pro", "--thinking-level", "minimal"),
             "only supported by Flash",
