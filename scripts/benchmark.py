@@ -106,17 +106,6 @@ def normalize_text(text):
     return text.split()
 
 
-def merge_intervals(intervals):
-    """Merge overlapping or adjacent closed intervals."""
-    merged = []
-    for start, end in sorted(intervals):
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
 def interval_intersection(left, right):
     """Calculate total temporal intersection duration between two interval lists."""
     total = 0.0
@@ -142,10 +131,10 @@ def compare_reference(output_vtt, reference_vtt):
     reference_words = [
         word for caption in reference for word in normalize_text(caption.text)
     ]
-    generated_intervals = merge_intervals(
+    generated_intervals = core.merge_intervals(
         [(core.parse_time(c.start), core.parse_time(c.end)) for c in generated]
     )
-    reference_intervals = merge_intervals(
+    reference_intervals = core.merge_intervals(
         [(core.parse_time(c.start), core.parse_time(c.end)) for c in reference]
     )
     generated_seconds = sum(end - begin for begin, end in generated_intervals)

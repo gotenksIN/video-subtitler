@@ -66,6 +66,9 @@ Every tracked file in this repository has a defined responsibility.
 | `pyproject.toml` | Python project metadata, tool configuration, and dependency declarations. |
 | `uv.lock` | Exact dependency lockfile managed by `uv`. |
 | `.env.example` | Environment variable template for credentials and model defaults. |
+| `.gitignore` | Ignores credentials, caches, generated media, work directories, and subtitle outputs. |
+| `.python-version` | Pins the Python interpreter version for `uv`. |
+| `docs/agents/` | Agent skill instructions for issue tracking, triage labels, and domain documentation. |
 
 Keep the five modules in `modules/` on an acyclic dependency graph:
 - `modules/core.py` and `modules/io.py` are foundations with no project-internal imports.
@@ -252,7 +255,8 @@ class RefinementResponse(BaseModel):
 
 ## Timestamp rules
 
-Accepted input shapes: `SS.mmm`, `MM:SS.mmm`, or `HH:MM:SS.mmm`.
+Accepted input shapes: `SS`, `MM:SS`, or `HH:MM:SS`.
+The fractional-second part is optional in each shape.
 Decimal commas are converted to decimal points.
 Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 
@@ -333,7 +337,7 @@ Request configuration:
 
 ### Prompt structure
 - Header with audio duration and segment boundaries.
-- Numbered script entries: `[0] 00:00:00.000 --> 00:00:05.000: Text [classification]`.
+- Numbered script entries: `[0] 00:00:00.000 --> 00:00:05.000 [dialogue]: Text`.
 - Boundary rules:
   - Outside repair regions (5s before to 5s after boundaries), source cues must survive identically.
   - Rewrites, retimes, splits, and merges may reference only cues intersecting a shared repair region.
