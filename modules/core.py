@@ -14,7 +14,7 @@ MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
-REPAIR_WINDOW_SECONDS = 5.0
+REPAIR_WINDOW_SECONDS = 10.0
 
 
 class Caption(BaseModel):
@@ -249,25 +249,57 @@ def classify_context_urls(urls):
     return youtube_urls, ordinary_urls
 
 
+def _parse_bracketed_text(text):
+    """Return outside text, complete outer fragments, and balance state."""
+    outside = []
+    fragments = []
+    depth = 0
+    fragment_start = None
+    unmatched = False
+
+    for index, character in enumerate(text):
+        if character == "[":
+            if depth == 0:
+                fragment_start = index
+            depth += 1
+        elif character == "]":
+            if depth == 0:
+                unmatched = True
+                outside.append(character)
+                continue
+            depth -= 1
+            if depth == 0:
+                fragments.append(text[fragment_start : index + 1])
+                fragment_start = None
+        elif depth == 0:
+            outside.append(character)
+
+    if depth:
+        unmatched = True
+        outside.extend(text[fragment_start:])
+
+    return "".join(outside), fragments, unmatched
+
+
 def classify_cue_text(text):
     """Classify one cue as dialogue, editorial, or mixed."""
-    without_brackets = re.sub(r"\[[^\]]*\]", "", text).strip()
-    has_brackets = bool(re.search(r"\[[^\]]*\]", text))
-    if not has_brackets:
+    outside, fragments, _unmatched = _parse_bracketed_text(text)
+    if not fragments:
         return "dialogue"
-    if re.search(r"\w", without_brackets):
+    if re.search(r"\w", outside):
         return "mixed"
     return "editorial"
 
 
 def visual_fragment_strings(text):
-    """Return exact bracketed fragment strings."""
-    return re.findall(r"\[[^\]]*\]", text)
+    """Return exact complete outer bracketed fragment strings."""
+    _outside, fragments, _unmatched = _parse_bracketed_text(text)
+    return fragments
 
 
 def has_unmatched_brackets(text):
-    without_fragments = re.sub(r"\[[^\]]*\]", "", text)
-    return "[" in without_fragments or "]" in without_fragments
+    _outside, _fragments, unmatched = _parse_bracketed_text(text)
+    return unmatched
 
 
 def dialogue_turns(text):
@@ -387,6 +419,51 @@ def is_identical_copy(cue, source_by_id):
     )
 
 
+def filter_audio_refinement_patch(
+    response, source_entries, boundaries, window=REPAIR_WINDOW_SECONDS
+):
+    """Drop patch cues and deletions without repair-region authority.
+
+    Gemini receives the complete script and sometimes edits cues outside
+    every repair region. Discarding those edits keeps each cue outside
+    repair regions as an exact copy of its source entry.
+    """
+    regions = build_repair_regions(boundaries, window)
+    source_intervals = {
+        entry["id"]: (parse_time(entry["start"]), parse_time(entry["end"]))
+        for entry in source_entries
+    }
+
+    kept_cues = []
+    for cue in response.cues:
+        cue_ids = cue.source_ids
+        if not cue_ids:
+            keep = interval_intersects_any(
+                (parse_time(cue.start), parse_time(cue.end)), regions
+            )
+        elif any(source_id not in source_intervals for source_id in cue_ids):
+            # Unknown source IDs stay fatal during validation.
+            keep = True
+        else:
+            keep = all(
+                interval_intersects_any(source_intervals[source_id], regions)
+                for source_id in cue_ids
+            )
+        if keep:
+            kept_cues.append(cue)
+
+    kept_deleted = [
+        source_id
+        for source_id in response.deleted_source_ids
+        if source_id not in source_intervals
+        or interval_intersects_any(source_intervals[source_id], regions)
+    ]
+
+    return response.model_copy(
+        update={"cues": kept_cues, "deleted_source_ids": kept_deleted}
+    )
+
+
 def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
     """Expand sparse patches with exact copies of every omitted source cue."""
     referenced = {source_id for cue in response.cues for source_id in cue.source_ids}
@@ -404,18 +481,6 @@ def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
     for cue in response.cues:
         if has_unmatched_brackets(cue.text):
             raise ValueError("Sparse audio refinement cue contains unmatched brackets")
-        if len(cue.source_ids) != 1 or cue.source_ids[0] not in source_by_id:
-            continue
-        source = source_by_id[cue.source_ids[0]]
-        if (
-            canonical_timestamp(cue.start) == source["start"]
-            and canonical_timestamp(cue.end) == source["end"]
-            and cue.text == source["text"]
-        ):
-            raise ValueError(
-                f"Sparse audio refinement must omit unchanged source cue "
-                f"{cue.source_ids[0]}"
-            )
 
     candidate_cues = list(response.cues)
     candidate_cues.extend(
@@ -442,8 +507,9 @@ def validate_audio_refinement_response(
 ):
     """Reconstruct and validate the complete candidate before writing files.
 
-    Lineage and authority checks run on a complete candidate containing exact
-    host-side copies of omitted source cues.
+    The patch is filtered to repair-region authority first, so cues outside
+    repair regions survive as exact host-side copies. Lineage and authority
+    checks then run on the complete candidate.
     """
     if any(has_unmatched_brackets(entry["text"]) for entry in source_entries):
         raise ValueError("Audio refinement source cue contains unmatched brackets")
@@ -451,6 +517,7 @@ def validate_audio_refinement_response(
     source_ids = set(source_by_id)
     if len(source_ids) != len(source_entries):
         raise ValueError("Audio refinement source IDs are not unique")
+    response = filter_audio_refinement_patch(response, source_entries, boundaries)
     response = reconstruct_sparse_audio_candidate(
         response, source_entries, source_by_id
     )
@@ -551,19 +618,16 @@ def validate_audio_refinement_response(
                         f"Source ID {source_id} must split into singleton cues; "
                         "merges cannot overlap splits"
                     )
-    flattened = []
     for cue in response_cues:
         cue_ids = cue["source_ids"]
-        if cue_ids and cue_ids != list(range(cue_ids[0], cue_ids[-1] + 1)):
-            raise ValueError(
-                f"Output cue {cue_ids} merges source IDs that are not "
-                "contiguous in script order"
-            )
-        flattened.extend(cue_ids)
-    if any(after < before for before, after in itertools.pairwise(flattened)):
-        raise ValueError(
-            "Audio refinement output cues reference source IDs out of script order"
-        )
+        if cue_ids:
+            missing_ids = set(range(cue_ids[0], cue_ids[-1] + 1)) - set(cue_ids)
+            for mid in missing_ids:
+                if source_by_id[mid]["classification"] != "editorial":
+                    raise ValueError(
+                        f"Output cue {cue_ids} merges source IDs that are not "
+                        "contiguous in script order"
+                    )
 
     # Deletions may target dialogue cues only.
     for source_id in deleted:
@@ -689,8 +753,10 @@ def validate_audio_refinement_response(
                 )
             envelopes = [
                 (
-                    min(region[0], *(interval[0] for interval in source_intervals)),
-                    max(region[1], *(interval[1] for interval in source_intervals)),
+                    min(region[0], *(interval[0] for interval in source_intervals))
+                    - REPAIR_WINDOW_SECONDS,
+                    max(region[1], *(interval[1] for interval in source_intervals))
+                    + REPAIR_WINDOW_SECONDS,
                 )
                 for region in common_regions or []
             ]
@@ -699,7 +765,13 @@ def validate_audio_refinement_response(
                     "Changed cues must stay inside one shared repair region "
                     "plus the full extents of its referenced source cues"
                 )
-        elif not interval_contained_in_any((start, end), regions):
+        elif not interval_contained_in_any(
+            (start, end),
+            [
+                (region[0] - REPAIR_WINDOW_SECONDS, region[1] + REPAIR_WINDOW_SECONDS)
+                for region in regions
+            ],
+        ):
             raise ValueError("Recovered cues must stay inside a repair region")
 
     seen = set()

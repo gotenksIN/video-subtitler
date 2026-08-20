@@ -50,7 +50,7 @@ Every tracked file in this repository has a defined responsibility.
 | Path | Responsibility |
 | --- | --- |
 | `gemini_subs.py` | CLI entry point: dotenv loading, argument parsing, validation, and dispatch. |
-| `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, speaker label casing canonicalization, sparse audio-patch reconstruction and validation, and pure-editorial boundary merging. |
+| `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, speaker label casing canonicalization, sparse audio-patch filtering, reconstruction, and validation, and pure-editorial boundary merging. |
 | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
 | `modules/media.py` | FFmpeg and FFprobe operations for probing, complete audio extraction, and stream-copy splitting. |
 | `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, boundary audio refinement, and global text refinement. |
@@ -281,10 +281,12 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - All other URLs route to Google URL Context tool.
 
 ### Cue classification (`classify_cue_text`)
-- Strip bracketed fragments `\[[^\]]*\]`.
+- Parse balanced square brackets by depth and treat each complete outer pair as one visual fragment.
+- Nested fragments such as `[[Label] Detail]` remain one exact fragment.
 - If no brackets exist in text: `dialogue`.
 - If word characters remain outside brackets: `mixed`.
 - If only bracketed fragments and whitespace exist: `editorial`.
+- Reject any source or candidate audio-refinement cue with an unmatched opening or closing bracket.
 
 ### Speaker label pattern
 `SPEAKER_LABEL_RE` matches `^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)` from the start of a cue line.
@@ -339,17 +341,26 @@ Request configuration:
 - Header with audio duration and segment boundaries.
 - Numbered script entries: `[0] 00:00:00.000 --> 00:00:05.000 [dialogue]: Text`.
 - Boundary rules:
-  - Outside repair regions (5s before to 5s after boundaries), source cues must survive identically.
+  - Outside repair regions (10s before to 10s after boundaries), source cues must survive identically.
   - Rewrites, retimes, splits, and merges may reference only cues intersecting a shared repair region.
+  - Merges must reference contiguous source IDs in script order, but may skip intermediate pure-editorial cues.
   - Recovered cues must have empty lineage (`sourceIds: []`), contain spoken dialogue, have no brackets, and fit inside a repair region.
   - Pure editorial cues must be preserved identically.
   - Mixed cues must preserve their bracketed fragments across descendants.
   - Deletions are allowed only for dialogue cues inside repair regions.
 
 ### Candidate reconstruction and publication
-1. Host expands the sparse patch by inserting exact copies of omitted source cues.
-2. Validates envelope containment, visual fragment multiset equality, and timestamp validity.
-3. Serializes to `audio_refined.vtt.tmp`, reads back to verify cue equality, and publishes with `os.replace()`.
+1. Host filters the sparse patch to repair authority before reconstruction.
+   Patch cues whose referenced source cues all intersect a repair region stay.
+   Recovered cues (`sourceIds: []`) stay when their own interval intersects a repair region.
+   Deletions stay when their source cue intersects a repair region.
+   The host discards every other patch cue and deletion, so cues outside repair regions survive as exact copies of their source entries.
+   References to unknown source IDs pass through and fail validation.
+2. Host expands the filtered patch by inserting exact copies of omitted source cues.
+3. Host validates envelope containment, visual fragment multiset equality, and timestamp validity.
+   Changed cues may exceed their strict envelope by up to the repair window on each side.
+   Recovered cues may exceed a repair region by up to the repair window on each side.
+4. Host serializes to `audio_refined.vtt.tmp`, reads back to verify cue equality, and publishes with `os.replace()`.
 
 ## Global text refinement
 
@@ -432,7 +443,7 @@ Runs matrix benchmarking across 3 passes:
 Repairs chunk-boundary faults by listening to the complete extracted audio track.
 
 **Boundary envelope**:
-A repair region expanded by the full original time extents of referenced source cues.
+A repair region expanded by the full original time extents of referenced source cues and by the repair window on each side.
 
 **Chunk**:
 A contiguous stream-copy segment cut from the source video at a keyframe.
@@ -441,7 +452,7 @@ A contiguous stream-copy segment cut from the source video at a keyframe.
 Stitch pass merging identical pure-editorial cues split across adjacent chunk boundaries.
 
 **Repair region**:
-The connected union of 5 seconds before through 5 seconds after segment boundaries.
+The connected union of 10 seconds before through 10 seconds after segment boundaries.
 
 **Segment boundary**:
 The source timestamp where one chunk ends and the next begins.

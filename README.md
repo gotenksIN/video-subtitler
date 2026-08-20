@@ -127,7 +127,8 @@ Generation publishes one artifact based on the two refinement toggles:
 
 Boundary audio refinement sends the complete audio plus the stitched script to Gemini in one streamed JSON request.
 The model returns a sparse patch of only changed cues.
-The patch is validated so it cannot change cues outside five-second repair windows around chunk boundaries, cannot delete visual on-screen text, and cannot alter bracketed on-screen fragments.
+The host discards patch edits outside ten-second repair windows around chunk boundaries.
+Validation rejects patches that delete visual on-screen text or alter bracketed on-screen fragments.
 
 Text refinement has up to three Gemini requests:
 

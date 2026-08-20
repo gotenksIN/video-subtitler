@@ -155,6 +155,42 @@ def test_caption_validation_accepts_empty_caption_list():
     assert core.validate_captions([], 10) == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[[Mission Rule] Total of 2 chances!]",
+        "[[Narrow margin] By 14 points!]",
+        "[First] [Second]",
+    ],
+)
+def test_balanced_brackets_are_accepted(text):
+    assert not core.has_unmatched_brackets(text)
+
+
+@pytest.mark.parametrize("text", ["[text", "text]", "[a[b]c"])
+def test_unbalanced_brackets_are_rejected(text):
+    assert core.has_unmatched_brackets(text)
+
+
+def test_nested_visual_fragments_preserve_outer_brackets_and_classification():
+    editorial = "[[Narrow margin] By 14 points!]"
+    mixed = "Chodan: Do we get two chances?\n[[Mission Rule] Total of 2 chances!]"
+
+    assert core.visual_fragment_strings(editorial) == [editorial]
+    assert core.classify_cue_text(editorial) == "editorial"
+    assert core.visual_fragment_strings(mixed) == [
+        "[[Mission Rule] Total of 2 chances!]"
+    ]
+    assert core.classify_cue_text(mixed) == "mixed"
+
+
+def test_multiple_visual_fragments_are_extracted_separately():
+    text = "[First] Host: Dialogue [Second]"
+
+    assert core.visual_fragment_strings(text) == ["[First]", "[Second]"]
+    assert core.classify_cue_text(text) == "mixed"
+
+
 # --- Refinement Change Validation ---
 
 
@@ -227,23 +263,208 @@ def test_sparse_audio_refinement_applies_edits_and_preserves_omitted_cues():
     assert "Host: See [Chapter 1] now." in texts  # Mixed cue 4 preserved
 
 
-def test_audio_refinement_rejects_unchanged_cue_included_in_patch():
+def test_audio_refinement_accepts_unchanged_nested_visual_fragments():
+    sources = [
+        {
+            "id": 0,
+            "start": "00:00:00.000",
+            "end": "00:00:01.000",
+            "text": "[[Narrow margin] By 14 points!]",
+            "classification": "editorial",
+        },
+        {
+            "id": 1,
+            "start": "00:00:01.000",
+            "end": "00:00:02.000",
+            "text": "Host: Ready.\n[[Mission Rule] Total of 2 chances!]",
+            "classification": "mixed",
+        },
+    ]
+
+    cues = core.validate_audio_refinement_response(
+        patch_response(), sources, 2.0, [1.0]
+    )
+
+    assert [cue["text"] for cue in cues] == [source["text"] for source in sources]
+
+
+def test_audio_refinement_rejects_changed_nested_visual_fragment():
+    sources = [
+        {
+            "id": 0,
+            "start": "00:00:00.000",
+            "end": "00:00:02.000",
+            "text": "Host: Ready.\n[[Mission Rule] Total of 2 chances!]",
+            "classification": "mixed",
+        }
+    ]
+    patch = patch_response(
+        cues=[
+            patch_cue(
+                [0],
+                "00:00:00.000",
+                "00:00:02.000",
+                "Host: Ready.\n[[Mission Rule] Total of 1 chance!]",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Bracketed fragments of mixed cue"):
+        core.validate_audio_refinement_response(patch, sources, 2.0, [1.0])
+
+
+@pytest.mark.parametrize("text", ["Missing [close", "Missing open]"])
+def test_audio_refinement_rejects_unbalanced_source_brackets(text):
     sources = source_entries()
+    sources[0]["text"] = text
+
+    with pytest.raises(ValueError, match="source cue contains unmatched brackets"):
+        core.validate_audio_refinement_response(patch_response(), sources, 35.0, [10.0])
+
+
+def test_audio_refinement_accepts_unchanged_cue_included_in_patch():
+    sources = source_entries()
+    # Boundary 10.0s keeps cue 0 (0-5s) inside repair region 0-20s, so the
+    # identical echo is accepted instead of rejected.
     patch = patch_response(
         cues=[patch_cue([0], "00:00:00.000", "00:00:05.000", "Host: Welcome.")]
     )
-    with pytest.raises(ValueError, match="must omit unchanged source cue"):
-        core.validate_audio_refinement_response(patch, sources, 35.0, [10.0])
+    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [10.0])
+    assert [(c["start"], c["end"], c["text"]) for c in cues] == [
+        (source["start"], source["end"], source["text"]) for source in sources
+    ]
 
 
-def test_audio_refinement_enforces_boundary_authority_in_boundary_mode():
+def test_audio_refinement_discards_edits_outside_repair_regions():
     sources = source_entries()
-    # Cue 0 (0-5s) is outside repair region around boundary 10.0s (region: 5-15s). Modifying it must fail.
+    # Cues 0 (0-5s) and 1 (5-10s) lie outside the repair region around
+    # boundary 21.0s (region: 11-31s). Their rewrite and deletion are
+    # discarded, so every source cue survives verbatim.
     patch = patch_response(
-        cues=[patch_cue([0], "00:00:00.000", "00:00:04.000", "Host: Altered.")]
+        cues=[patch_cue([0], "00:00:00.000", "00:00:04.000", "Host: Altered.")],
+        deleted=[1],
     )
-    with pytest.raises(ValueError, match="lies outside every repair region"):
+    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    assert [(c["start"], c["end"], c["text"]) for c in cues] == [
+        (source["start"], source["end"], source["text"]) for source in sources
+    ]
+
+
+def test_audio_refinement_discards_merge_referencing_outside_sources():
+    sources = source_entries()
+    # Cue 1 (5-10s) lies outside the repair region 11-31s around boundary
+    # 21.0s, so the merge of cues 1 and 2 is discarded completely and both
+    # cues survive verbatim.
+    patch = patch_response(
+        cues=[patch_cue([1, 2], "00:00:05.000", "00:00:15.000", "Host: Merged talk.")]
+    )
+    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    assert [(c["start"], c["end"], c["text"]) for c in cues] == [
+        (source["start"], source["end"], source["text"]) for source in sources
+    ]
+
+
+def test_audio_refinement_discards_recovered_cues_outside_repair_regions():
+    sources = source_entries()
+    # The recovered cue at 33-35s lies outside the repair region 11-31s
+    # around boundary 21.0s, so it is discarded.
+    patch = patch_response(
+        cues=[patch_cue([], "00:00:33.000", "00:00:35.000", "Host: Recovered.")]
+    )
+    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    assert [(c["start"], c["end"], c["text"]) for c in cues] == [
+        (source["start"], source["end"], source["text"]) for source in sources
+    ]
+
+
+@pytest.mark.parametrize(
+    ("patch", "match"),
+    [
+        (
+            patch_response(
+                cues=[patch_cue([99], "00:00:12.000", "00:00:14.000", "Text")]
+            ),
+            "references unknown source IDs",
+        ),
+        (patch_response(deleted=[99]), "deletes unknown source IDs"),
+    ],
+    ids=["unknown reference", "unknown deletion"],
+)
+def test_audio_refinement_rejects_unknown_source_ids_after_filtering(patch, match):
+    sources = source_entries()
+    with pytest.raises(ValueError, match=match):
+        core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+
+
+def test_audio_refinement_accepts_retimed_cue_within_window_tolerance():
+    sources = source_entries()
+    # Cue 2 (9.5-15s) intersects the repair region 10-30s around boundary
+    # 20.0s. Its strict envelope ends at 30s; the retimed cue 31-33s stays
+    # inside the envelope expanded by the 10s repair window.
+    patch = patch_response(
+        cues=[patch_cue([2], "00:00:31.000", "00:00:33.000", "Guest: Hello.")]
+    )
+    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [20.0])
+    assert [(c["start"], c["end"], c["text"]) for c in cues] == [
+        ("00:00:00.000", "00:00:05.000", "Host: Welcome."),
+        ("00:00:05.000", "00:00:10.000", "Host: First topic."),
+        ("00:00:19.500", "00:00:20.500", "[Title Card]"),
+        ("00:00:25.000", "00:00:30.000", "Host: See [Chapter 1] now."),
+        ("00:00:31.000", "00:00:33.000", "Guest: Hello."),
+    ]
+
+
+def test_audio_refinement_accepts_merge_skipping_intermediate_editorial_cue():
+    sources = [
+        {
+            "id": 0,
+            "start": "00:00:00.000",
+            "end": "00:00:02.000",
+            "text": "Host: Part 1.",
+            "classification": "dialogue",
+        },
+        {
+            "id": 1,
+            "start": "00:00:01.500",
+            "end": "00:00:03.000",
+            "text": "[On-screen Card]",
+            "classification": "editorial",
+        },
+        {
+            "id": 2,
+            "start": "00:00:02.000",
+            "end": "00:00:04.000",
+            "text": "Host: Part 2.",
+            "classification": "dialogue",
+        },
+    ]
+    patch = patch_response(
+        cues=[patch_cue([0, 2], "00:00:00.000", "00:00:04.000", "Host: Part 1 and 2.")]
+    )
+    cues = core.validate_audio_refinement_response(patch, sources, 10.0, [2.0])
+    assert any(c["text"] == "Host: Part 1 and 2." for c in cues)
+    assert any(c["text"] == "[On-screen Card]" for c in cues)
+
+
+def test_audio_refinement_rejects_merge_skipping_intermediate_dialogue_cue():
+    sources = source_entries()
+    # Cues 0 and 2 merge, but cue 1 is dialogue (not editorial).
+    patch = patch_response(
+        cues=[patch_cue([0, 2], "00:00:00.000", "00:00:15.000", "Host: Merged.")]
+    )
+    with pytest.raises(ValueError, match="merges source IDs that are not contiguous"):
         core.validate_audio_refinement_response(patch, sources, 35.0, [10.0])
+
+
+def test_audio_refinement_rejects_retimed_cue_beyond_window_tolerance():
+    sources = source_entries()
+    # The strict envelope for cue 2 ends at 30s and the repair window adds
+    # 10s, so a cue ending at 43s exceeds the tolerated envelope.
+    patch = patch_response(
+        cues=[patch_cue([2], "00:00:41.000", "00:00:43.000", "Guest: Hello.")]
+    )
+    with pytest.raises(ValueError, match="Changed cues must stay inside"):
+        core.validate_audio_refinement_response(patch, sources, 60.0, [20.0])
 
 
 def test_audio_refinement_enforces_visual_preservation():

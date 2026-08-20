@@ -125,6 +125,28 @@ def test_cached_audio_refinement_regenerates_on_mismatch_or_corruption(
     assert read_captions(output) == refined_captions()
 
 
+def test_out_of_authority_patch_edits_are_discarded(tmp_path, monkeypatch):
+    patch = {
+        "contractVersion": "sparse-patch-v1",
+        "deletedSourceIds": [],
+        "cues": [
+            {
+                "sourceIds": [0],
+                "start": "00:00:04.000",
+                "end": "00:00:06.500",
+                "text": "Outside authority",
+            }
+        ],
+    }
+    output, _client = run_boundary_refine(
+        monkeypatch, tmp_path, [audio_call([json.dumps(patch)])]
+    )
+
+    # Cue 0 (4-6s) lies outside the repair region 20-40s around boundary
+    # 30.0s, so the edit is discarded and the stitched cue survives.
+    assert read_captions(output) == STITCHED_CAPTIONS
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -137,10 +159,10 @@ def test_cached_audio_refinement_regenerates_on_mismatch_or_corruption(
                         "deletedSourceIds": [],
                         "cues": [
                             {
-                                "sourceIds": [0],
-                                "start": "00:00:04.000",
-                                "end": "00:00:06.500",
-                                "text": "Outside authority",
+                                "sourceIds": [99],
+                                "start": "00:00:28.000",
+                                "end": "00:00:31.000",
+                                "text": "Unknown source",
                             }
                         ],
                     }
@@ -148,7 +170,7 @@ def test_cached_audio_refinement_regenerates_on_mismatch_or_corruption(
             ]
         ),
     ],
-    ids=["max tokens", "patch outside authority"],
+    ids=["max tokens", "unknown source id"],
 )
 def test_failed_audio_refinement_preserves_previous_output(tmp_path, monkeypatch, call):
     output = tmp_path / "output.vtt"

@@ -776,8 +776,8 @@ def build_audio_refinement_prompt(
     )
     mode_block = (
         "MODE: boundary-limited\n\n"
-        "Repair authority is limited to connected regions spanning five "
-        "seconds before and five seconds after each actual segment boundary.\n"
+        "Repair authority is limited to connected regions spanning ten "
+        "seconds before and ten seconds after each actual segment boundary.\n"
         "Every cue outside those regions must remain byte-for-byte identical "
         "in text and timing.\n"
         "A changed cue may use one repair region plus the full original time "
