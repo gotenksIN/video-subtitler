@@ -1,6 +1,7 @@
 # Issue tracker: GitHub
 
-Issues and specs live in GitHub Issues. Use the `gh` CLI for all operations.
+Issues and specs live in GitHub Issues.
+Use the `gh` CLI for all operations.
 
 ## Conventions
 

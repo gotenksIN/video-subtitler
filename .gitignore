@@ -28,6 +28,7 @@ ENV/
 
 # Temporary processing directories
 temp_video_chunks/
+benchmark_results/
 
 # Subtitle output files
 *.vtt

@@ -1,18 +1,19 @@
 # Gemini subtitle generator
 
 A Python CLI that uses the Google Gemini API to generate English WebVTT subtitles from video.
-It splits video into chunks and creates overlapping context clips by default.
-It processes clips in parallel, stitches validated JSON results into a WebVTT file, and refines the complete script.
+It splits video into stream-copy chunks, generates subtitles concurrently, repairs chunk boundaries against the complete audio, and refines the complete script.
 
 ## Features
 
 - **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
 - **Concurrent processing:** Process video chunks in parallel using multiple Gemini API workers.
+- **Boundary audio refinement:** Extract the complete audio track and repair dialogue faults near chunk boundaries with a boundary-limited Gemini Flash pass.
 - **Structured outputs:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and invalid chunk output.
-- **Grounded refinement:** Run a grounded refinement flow: web identity research with Google Search, optional direct YouTube video analysis, then a structured script polish so speaker identities use verified evidence instead of appearance guesses.
-- **Resumable failures:** Keep temporary work directories on failure so retries reuse valid completed chunks.
-  Clean up temporary chunk files on success.
-- **Safe outputs:** Write chunk JSON and final WebVTT files atomically to prevent corrupted output.
+- **Grounded refinement:** Run web identity research with Google Search, optional direct YouTube video analysis, and structured script polish.
+  Speaker identities use verified evidence instead of appearance guesses.
+- **Resumable failures:** Keep temporary work directories on failure so retries reuse valid completed chunks, extracted audio, and refinement caches.
+  Clean up temporary work files on success.
+- **Safe outputs:** Write chunk JSON, audio, and final WebVTT files atomically to prevent corrupted output.
 
 ## Prerequisites
 
@@ -40,6 +41,7 @@ It processes clips in parallel, stitches validated JSON results into a WebVTT fi
    # Optional: set a custom base URL or change default models
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
    GEMINI_MODEL=gemini-3.7-flash
+   GEMINI_AUDIO_REFINE_MODEL=gemini-3.7-flash
    GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
    ```
 
@@ -71,7 +73,7 @@ Noninteractive usage never prompts.
 
 Benchmark subtitle generation and refinement models across full video runs:
 ```bash
-./scripts/benchmark.py "your_video.webm" --case gemini-3.7-flash:gemini-3.1-pro-preview
+./scripts/benchmark.py "your_video.webm" --case gemini-3.7-flash:gemini-3.7-flash:gemini-3.1-pro-preview
 ```
 
 Compare generated subtitles against a reference WebVTT file:
@@ -88,27 +90,47 @@ Generate English subtitles from a video:
 uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
 ```
 
-### Two-stage processing and text refinement
+### Audio-first processing and refinement
 
-By default, the pipeline uses `gemini-3.7-flash` for chunk video generation and `gemini-3.1-pro-preview` for global text refinement.
-Chunk processing limits context to 60 seconds per chunk.
-The global refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
+By default, the pipeline uses `gemini-3.7-flash` for chunk video generation and boundary audio refinement, and `gemini-3.1-pro-preview` for global text refinement.
+Chunk processing limits context to 60 seconds per stream-copy chunk.
+The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
+The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
 
-Refinement has up to three Gemini requests:
+Generation publishes one artifact based on the two refinement toggles:
+
+| Audio refinement | Text refinement | Published input |
+| --- | --- | --- |
+| Enabled (default) | Enabled (default) | Text-refined `audio_refined.vtt` |
+| Enabled | `--disable-text-refine` | `audio_refined.vtt` |
+| `--disable-audio-refine` | Enabled | Text-refined `stitched.vtt` |
+| `--disable-audio-refine` | `--disable-text-refine` | `stitched.vtt` |
+
+Boundary audio refinement sends the complete audio plus the stitched script to Gemini in one streamed JSON request.
+The model returns a sparse patch of only changed cues.
+The patch is validated so it cannot change cues outside five-second repair windows around chunk boundaries, cannot delete visual on-screen text, and cannot alter bracketed on-screen fragments.
+
+Text refinement has up to three Gemini requests:
 
 1. Grounded web identity research first: a plain-text, streamed request with Google Search grounding.
    It researches participant names in official English styling, roles, and evidence for speaker-label normalization.
    Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
 2. Direct YouTube analysis second, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
    It returns participant identities, official names and roles, and timestamped speaker-identification observations.
+   Transient Gemini server errors (500, 502, 503, and 504) retry automatically.
 3. Structured refinement last: the streamed JSON request with the `RefinementResponse` schema.
    It receives the grounded research text and the YouTube analysis text as identity context and does not use tools.
 
-Refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
+Text refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
 The previous output stays intact.
 There is no ungrounded fallback.
 
-To skip the global refinement pass:
+To skip the boundary audio refinement pass:
+```bash
+uv run python gemini_subs.py "your_video.webm" --disable-audio-refine
+```
+
+To skip the global text refinement pass:
 ```bash
 uv run python gemini_subs.py "your_video.webm" --disable-text-refine
 ```
@@ -120,20 +142,20 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 
 ### Additional options
 
+- `--disable-audio-refine`: Disable the boundary audio refinement pass after generation.
 - `--disable-text-refine`: Disable the global text refinement pass after generation.
 - `--refine-only`: Skip video processing and run global text refinement on an input WebVTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`).
-- `--overlap`: Seconds of context to add before and after each chunk (default: `5.0`).
-  This creates temporary re-encoded overlap clips for accurate boundary timing.
-  The input codec determines the clip container and video encoder.
 - `--workers`: Maximum concurrent API workers (default: `7`).
 - `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
   Supported levels are `minimal`, `low`, `medium`, and `high`.
   `minimal` requires a Flash model.
-  The global refinement pass always uses `medium`.
+  The global text refinement pass always uses `medium`.
+  The boundary audio refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.7-flash`).
+- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-3.7-flash`).
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
 - `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
   Repeat the option to supply several URLs.
@@ -144,15 +166,18 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 
 ## Notes
 
-- The initial split uses stream copy (`-c copy`).
+- The initial split uses stream copy (`-c copy`) and cuts at keyframes, so chunk boundaries follow the source keyframe layout.
   Supported input codecs are VP9, H.264, and HEVC/H.265.
   VP9 chunks use WebM format, while H.264 and HEVC chunks use MP4 format.
 - AV1 input is rejected during probing because the processing pipeline supports VP9, H.264, and HEVC/H.265 only.
-- With the default `--overlap 5`, temporary overlap clips are re-encoded with the matching video codec family so chunk boundaries align with subtitle timing.
-- Set `--overlap 0` to disable overlap re-encoding and process stream-copy chunks directly.
-- Keep inline video requests below 20 MiB; reduce `--chunk-dur` if chunk uploads fail.
+- Boundary audio refinement requires an audio stream.
+  Generation fails before splitting when the source has no audio and audio refinement is enabled.
+  Pass `--disable-audio-refine` to generate subtitles for a silent video.
+- Keep inline video and audio requests below 20 MiB.
+  Reduce `--chunk-dur` if chunk uploads fail.
 - When a chunk fails validation or API processing, stitching stops and the work directory is preserved for retry.
   A malformed segment index or missing chunk file invalidates the split and regenerates it on retry.
+  Valid extracted audio and audio refinement responses are reused on retry.
   Successful runs clean up the temporary work directory.
 - Output WebVTT files are ignored by Git by default.
   Move or rename files to track specific subtitle outputs.
@@ -161,6 +186,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 
 Production code is organized into modular components under `modules/`.
 `modules/pipeline.py` orchestrates generation and `gemini_subs.py` parses and dispatches CLI requests.
+`AGENTS.md` is the authoritative behavioral specification and `tests/README.md` documents the test contract matrix.
 Tests under `tests/` mirror these module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
 
 Run code quality checks and tests:

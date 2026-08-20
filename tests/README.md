@@ -8,11 +8,11 @@ Each test imports behavior from its owning module.
 
 | Path | Intended owner | Scope |
 | --- | --- | --- |
-| `tests/modules/core/` | `modules/core.py` | Subtitle payloads, timestamp semantics, source titles, context URLs, and boundary deduplication. |
+| `tests/modules/core/` | `modules/core.py` | Subtitle payloads, timestamp semantics, source titles, context URLs, cue classification, sparse audio-patch validation, and pure-editorial boundary merging. |
 | `tests/modules/io/` | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
-| `tests/modules/media/` | `modules/media.py` | Real FFmpeg and FFprobe probing, splitting, stream mapping, windows, overlap clips, and split cleanup. |
-| `tests/modules/gemini/` | `modules/gemini.py` | Gemini request contracts, caption cache, chunk generation, and refinement outcomes. |
-| `tests/modules/pipeline/` | `modules/pipeline.py` | Configuration policy, persisted run state, locking, scheduling, stitching, recovery, and cleanup. |
+| `tests/modules/media/` | `modules/media.py` | Real FFmpeg and FFprobe probing, splitting, stream mapping, complete audio extraction, and split cleanup. |
+| `tests/modules/gemini/` | `modules/gemini.py` | Gemini request contracts, caption cache, chunk generation, audio refinement, and text refinement outcomes. |
+| `tests/modules/pipeline/` | `modules/pipeline.py` | Configuration policy, persisted run state, locking, scheduling, stitching, recovery, toggle combinations, and cleanup. |
 | `tests/cli/` | `gemini_subs.py` | Subprocess argument parsing, validation, exit status, and diagnostics. |
 | `tests/support/` | Test infrastructure | Scenario fakes and persistent-state builders shared by behavioral tests. |
 
@@ -20,12 +20,12 @@ Each test imports behavior from its owning module.
 
 | Area | Observable contract |
 | --- | --- |
-| Core | Accepted timestamp forms, exact millisecond rounding, invalid interval rejection, caption ordering, end clamping, payload validation, multiline text preservation, source-title derivation, context URL validation and classification, and boundary deduplication. |
+| Core | Accepted timestamp forms, exact millisecond rounding, invalid interval rejection, caption ordering, end clamping, payload validation, multiline text preservation, source-title derivation, context URL validation and classification, cue classification, sparse patch reconstruction and validation, repair-region boundary authority, visual fragment preservation, deletion rules, and pure-editorial boundary merging. |
 | Io | Atomic JSON and VTT publication with failure-safe target preservation. |
-| Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment index validation, split recovery, edge-clamped windows, decodable overlap clips for VP9, H.264, and HEVC, and split artifact cleanup. |
-| Gemini | Client boundary translation, outbound request configuration, tool routing, structured response validation, streamed text assembly, direct YouTube inputs, caption cache behavior, text-only refinement, SDK failure propagation, and failure-safe output. |
-| Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent filesystem outcomes, midpoint ownership, stitch provenance, final publication, recovery, and failed-run retention. |
-| CLI | Help, parsing errors, validation precedence, environment configuration, mode-specific preflight behavior, stable diagnostic meaning, and exit status. |
+| Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment index validation, split recovery, first-stream mono Opus audio extraction, audio cache reuse, and split artifact cleanup. |
+| Gemini | Client boundary translation, outbound request configuration, tool routing, structured response validation, streamed text assembly, audio refinement requests and caches, direct YouTube inputs, caption cache behavior, text-only refinement, SDK failure propagation, and failure-safe output. |
+| Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent filesystem outcomes, segment-offset stitching, refinement toggle combinations, final publication, recovery, and failed-run retention. |
+| CLI | Help, parsing errors, validation precedence, environment configuration, mode-specific preflight behavior, removed-option rejection, stable diagnostic meaning, and exit status. |
 
 Tests assert returned values, files, parsed WebVTT captions, persisted state, diagnostics, exit status, and requests sent across external API boundaries.
 Tests do not assert private helper calls or internal execution order unless ordering changes an observable contract.
