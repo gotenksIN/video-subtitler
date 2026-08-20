@@ -3,6 +3,25 @@
 A Python CLI that uses the Google Gemini API to generate English WebVTT subtitles from video.
 It splits video into stream-copy chunks, generates subtitles concurrently, repairs chunk boundaries against the complete audio, and refines the complete script.
 
+## Pipeline overview
+
+```mermaid
+flowchart TD
+    Video[Source video] --> Split[1. Stream-copy split]
+    Video --> Audio[Extract complete audio]
+
+    Split --> Chunks[Concurrent video chunks]
+    Chunks --> FlashGen[Gemini Flash: Subtitle generation]
+    FlashGen --> Stitch[Stitch & merge visual fragments]
+
+    Stitch --> AudioPass[2. Boundary audio refinement]
+    Audio --> AudioPass
+
+    AudioPass --> Research[3. Grounded web & YouTube research]
+    Research --> ProRefine[Gemini Pro: Structured text polish]
+    ProRefine --> Output[Final English WebVTT subtitles]
+```
+
 ## Features
 
 - **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
