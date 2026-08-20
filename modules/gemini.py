@@ -547,6 +547,7 @@ def global_refine_subtitles(
     thinking_level,
     source_title=None,
     context_urls=None,
+    grounded_names=None,
 ):
     """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
@@ -664,6 +665,7 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
+    core.canonicalize_speaker_casing(vtt, grounded_names=grounded_names)
     io.atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
 

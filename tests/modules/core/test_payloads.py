@@ -1,6 +1,7 @@
 """Caption, refinement, and sparse audio patch payload validation."""
 
 import pytest
+import webvtt
 from pydantic import ValidationError
 
 from modules import core
@@ -341,3 +342,82 @@ def test_pure_editorial_boundary_merging():
     assert banner["start"] == 18.0
     assert banner["end"] == 24.0
     assert banner["chunk_idx"] == 2
+
+
+# --- Speaker Label Casing Canonicalization ---
+
+
+def speaker_vtt(*texts):
+    vtt = webvtt.WebVTT()
+    for index, text in enumerate(texts):
+        vtt.captions.append(
+            webvtt.Caption(f"00:00:{index:02d}.000", f"00:00:{index + 1:02d}.000", text)
+        )
+    return vtt
+
+
+def test_speaker_casing_normalizes_drift_to_dominant_frequency():
+    captions = speaker_vtt(
+        "Haewon: One",
+        "HAEWON: Two",
+        "Haewon: Three",
+        "Haewon: Four",
+    ).captions
+
+    core.canonicalize_speaker_casing(captions)
+
+    assert [caption.text for caption in captions] == [
+        "Haewon: One",
+        "Haewon: Two",
+        "Haewon: Three",
+        "Haewon: Four",
+    ]
+
+
+def test_grounded_name_overrides_dominant_frequency():
+    vtt = speaker_vtt("Bae: One", "Bae: Two", "BAE: Three")
+
+    core.canonicalize_speaker_casing(vtt, grounded_names=["BAE"])
+
+    assert [caption.text for caption in vtt.captions] == [
+        "BAE: One",
+        "BAE: Two",
+        "BAE: Three",
+    ]
+
+
+def test_frequency_tie_keeps_first_seen_spelling():
+    vtt = speaker_vtt("Sana: One", "SANA: Two")
+    core.canonicalize_speaker_casing(vtt)
+    assert [caption.text for caption in vtt.captions] == [
+        "Sana: One",
+        "Sana: Two",
+    ]
+
+    vtt = speaker_vtt("SANA: One", "Sana: Two")
+    core.canonicalize_speaker_casing(vtt)
+    assert [caption.text for caption in vtt.captions] == [
+        "SANA: One",
+        "SANA: Two",
+    ]
+
+
+def test_speaker_casing_preserves_non_label_structure():
+    vtt = speaker_vtt(
+        "[Opening title]",
+        "Unlabeled dialogue line",
+        "Haewon: Named turn\nHAEWON: Second turn",
+    )
+
+    result = core.canonicalize_speaker_casing(vtt)
+
+    assert [caption.text for caption in result.captions] == [
+        "[Opening title]",
+        "Unlabeled dialogue line",
+        "Haewon: Named turn\nHaewon: Second turn",
+    ]
+    assert [(caption.start, caption.end) for caption in result.captions] == [
+        ("00:00:00.000", "00:00:01.000"),
+        ("00:00:01.000", "00:00:02.000"),
+        ("00:00:02.000", "00:00:03.000"),
+    ]

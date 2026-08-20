@@ -50,7 +50,7 @@ Every tracked file in this repository has a defined responsibility.
 | Path | Responsibility |
 | --- | --- |
 | `gemini_subs.py` | CLI entry point: dotenv loading, argument parsing, validation, and dispatch. |
-| `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, sparse audio-patch reconstruction and validation, and pure-editorial boundary merging. |
+| `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, speaker label casing canonicalization, sparse audio-patch reconstruction and validation, and pure-editorial boundary merging. |
 | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
 | `modules/media.py` | FFmpeg and FFprobe operations for probing, complete audio extraction, and stream-copy splitting. |
 | `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, boundary audio refinement, and global text refinement. |
@@ -283,7 +283,30 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - If only bracketed fragments and whitespace exist: `editorial`.
 
 ### Speaker label pattern
-Matches `^\s*([A-Z][\w' -]{1,30}):\s*`.
+`SPEAKER_LABEL_RE` matches `^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)` from the start of a cue line.
+The pattern captures leading indentation, the label, and the colon with its trailing spacing.
+
+### Speaker label casing canonicalization
+
+`canonicalize_speaker_casing(vtt, grounded_names=None)` rewrites each speaker label to one canonical spelling per case-insensitive label group.
+It accepts a `webvtt.WebVTT` object or a list of `webvtt.Caption` objects, and it modifies the object in place.
+
+The algorithm runs two passes over non-editorial cues:
+
+1. Collection: every line matching `SPEAKER_LABEL_RE` adds one occurrence to its casefolded label group.
+2. Rewrite: every matched label becomes its group's canonical spelling.
+   Leading indentation, the colon with its trailing spacing, and the remaining line text stay unchanged.
+
+Canonical spelling selection per group:
+
+1. A grounded name from `grounded_names` whose casefold equals the group key wins over script frequency.
+2. Otherwise the most frequent script spelling wins.
+3. Exact frequency ties keep the first spelling seen in the script.
+
+Publication boundary:
+
+- `gemini.global_refine_subtitles()` canonicalizes with its `grounded_names` argument before it saves the refined VTT atomically.
+- `pipeline.run_generation()` canonicalizes without grounded names when it publishes the final artifact directly without text refinement.
 
 ## Stitching and pure-editorial boundary merging
 
@@ -343,6 +366,8 @@ Refines the full script using grounded identity research.
      2. English polishing, idiom localization, formatting cleanup.
      3. Forbids retiming, merging, splitting, adding, or deleting cues.
    - Output: `RefinementResponse` applied atomically to target.
+4. **Speaker label casing canonicalization:**
+   - `core.canonicalize_speaker_casing(vtt, grounded_names)` runs deterministically after the model changes and before the atomic save.
 
 ## Work state, locking, and recovery
 

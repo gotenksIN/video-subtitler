@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
+SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
 REPAIR_WINDOW_SECONDS = 5.0
 
@@ -280,6 +281,56 @@ def dialogue_turns(text):
         if words:
             turns.append(words)
     return turns
+
+
+def canonicalize_speaker_casing(vtt, grounded_names=None):
+    """Rewrite speaker label spellings to one canonical casing per speaker.
+
+    A grounded name whose casefold matches a label group overrides script
+    frequency. Ungrounded groups keep their most frequent script spelling;
+    exact frequency ties keep the first spelling seen in the script.
+    """
+    captions = getattr(vtt, "captions", vtt)
+    grounded_lookup = {
+        name.casefold(): name
+        for name in (grounded_names or ())
+        if name and name.strip()
+    }
+
+    spelling_counts = {}
+    for caption in captions:
+        if classify_cue_text(caption.text) == "editorial":
+            continue
+        for line in caption.text.splitlines():
+            match = SPEAKER_LABEL_RE.match(line)
+            if not match:
+                continue
+            label = match.group(2)
+            counts = spelling_counts.setdefault(label.casefold(), {})
+            counts[label] = counts.get(label, 0) + 1
+
+    targets = {}
+    for group_key, counts in spelling_counts.items():
+        if group_key in grounded_lookup:
+            targets[group_key] = grounded_lookup[group_key]
+        else:
+            targets[group_key] = max(counts, key=counts.get)
+
+    for caption in captions:
+        if classify_cue_text(caption.text) == "editorial":
+            continue
+        lines = caption.text.splitlines()
+        rewritten = []
+        for line in lines:
+            match = SPEAKER_LABEL_RE.match(line)
+            if match and match.group(2).casefold() in targets:
+                target = targets[match.group(2).casefold()]
+                line = match.group(1) + target + match.group(3) + line[match.end() :]
+            rewritten.append(line)
+        if rewritten != lines:
+            caption.text = "\n".join(rewritten)
+
+    return vtt
 
 
 def merge_intervals(intervals):
