@@ -1,15 +1,19 @@
-"""Core schemas, timestamp handling, source titles, URL policy, and dedup."""
+"""Core schemas, timestamp handling, source titles, URL policy, and audio refinement."""
 
+import itertools
 import re
 import urllib.parse
+from collections import Counter
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
-SPEAKER_LABEL_RE = re.compile(r"^([^:\[\]]+): ")
+AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
+REPAIR_WINDOW_SECONDS = 5.0
 
 
 class Caption(BaseModel):
@@ -31,6 +35,34 @@ class RefinedCaption(BaseModel):
 class RefinementResponse(BaseModel):
     changes: list[RefinedCaption] = Field(
         description="List of subtitles to change. Only include ones that need changes."
+    )
+
+
+class AudioRefinedCue(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source_ids: list[int] = Field(
+        alias="sourceIds", description="Request-only source IDs this cue replaces"
+    )
+    start: str = Field(description="Source-relative start in HH:MM:SS.mmm format")
+    end: str = Field(description="Source-relative end in HH:MM:SS.mmm format")
+    text: str = Field(description="The complete replacement cue text")
+
+
+class AudioRefinementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contract_version: Literal["sparse-patch-v1"] = Field(
+        alias="contractVersion",
+        description="Sparse audio-refinement response contract version",
+    )
+    deleted_source_ids: list[int] = Field(
+        default_factory=list,
+        alias="deletedSourceIds",
+        description="Source IDs removed from the script",
+    )
+    cues: list[AudioRefinedCue] = Field(
+        description="Only changed, replacement, split, merged, or recovered cues"
     )
 
 
@@ -216,119 +248,456 @@ def classify_context_urls(urls):
     return youtube_urls, ordinary_urls
 
 
-def remove_boundary_duplicate_prefix(previous_text, current_text):
-    def normalize_words(line):
-        return tuple(re.findall(r"\w+", SPEAKER_LABEL_RE.sub("", line).casefold()))
-
-    def normalized_elements(text):
-        elements = []
-        active_turn = None
-        lines = text.splitlines()
-
-        def flush_turn(end):
-            nonlocal active_turn
-            if active_turn is not None:
-                label, words, start = active_turn
-                elements.append((label, tuple(words), start, end))
-                active_turn = None
-
-        for position, line in enumerate(lines):
-            match = SPEAKER_LABEL_RE.match(line)
-            if match:
-                flush_turn(position)
-                active_turn = (
-                    match.group(1).casefold(),
-                    list(normalize_words(line)),
-                    position,
-                )
-            elif line.lstrip().startswith("["):
-                flush_turn(position)
-                elements.append((None, (), position, position + 1))
-            elif active_turn is not None:
-                active_turn[1].extend(normalize_words(line))
-            else:
-                elements.append((None, (), position, position + 1))
-
-        flush_turn(len(lines))
-        return elements
-
-    previous_turns = []
-    for element in reversed(normalized_elements(previous_text)):
-        if element[0] is None:
-            break
-        previous_turns.append(element)
-    previous_turns.reverse()
-
-    current_turns = []
-    for element in normalized_elements(current_text):
-        if element[0] is None:
-            break
-        current_turns.append(element)
-
-    current_lines = current_text.splitlines()
-    for count in range(min(len(previous_turns), len(current_turns)), 0, -1):
-        previous_suffix = previous_turns[-count:]
-        current_prefix = current_turns[:count]
-        exact_turns = count > 1
-        if all(
-            len(current_words) >= 2
-            and previous_label == current_label
-            and (
-                previous_words == current_words
-                if exact_turns
-                else len(previous_words) >= len(current_words)
-                and previous_words[-len(current_words) :] == current_words
-            )
-            for (previous_label, previous_words, *_), (
-                current_label,
-                current_words,
-                *_,
-            ) in zip(previous_suffix, current_prefix)
-        ):
-            del current_lines[: current_prefix[-1][3]]
-            break
-    return "\n".join(current_lines)
+def classify_cue_text(text):
+    """Classify one cue as dialogue, editorial, or mixed."""
+    without_brackets = re.sub(r"\[[^\]]*\]", "", text).strip()
+    has_brackets = bool(re.search(r"\[[^\]]*\]", text))
+    if not has_brackets:
+        return "dialogue"
+    if re.search(r"\w", without_brackets):
+        return "mixed"
+    return "editorial"
 
 
-def dedup_boundary_overlap(vtt, chunk_indices, timings=None):
-    """Remove exact boundary echoes between consecutive owner chunks.
+def visual_fragment_strings(text):
+    """Return exact bracketed fragment strings."""
+    return re.findall(r"\[[^\]]*\]", text)
 
-    Captions must be sorted by start time. Each element of chunk_indices is
-    the owner chunk index of the caption at the same position. When a
-    caption belongs to the owner chunk directly after the previous
-    surviving caption and overlaps it in time, exact same-speaker
-    word-suffix echoes are removed from the start of its text. Captions
-    whose text becomes empty are removed. Returns the surviving chunk
-    indices aligned with the surviving captions.
-    """
-    if len(vtt.captions) != len(chunk_indices):
-        raise ValueError(
-            "boundary dedup requires one chunk index per caption: "
-            f"{len(vtt.captions)} captions, {len(chunk_indices)} indices"
-        )
-    if timings is not None and len(vtt.captions) != len(timings):
-        raise ValueError("boundary dedup requires one timing per caption")
 
-    survivors = []
-    surviving_indices = []
-    surviving_ends = []
-    for position, (caption, chunk_idx) in enumerate(zip(vtt.captions, chunk_indices)):
-        if timings is None:
-            start = parse_time(caption.start)
-            end = parse_time(caption.end)
+def has_unmatched_brackets(text):
+    without_fragments = re.sub(r"\[[^\]]*\]", "", text)
+    return "[" in without_fragments or "]" in without_fragments
+
+
+def dialogue_turns(text):
+    """Return per-line normalized dialogue word tuples, skipping visual lines."""
+    turns = []
+    for line in text.splitlines():
+        dialogue = re.sub(
+            r"^([^:\[\]]+):\s*", "", re.sub(r"\[[^\]]*\]", "", line)
+        ).strip()
+        words = tuple(re.findall(r"\w+", dialogue.lower()))
+        if words:
+            turns.append(words)
+    return turns
+
+
+def merge_intervals(intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
-            start, end = timings[position]
+            merged.append((start, end))
+    return merged
+
+
+def build_repair_regions(boundaries, window=REPAIR_WINDOW_SECONDS):
+    return merge_intervals(
+        [(boundary - window, boundary + window) for boundary in boundaries]
+    )
+
+
+def interval_intersects_any(interval, regions):
+    start, end = interval
+    return any(
+        start < region_end and end > region_start
+        for region_start, region_end in regions
+    )
+
+
+def interval_contained_in_any(interval, regions):
+    start, end = interval
+    return any(
+        region_start <= start and end <= region_end
+        for region_start, region_end in regions
+    )
+
+
+def canonical_timestamp(value):
+    try:
+        parsed = parse_time(value)
+    except ValueError as error:
+        raise ValueError(f"Invalid timestamp {value!r}: {error}") from None
+    formatted = format_time(parsed)
+    if str(value).strip() != formatted:
+        raise ValueError(f"Timestamp {value!r} is not canonical HH:MM:SS.mmm format")
+    return formatted
+
+
+def is_identical_copy(cue, source_by_id):
+    if len(cue["source_ids"]) != 1:
+        return False
+    source = source_by_id[cue["source_ids"][0]]
+    return (
+        cue["text"] == source["text"]
+        and cue["start"] == source["start"]
+        and cue["end"] == source["end"]
+    )
+
+
+def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
+    """Expand sparse patches with exact copies of every omitted source cue."""
+    referenced = {source_id for cue in response.cues for source_id in cue.source_ids}
+    deleted = set(response.deleted_source_ids)
+
+    patch_starts = [parse_time(canonical_timestamp(cue.start)) for cue in response.cues]
+    if any(after < before for before, after in itertools.pairwise(patch_starts)):
+        raise ValueError("Sparse audio refinement cues are not in script order")
+    patch_lineage = [source_id for cue in response.cues for source_id in cue.source_ids]
+    if any(after < before for before, after in itertools.pairwise(patch_lineage)):
+        raise ValueError(
+            "Sparse audio refinement cues reference source IDs out of script order"
+        )
+
+    for cue in response.cues:
+        if has_unmatched_brackets(cue.text):
+            raise ValueError("Sparse audio refinement cue contains unmatched brackets")
+        if len(cue.source_ids) != 1 or cue.source_ids[0] not in source_by_id:
+            continue
+        source = source_by_id[cue.source_ids[0]]
         if (
-            survivors
-            and chunk_idx == surviving_indices[-1] + 1
-            and start < surviving_ends[-1]
+            canonical_timestamp(cue.start) == source["start"]
+            and canonical_timestamp(cue.end) == source["end"]
+            and cue.text == source["text"]
         ):
-            text = remove_boundary_duplicate_prefix(survivors[-1].text, caption.text)
-            if not text:
+            raise ValueError(
+                f"Sparse audio refinement must omit unchanged source cue "
+                f"{cue.source_ids[0]}"
+            )
+
+    candidate_cues = list(response.cues)
+    candidate_cues.extend(
+        AudioRefinedCue(
+            sourceIds=[entry["id"]],
+            start=entry["start"],
+            end=entry["end"],
+            text=entry["text"],
+        )
+        for entry in source_entries
+        if entry["id"] not in referenced and entry["id"] not in deleted
+    )
+    candidate_cues.sort(
+        key=lambda cue: (
+            parse_time(canonical_timestamp(cue.start)),
+            cue.source_ids[0] if cue.source_ids else -1,
+        )
+    )
+    return response.model_copy(update={"cues": candidate_cues})
+
+
+def validate_audio_refinement_response(
+    response, source_entries, audio_duration, boundaries
+):
+    """Reconstruct and validate the complete candidate before writing files.
+
+    Lineage and authority checks run on a complete candidate containing exact
+    host-side copies of omitted source cues.
+    """
+    if any(has_unmatched_brackets(entry["text"]) for entry in source_entries):
+        raise ValueError("Audio refinement source cue contains unmatched brackets")
+    source_by_id = {entry["id"]: entry for entry in source_entries}
+    source_ids = set(source_by_id)
+    if len(source_ids) != len(source_entries):
+        raise ValueError("Audio refinement source IDs are not unique")
+    response = reconstruct_sparse_audio_candidate(
+        response, source_entries, source_by_id
+    )
+    regions = build_repair_regions(boundaries)
+    audio_duration_ms = round(audio_duration * 1000)
+
+    deleted = list(response.deleted_source_ids)
+    if len(set(deleted)) != len(deleted):
+        raise ValueError("Audio refinement deleted_source_ids contains duplicates")
+    unknown_deleted = set(deleted) - source_ids
+    if unknown_deleted:
+        raise ValueError(
+            f"Audio refinement deletes unknown source IDs: {sorted(unknown_deleted)}"
+        )
+
+    referenced_counts = Counter()
+    response_cues = []
+    for cue in response.cues:
+        if not cue.text.strip():
+            raise ValueError("Audio refinement output cues must contain text")
+        cue_ids = list(cue.source_ids)
+        if not cue_ids and visual_fragment_strings(cue.text):
+            raise ValueError("Recovered cues must not contain bracketed text")
+        if not cue_ids and not dialogue_turns(cue.text):
+            raise ValueError("Recovered cues must contain spoken dialogue")
+        if cue_ids != sorted(set(cue_ids)):
+            raise ValueError(
+                f"Audio refinement cue source_ids must be strictly "
+                f"increasing with no duplicates: {cue_ids}"
+            )
+        for source_id in cue_ids:
+            referenced_counts[source_id] += 1
+        start = canonical_timestamp(cue.start)
+        end = canonical_timestamp(cue.end)
+        start_ms = round(parse_time(start) * 1000)
+        end_ms = round(parse_time(end) * 1000)
+        if start_ms < 0:
+            raise ValueError(f"Audio refinement cue has a negative start: {start}")
+        if end_ms > audio_duration_ms:
+            if end_ms - audio_duration_ms > 500:
+                raise ValueError(
+                    f"Audio refinement cue {start} --> {end} exceeds the "
+                    "complete audio duration"
+                )
+            end_ms = audio_duration_ms
+            end = format_time(end_ms / 1000)
+        if end_ms <= start_ms:
+            raise ValueError(
+                f"Audio refinement cue {start} --> {end} rounds to a "
+                "non-positive interval"
+            )
+        response_cues.append(
+            {
+                "source_ids": cue_ids,
+                "start": format_time(start_ms / 1000),
+                "end": end,
+                "text": cue.text,
+            }
+        )
+
+    unknown_referenced = set(referenced_counts) - source_ids
+    if unknown_referenced:
+        raise ValueError(
+            "Audio refinement references unknown source IDs: "
+            f"{sorted(unknown_referenced)}"
+        )
+    conflicting = set(deleted) & set(referenced_counts)
+    if conflicting:
+        raise ValueError(
+            "Audio refinement both references and deletes source IDs: "
+            f"{sorted(conflicting)}"
+        )
+    unaccounted = source_ids - set(referenced_counts) - set(deleted)
+    if unaccounted:
+        raise ValueError(
+            f"Audio refinement does not account for source IDs: {sorted(unaccounted)}"
+        )
+
+    cues_by_source_id = {source_id: [] for source_id in source_ids}
+    for cue in response_cues:
+        for source_id in cue["source_ids"]:
+            cues_by_source_id[source_id].append(cue)
+
+    # Lineage checks run in response order, which must be script order.
+    last_cue_index = {}
+    for index, cue in enumerate(response_cues):
+        for source_id in set(cue["source_ids"]):
+            if source_id in last_cue_index and last_cue_index[source_id] != index - 1:
+                raise ValueError(
+                    f"Source ID {source_id} repeats in non-adjacent output cues"
+                )
+            last_cue_index[source_id] = index
+    for source_id, count in referenced_counts.items():
+        if count > 1:
+            for cue in response_cues:
+                if source_id in cue["source_ids"] and cue["source_ids"] != [source_id]:
+                    raise ValueError(
+                        f"Source ID {source_id} must split into singleton cues; "
+                        "merges cannot overlap splits"
+                    )
+    flattened = []
+    for cue in response_cues:
+        cue_ids = cue["source_ids"]
+        if cue_ids and cue_ids != list(range(cue_ids[0], cue_ids[-1] + 1)):
+            raise ValueError(
+                f"Output cue {cue_ids} merges source IDs that are not "
+                "contiguous in script order"
+            )
+        flattened.extend(cue_ids)
+    if any(after < before for before, after in itertools.pairwise(flattened)):
+        raise ValueError(
+            "Audio refinement output cues reference source IDs out of script order"
+        )
+
+    # Deletions may target dialogue cues only.
+    for source_id in deleted:
+        if source_by_id[source_id]["classification"] != "dialogue":
+            raise ValueError(f"Audio refinement deletes non-dialogue cue {source_id}")
+
+    # Pure editorial cues are preserved one-to-one with identical text and
+    # timing. Mixed-cue fragments stay attached to their source lineage:
+    # every source fragment appears at least once among that source's
+    # descendant cues, and the complete output preserves the exact fragment
+    # multiset, so nothing is lost or duplicated.
+    for entry in source_entries:
+        descendants = cues_by_source_id[entry["id"]]
+        matches = [cue for cue in descendants if cue["source_ids"] == [entry["id"]]]
+        if entry["classification"] == "editorial" and not (
+            len(matches) == 1
+            and matches[0]["text"] == entry["text"]
+            and matches[0]["start"] == entry["start"]
+            and matches[0]["end"] == entry["end"]
+        ):
+            raise ValueError(
+                f"Pure editorial cue {entry['id']} must be preserved with "
+                "identical text and timing"
+            )
+        if entry["classification"] == "mixed":
+            expected = Counter(visual_fragment_strings(entry["text"]))
+            consumed = Counter(
+                fragment
+                for cue in descendants
+                for fragment in visual_fragment_strings(cue["text"])
+            )
+            if not all(
+                consumed[fragment] >= count for fragment, count in expected.items()
+            ):
+                raise ValueError(
+                    f"Bracketed fragments of mixed cue {entry['id']} must be "
+                    "preserved exactly once"
+                )
+
+    # A cue may only carry bracketed fragments from its own source
+    # lineages, so merged mixed cues keep distinct fragments attached to
+    # their origins without exchange or injection.
+    for cue in response_cues:
+        if not cue["source_ids"]:
+            continue
+        allowed = {
+            fragment
+            for source_id in cue["source_ids"]
+            for fragment in visual_fragment_strings(source_by_id[source_id]["text"])
+        }
+        for fragment in visual_fragment_strings(cue["text"]):
+            if fragment not in allowed:
+                raise ValueError(
+                    f"Cue {cue['source_ids']} contains bracketed fragments "
+                    "that do not belong to it"
+                )
+
+    expected_fragments = Counter(
+        fragment
+        for entry in source_entries
+        if entry["classification"] != "dialogue"
+        for fragment in visual_fragment_strings(entry["text"])
+    )
+    consumed_fragments = Counter(
+        fragment
+        for cue in response_cues
+        for fragment in visual_fragment_strings(cue["text"])
+    )
+    if consumed_fragments != expected_fragments:
+        raise ValueError(
+            "The complete output must preserve the exact bracketed fragment multiset"
+        )
+
+    ordered_cues = sorted(
+        response_cues,
+        key=lambda item: parse_time(item["start"]),
+    )
+
+    for entry in source_entries:
+        start = parse_time(entry["start"])
+        end = parse_time(entry["end"])
+        if interval_intersects_any((start, end), regions):
+            continue
+        matches = [
+            cue
+            for cue in cues_by_source_id[entry["id"]]
+            if cue["source_ids"] == [entry["id"]]
+        ]
+        if not (
+            len(matches) == 1
+            and matches[0]["text"] == entry["text"]
+            and matches[0]["start"] == entry["start"]
+            and matches[0]["end"] == entry["end"]
+        ):
+            raise ValueError(
+                f"Cue {entry['id']} lies outside every repair region and "
+                "must remain identical"
+            )
+    for cue in ordered_cues:
+        if is_identical_copy(cue, source_by_id):
+            continue
+        start = parse_time(cue["start"])
+        end = parse_time(cue["end"])
+        if cue["source_ids"]:
+            common_regions = None
+            source_intervals = []
+            for source_id in cue["source_ids"]:
+                source = source_by_id[source_id]
+                source_interval = (
+                    parse_time(source["start"]),
+                    parse_time(source["end"]),
+                )
+                source_intervals.append(source_interval)
+                matching = [
+                    region
+                    for region in regions
+                    if interval_intersects_any(source_interval, [region])
+                ]
+                common_regions = (
+                    set(matching)
+                    if common_regions is None
+                    else common_regions & set(matching)
+                )
+            envelopes = [
+                (
+                    min(region[0], *(interval[0] for interval in source_intervals)),
+                    max(region[1], *(interval[1] for interval in source_intervals)),
+                )
+                for region in common_regions or []
+            ]
+            if not interval_contained_in_any((start, end), envelopes):
+                raise ValueError(
+                    "Changed cues must stay inside one shared repair region "
+                    "plus the full extents of its referenced source cues"
+                )
+        elif not interval_contained_in_any((start, end), regions):
+            raise ValueError("Recovered cues must stay inside a repair region")
+
+    seen = set()
+    for cue in ordered_cues:
+        key = (cue["start"], cue["end"], cue["text"])
+        if key in seen:
+            raise ValueError("Audio refinement produced duplicate output cues")
+        seen.add(key)
+
+    return ordered_cues
+
+
+def merge_visual_boundary_fragments(entries, boundary_starts):
+    """Merge exact pure-editorial cues clipped at adjacent segment boundaries.
+
+    Two cues merge when they come from adjacent owner chunks, classify as
+    pure editorial cues, share exactly the same trimmed text, and the first
+    ends within 0.5 seconds of the shared boundary while the second starts
+    within 0.5 seconds of it. The merged cue keeps the first start, the
+    second end, the shared trimmed text, and the later owner index so one
+    persistent visual cue can cross several boundaries.
+    """
+    entries = list(entries)
+    merged = True
+    while merged:
+        merged = False
+        for current_index, current in enumerate(entries):
+            if current["chunk_idx"] >= len(boundary_starts):
                 continue
-            caption.text = text
-        survivors.append(caption)
-        surviving_indices.append(chunk_idx)
-        surviving_ends.append(end)
-    vtt.captions = survivors
-    return surviving_indices
+            boundary = boundary_starts[current["chunk_idx"]]
+            for following_index in range(current_index + 1, len(entries)):
+                following = entries[following_index]
+                if (
+                    following["chunk_idx"] == current["chunk_idx"] + 1
+                    and classify_cue_text(current["text"]) == "editorial"
+                    and classify_cue_text(following["text"]) == "editorial"
+                    and current["text"].strip() == following["text"].strip()
+                    and abs(boundary - current["end"]) <= 0.5
+                    and abs(following["start"] - boundary) <= 0.5
+                ):
+                    entries[current_index] = {
+                        "start": current["start"],
+                        "end": following["end"],
+                        "text": current["text"].strip(),
+                        "chunk_idx": following["chunk_idx"],
+                    }
+                    del entries[following_index]
+                    merged = True
+                    break
+            if merged:
+                break
+    return entries

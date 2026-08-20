@@ -22,10 +22,6 @@ def test_parse_time_accepts_documented_shapes(value, seconds):
     assert core.parse_time(value) == seconds
 
 
-def test_parse_time_treats_decimal_commas_as_points():
-    assert core.parse_time("00:00:01,500") == 1.5
-
-
 @pytest.mark.parametrize(
     "value",
     ["-0.1", "-00:00:00.1", "1:2:3:4", "abc", "", "1..5", "1.2.3"],
