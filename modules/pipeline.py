@@ -29,10 +29,11 @@ class GenerationConfig:
     api_key: str | None = None
     base_url: str | None = None
     refine_model: str | None = None
+    audio_refine_model: str | None = None
     chunk_dur: int = 60
-    overlap: float = 5.0
     workers: int = DEFAULT_API_WORKERS
     thinking_level: str | None = None
+    audio_refine: bool = True
     refine_text: bool = True
     context_urls: tuple[str, ...] = ()
 
@@ -43,8 +44,8 @@ class GenerationConfig:
 
 
 def build_manifest(config: GenerationConfig):
+    """Build the manifest dictionary and resolved work directory path."""
     ext, mime, video_codec = media.probe_video_format(str(config.video_path))
-    process_ext, process_mime = ext, mime
 
     manifest = {
         "video": io.file_fingerprint(config.video_path),
@@ -53,11 +54,8 @@ def build_manifest(config: GenerationConfig):
         "mode": "generate",
         "model": config.model,
         "chunk_thinking_level": config.chunk_thinking_level,
-        "overlap": config.overlap,
         "chunk_ext": ext,
         "chunk_mime": mime,
-        "process_ext": process_ext,
-        "process_mime": process_mime,
         "video_codec": video_codec,
     }
     digest = hashlib.sha256(
@@ -67,6 +65,7 @@ def build_manifest(config: GenerationConfig):
 
 
 def acquire_lock(chunk_dir):
+    """Acquire an exclusive advisory POSIX lock on the work directory."""
     lock_path = os.path.join(chunk_dir, LOCK_NAME)
     lock_file = open(  # noqa: SIM115 - The caller keeps the lock file open.
         lock_path, "a+", encoding="utf-8"
@@ -90,6 +89,7 @@ def acquire_lock(chunk_dir):
 
 
 def release_lock(lock_file):
+    """Release the advisory lock and close the lock file descriptor."""
     if lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -98,6 +98,7 @@ def release_lock(lock_file):
 
 
 def clean_completed_work(chunk_dir):
+    """Remove all work directory contents except the active lock file."""
     for entry in os.scandir(chunk_dir):
         if entry.name == LOCK_NAME:
             continue
@@ -108,6 +109,7 @@ def clean_completed_work(chunk_dir):
 
 
 def collect_api_results(futures):
+    """Collect completed futures and return names of failed chunks."""
     failed = []
     for future in concurrent.futures.as_completed(futures):
         chunk_name = futures[future]
@@ -123,122 +125,40 @@ def collect_api_results(futures):
 def process_chunks(
     api_key,
     base_url,
-    video_file,
     chunk_dir,
     chunks,
-    overlap_sec,
-    clip_ext,
-    clip_workers,
     api_workers,
     model_name,
     chunk_mime,
     thinking_level,
     source_title=None,
 ):
-    windows = media.get_processing_windows(chunks, overlap_sec)
-    if overlap_sec <= 0 or len(windows) <= 1:
-        ffmpeg_threads = media.ffmpeg_threads_for_workers(1)
-        processing_chunks = [
-            media.attach_overlap_clip(
-                video_file, chunk_dir, chunk, overlap_sec, clip_ext, ffmpeg_threads
-            )
-            for chunk in windows
-        ]
-        print(
-            f"Processing {len(processing_chunks)} chunks using {api_workers} workers..."
-        )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as executor:
-            futures = {
-                executor.submit(
-                    gemini.process_chunk,
-                    api_key,
-                    base_url,
-                    chunk,
-                    chunk_dir,
-                    model_name,
-                    chunk_mime,
-                    thinking_level,
-                    source_title,
-                ): chunk["clip_name"]
-                for chunk in processing_chunks
-            }
-            return collect_api_results(futures)
-
-    clip_workers = min(clip_workers, len(windows))
-    ffmpeg_threads = media.ffmpeg_threads_for_workers(clip_workers)
-    print(
-        f"Creating {len(windows)} overlap clips using {clip_workers} workers "
-        f"({ffmpeg_threads or 'auto'} FFmpeg threads each) and processing them "
-        f"using {api_workers} API workers..."
-    )
-    failed = []
-    api_futures = {}
-    with (
-        concurrent.futures.ThreadPoolExecutor(
-            max_workers=clip_workers
-        ) as clip_executor,
-        concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as api_executor,
-    ):
-        clip_futures = {
-            clip_executor.submit(
-                media.attach_overlap_clip,
-                video_file,
-                chunk_dir,
+    """Process video chunks concurrently with a thread pool and collect failures."""
+    print(f"Processing {len(chunks)} chunks using {api_workers} workers...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as executor:
+        futures = {
+            executor.submit(
+                gemini.process_chunk,
+                api_key,
+                base_url,
                 chunk,
-                overlap_sec,
-                clip_ext,
-                ffmpeg_threads,
-            ): chunk
-            for chunk in windows
+                chunk_dir,
+                model_name,
+                chunk_mime,
+                thinking_level,
+                source_title,
+            ): chunk["name"]
+            for chunk in chunks
         }
-        for future in concurrent.futures.as_completed(clip_futures):
-            chunk = clip_futures[future]
-            chunk_name = f"context_chunk_{chunk['idx']:03d}{clip_ext}"
-            try:
-                processing_chunk = future.result()
-            except Exception as e:  # noqa: BLE001 - Record clip failures and continue.
-                print(f"ERROR creating {chunk_name}: {e}")
-                failed.append(chunk_name)
-                continue
-
-            api_futures[
-                api_executor.submit(
-                    gemini.process_chunk,
-                    api_key,
-                    base_url,
-                    processing_chunk,
-                    chunk_dir,
-                    model_name,
-                    chunk_mime,
-                    thinking_level,
-                    source_title,
-                )
-            ] = processing_chunk["clip_name"]
-
-        failed.extend(collect_api_results(api_futures))
-
-    return failed
+        return collect_api_results(futures)
 
 
 def stitch(chunk_dir, output_vtt):
-    """Stitch chunk results into one VTT.
-
-    Returns the surviving per-caption owner chunk indices when generated
-    overlap filtering applies boundary dedup, else None.
-    """
+    """Stitch stream-copy chunk results into one VTT at segment offsets."""
     print("Stitching chunks into final VTT...")
-    final_vtt = webvtt.WebVTT()
-    captions_to_write = []
-
-    manifest = io.load_manifest(chunk_dir)
     chunks = media.list_chunks(chunk_dir)
-    windows = media.get_processing_windows(
-        chunks, float(manifest.get("overlap") or 0.0)
-    )
-    window_map = {c["idx"]: c for c in windows}
-    filter_generated_context = (
-        manifest.get("mode") == "generate" and float(manifest.get("overlap") or 0.0) > 0
-    )
+    boundary_starts = [chunk["start"] for chunk in chunks[1:]]
+    chunk_by_index = {chunk["idx"]: chunk for chunk in chunks}
 
     json_files = sorted(
         [
@@ -251,7 +171,7 @@ def stitch(chunk_dir, output_vtt):
         int(name.removeprefix("subtitle_chunk_").removesuffix(".json"))
         for name in json_files
     }
-    expected_indices = set(window_map)
+    expected_indices = set(chunk_by_index)
     missing_indices = sorted(expected_indices - result_indices)
     unexpected_indices = sorted(result_indices - expected_indices)
     if missing_indices or unexpected_indices:
@@ -262,30 +182,21 @@ def stitch(chunk_dir, output_vtt):
             problems.append(f"unexpected chunk indices: {unexpected_indices}")
         raise ValueError(f"Invalid subtitle results: {'; '.join(problems)}")
 
+    entries = []
     for json_name in json_files:
-        chunk_idx = int(json_name.replace("subtitle_chunk_", "").replace(".json", ""))
-        window = window_map[chunk_idx]
-        offset_sec = window["clip_start"]
+        chunk_idx = int(json_name.removeprefix("subtitle_chunk_").removesuffix(".json"))
+        offset_sec = chunk_by_index[chunk_idx]["start"]
 
-        with open(os.path.join(chunk_dir, json_name), "r") as f:
+        with open(os.path.join(chunk_dir, json_name), "r", encoding="utf-8") as f:
             captions = json.load(f)
 
         for cap in captions:
-            rel_start = core.parse_time(cap["start"])
-            rel_end = core.parse_time(cap["end"])
-            if filter_generated_context:
-                midpoint = (rel_start + rel_end) / 2
-                if not (
-                    window["owner_start_rel"] <= midpoint < window["owner_end_rel"]
-                ):
-                    continue
-
-            abs_start = rel_start + offset_sec
-            abs_end = rel_end + offset_sec
+            abs_start = offset_sec + core.parse_time(cap["start"])
+            abs_end = offset_sec + core.parse_time(cap["end"])
             if abs_end <= abs_start:
                 raise ValueError(f"Invalid caption timing in {json_name}: {cap}")
 
-            captions_to_write.append(
+            entries.append(
                 {
                     "start": abs_start,
                     "end": abs_end,
@@ -294,31 +205,29 @@ def stitch(chunk_dir, output_vtt):
                 }
             )
 
-    captions_to_write.sort(key=lambda item: item["start"])
-    chunk_indices = [cap["chunk_idx"] for cap in captions_to_write]
-    timings = [(cap["start"], cap["end"]) for cap in captions_to_write]
-    for cap in captions_to_write:
+    entries.sort(key=lambda item: item["start"])
+    entries = core.merge_visual_boundary_fragments(entries, boundary_starts)
+
+    final_vtt = webvtt.WebVTT()
+    for entry in entries:
         final_vtt.captions.append(
             webvtt.Caption(
-                core.format_time(cap["start"]),
-                core.format_time(cap["end"]),
-                cap["text"],
+                core.format_time(entry["start"]),
+                core.format_time(entry["end"]),
+                entry["text"],
             )
         )
-
-    provenance = None
-    if filter_generated_context:
-        provenance = core.dedup_boundary_overlap(final_vtt, chunk_indices, timings)
 
     io.atomic_save_vtt(final_vtt, output_vtt)
     print(
         f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions."
     )
-    return provenance
+    return output_vtt
 
 
-def validate_generation_config(config: GenerationConfig) -> None:
-    core.validate_context_urls(config.context_urls)
+def validate_generation_config(config: GenerationConfig) -> list[str]:
+    """Validate pipeline generation configuration inputs."""
+    context_urls = core.validate_context_urls(config.context_urls)
 
     if config.chunk_dur <= 0:
         raise ValueError("--chunk-dur must be greater than 0")
@@ -327,12 +236,6 @@ def validate_generation_config(config: GenerationConfig) -> None:
         raise ValueError("--workers must be greater than 0")
 
     gemini.validate_thinking_level_for_model(config.model, config.chunk_thinking_level)
-
-    if config.overlap < 0:
-        raise ValueError("--overlap must be greater than or equal to 0")
-
-    if config.overlap >= config.chunk_dur:
-        raise ValueError("--overlap must be smaller than --chunk-dur")
 
     if not config.video_path.exists():
         raise RuntimeError(f"Video file not found: {config.video_path}")
@@ -344,14 +247,14 @@ def validate_generation_config(config: GenerationConfig) -> None:
         raise RuntimeError(
             "Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
         )
+    return context_urls
 
 
 def run_generation(config: GenerationConfig) -> None:
     """Run the complete resumable generation lifecycle for one config."""
-    validate_generation_config(config)
+    context_urls = validate_generation_config(config)
 
     source_title = core.derive_source_title(config.video_path)
-    clip_workers = media.suggested_clip_workers(config.workers)
     manifest, chunk_dir = build_manifest(config)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_file = None
@@ -362,26 +265,32 @@ def run_generation(config: GenerationConfig) -> None:
         lock_file = acquire_lock(chunk_dir)
         print(f"Using work directory: {chunk_dir}")
 
-        # 1. Split Video
+        if config.audio_refine:
+            if not media.has_audio_stream(config.video_path):
+                raise RuntimeError(
+                    "Failed to extract complete audio. "
+                    "The source may not contain an audio stream."
+                )
+            audio_path, audio_duration, _source_duration, _cached = (
+                media.extract_complete_audio(config.video_path, chunk_dir)
+            )
+
+        # 1. Split video.
         media.split_video(str(config.video_path), chunk_dir, config.chunk_dur, manifest)
 
         chunks = media.list_chunks(chunk_dir)
         if not chunks:
             raise RuntimeError("No video chunks were created")
 
-        # 2. Process chunks concurrently. Overlap runs pipeline clip creation into API calls.
+        # 2. Process chunks concurrently through one API worker pool.
         failed = process_chunks(
             config.api_key,
             config.base_url,
-            str(config.video_path),
             chunk_dir,
             chunks,
-            config.overlap,
-            manifest["process_ext"],
-            clip_workers,
             config.workers,
             config.model,
-            manifest["process_mime"],
+            manifest["chunk_mime"],
             config.chunk_thinking_level,
             source_title,
         )
@@ -391,7 +300,30 @@ def run_generation(config: GenerationConfig) -> None:
                 f"Keeping {chunk_dir} so you can retry."
             )
 
-        # 3. Stitch chunks together and optionally refine before publication
+        # 3. Stitch chunks at actual segment offsets into a work artifact.
+        stitched_vtt = Path(chunk_dir) / "stitched.vtt"
+        stitch(chunk_dir, stitched_vtt)
+        current_vtt = stitched_vtt
+
+        # 4. Boundary-limited audio refinement over the complete audio.
+        if config.audio_refine:
+            audio_refined_vtt = Path(chunk_dir) / "audio_refined.vtt"
+            gemini.boundary_audio_refine_subtitles(
+                stitched_vtt=stitched_vtt,
+                audio_path=audio_path,
+                audio_duration=audio_duration,
+                boundaries=[chunk["start"] for chunk in chunks[1:]],
+                work_dir=chunk_dir,
+                output_vtt=audio_refined_vtt,
+                api_key=config.api_key,
+                base_url=config.base_url,
+                model_name=config.audio_refine_model
+                or gemini.DEFAULT_AUDIO_REFINE_MODEL,
+                source_title=source_title,
+            )
+            current_vtt = audio_refined_vtt
+
+        # 5. Global text refinement or direct atomic publication.
         if config.refine_text:
             output_path = config.output_path
             fd, staging_name = tempfile.mkstemp(
@@ -401,20 +333,19 @@ def run_generation(config: GenerationConfig) -> None:
             )
             staging_vtt = Path(staging_name)
             os.close(fd)
-            provenance = stitch(chunk_dir, staging_vtt)
             gemini.global_refine_subtitles(
-                staging_vtt,
-                str(output_path),
-                config.api_key,
-                config.base_url,
-                config.refine_model or config.model,
-                gemini.REFINEMENT_THINKING_LEVEL,
+                input_vtt=str(current_vtt),
+                output_vtt=str(staging_vtt),
+                api_key=config.api_key,
+                base_url=config.base_url,
+                model_name=config.refine_model or config.model,
+                thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
                 source_title=source_title,
-                context_urls=list(config.context_urls),
-                boundary_provenance=provenance,
+                context_urls=context_urls,
             )
+            os.replace(staging_vtt, config.output_path)
         else:
-            stitch(chunk_dir, str(config.output_path))
+            io.atomic_save_vtt(webvtt.read(str(current_vtt)), config.output_path)
 
         completed = True
 
@@ -423,7 +354,7 @@ def run_generation(config: GenerationConfig) -> None:
             if staging_vtt is not None:
                 staging_vtt.unlink(missing_ok=True)
 
-            # 4. Cleanup
+            # 6. Cleanup.
             if completed and os.path.exists(chunk_dir):
                 print(f"Cleaning up temporary directory: {chunk_dir}")
                 clean_completed_work(chunk_dir)

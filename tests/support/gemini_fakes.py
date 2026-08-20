@@ -70,7 +70,18 @@ class ScriptedGeminiClient:
     @staticmethod
     def _stream(call):
         for piece in call.pieces:
-            yield SimpleNamespace(text=piece)
+            if isinstance(piece, SimpleNamespace):
+                yield piece
+            else:
+                yield SimpleNamespace(text=piece)
+
+
+def stream_chunk(text=None, finish_reason=None):
+    """One SDK stream chunk with optional candidate finish metadata."""
+    return SimpleNamespace(
+        text=text,
+        candidates=[SimpleNamespace(finish_reason=finish_reason)],
+    )
 
 
 def chunk_call(pieces, error=None):
@@ -90,6 +101,11 @@ def youtube_call(pieces=("YouTube analysis",), error=None):
 
 def refinement_call(pieces, error=None):
     """One scripted structured refinement response."""
+    return StreamCall(pieces=list(pieces), error=error)
+
+
+def audio_call(pieces, error=None):
+    """One scripted audio-refinement response."""
     return StreamCall(pieces=list(pieces), error=error)
 
 

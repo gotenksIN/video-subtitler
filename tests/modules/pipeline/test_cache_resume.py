@@ -4,9 +4,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import webvtt
 
 from modules import gemini, media, pipeline
-from tests.support.workdir import FakeMediaTools
+from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
 def make_config(tmp_path, monkeypatch, **overrides):
@@ -24,7 +25,6 @@ def make_config(tmp_path, monkeypatch, **overrides):
         "model": "model",
         "api_key": "key",
         "chunk_dur": 60,
-        "overlap": 0,
         "workers": 7,
         "thinking_level": "high",
     }
@@ -48,7 +48,6 @@ def leave_resumable_failure(config, monkeypatch):
     [
         ("model", "other-model"),
         ("chunk_dur", 30),
-        ("overlap", 1),
         ("thinking_level", "medium"),
     ],
 )
@@ -71,6 +70,8 @@ def test_chunk_generation_changes_create_separate_resume_state(
         ("workers", 2),
         ("refine_model", "other-refiner"),
         ("refine_text", False),
+        ("audio_refine_model", "other-audio-refiner"),
+        ("audio_refine", False),
         ("api_key", "other-key"),
         ("base_url", "https://proxy.example"),
         ("context_urls", ("https://example.com/notes",)),
@@ -99,3 +100,42 @@ def test_changing_the_source_file_creates_separate_resume_state(tmp_path, monkey
 
     assert len(first) == 1
     assert len(second) == 2
+
+
+def test_retry_after_audio_stage_failure_reuses_split_chunks_and_audio(
+    tmp_path, monkeypatch
+):
+    config = make_config(tmp_path, monkeypatch, audio_refine=True, refine_text=False)
+    tools = FakeMediaTools()
+    monkeypatch.setattr(media.subprocess, "run", tools.run)
+
+    def process(_key, _base, chunk, chunk_dir, *_args):
+        write_chunk_subtitles(
+            chunk_dir,
+            chunk["idx"],
+            [{"id": 0, "start": "0.5", "end": "1.5", "text": f"Cue {chunk['idx']}"}],
+        )
+        return True
+
+    monkeypatch.setattr(gemini, "process_chunk", process)
+
+    def failing_refine(*_args, **_kwargs):
+        raise RuntimeError("audio refinement failed")
+
+    monkeypatch.setattr(gemini, "boundary_audio_refine_subtitles", failing_refine)
+    with pytest.raises(RuntimeError, match="audio refinement failed"):
+        pipeline.run_generation(config)
+
+    def audio_refine(**kwargs):
+        value = webvtt.read(kwargs["stitched_vtt"])
+        for caption in value.captions:
+            caption.text = f"Audio: {caption.text}"
+        value.save(str(kwargs["output_vtt"]))
+
+    monkeypatch.setattr(gemini, "boundary_audio_refine_subtitles", audio_refine)
+    pipeline.run_generation(config)
+
+    assert len(tools.split_calls()) == 1
+    assert len(tools.audio_extraction_calls()) == 1
+    result = webvtt.read(config.output_path)
+    assert [caption.text for caption in result] == ["Audio: Cue 0", "Audio: Cue 1"]

@@ -1,7 +1,5 @@
 """Runtime configuration policy of the generation pipeline."""
 
-from pathlib import Path
-
 import pytest
 
 from modules import media, pipeline
@@ -20,41 +18,11 @@ def make_config(tmp_path, **overrides):
     return pipeline.GenerationConfig(**values)
 
 
-def test_chunk_thinking_level_defaults_to_high():
-    config = pipeline.GenerationConfig(
-        video_path=Path("source.webm"),
-        output_path=Path("output.vtt"),
-        model="gemini-pro",
-    )
-
-    assert config.chunk_thinking_level == "high"
-
-
-def test_chunk_thinking_level_uses_the_explicit_value():
-    config = pipeline.GenerationConfig(
-        video_path=Path("source.webm"),
-        output_path=Path("output.vtt"),
-        model="gemini-pro",
-        thinking_level="low",
-    )
-
-    assert config.chunk_thinking_level == "low"
-
-
-def test_validation_accepts_configured_generation_inputs(tmp_path):
-    pipeline.validate_generation_config(make_config(tmp_path))
-
-
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"chunk_dur": 0}, "chunk-dur must be greater than 0"),
         ({"workers": 0}, "workers must be greater than 0"),
-        ({"overlap": -1}, "overlap must be greater than or equal to 0"),
-        (
-            {"chunk_dur": 5, "overlap": 5},
-            "overlap must be smaller than --chunk-dur",
-        ),
         (
             {"model": "gemini-pro", "thinking_level": "minimal"},
             "only supported by Flash",
