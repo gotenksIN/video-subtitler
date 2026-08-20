@@ -13,8 +13,6 @@ def test_incomplete_split_cleanup_removes_only_split_artifacts(tmp_path):
     remove = {
         "chunk_000.mp4": b"chunk",
         "chunk_001.webm": b"chunk",
-        "context_chunk_000.mp4": b"clip",
-        "context_chunk_000.mp4.tmp": b"tmp",
         "subtitle_chunk_000.json": "[]",
         "subtitle_chunk_000.json.tmp": "[]",
         "segments.csv": "chunk_000.mp4,0,1\n",

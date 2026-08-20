@@ -1,17 +1,22 @@
-"""FFmpeg and FFprobe operations for probing, splitting, and overlap clips."""
+"""FFmpeg and FFprobe operations for probing, splitting, and audio."""
 
+import json
 import math
 import os
 import re
 import subprocess
 from pathlib import Path
 
-from modules import core, io
+from modules import io
 
 SPLIT_COMPLETE_MARKER = ".split_complete"
+EXTRACTED_AUDIO_NAME = "extracted_audio.ogg"
+AUDIO_DURATION_TOLERANCE_SECONDS = 2.0
+AUDIO_MIME_TYPE = "audio/ogg"
 
 
 def probe_video_format(path):
+    """Probe video codec and return (extension, MIME type, codec name)."""
     cmd = [
         "ffprobe",
         "-v",
@@ -40,11 +45,166 @@ def probe_video_format(path):
         raise RuntimeError(f"Failed to probe video format: {e}")
 
 
+def ffprobe_format_duration(path: str | Path) -> float:
+    """Return container duration in seconds, or 0.0 on error."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return 0.0
+        parsed = float(result.stdout.strip())
+        return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
+    except OSError, ValueError:
+        return 0.0
+
+
+def ffprobe_audio_streams(path: str | Path) -> list[dict]:
+    """Return audio stream metadata dictionaries from FFprobe."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=codec_name,sample_rate,channels",
+        "-of",
+        "json",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return []
+        streams = json.loads(result.stdout).get("streams", [])
+    except OSError, ValueError, AttributeError:
+        return []
+    return [stream for stream in streams if isinstance(stream, dict)]
+
+
+def has_audio_stream(video_file: str | Path) -> bool:
+    """Return True when the source contains at least one audio stream."""
+    return bool(ffprobe_audio_streams(video_file))
+
+
+def extracted_audio_is_valid(path: str | Path) -> bool:
+    """Return True when path contains a single 48 kHz mono Opus stream."""
+    if ffprobe_format_duration(path) <= 0:
+        return False
+    streams = ffprobe_audio_streams(path)
+    if len(streams) != 1:
+        return False
+    stream = streams[0]
+    return (
+        stream.get("codec_name") == "opus"
+        and str(stream.get("sample_rate")) == "48000"
+        and stream.get("channels") == 1
+    )
+
+
+def audio_duration_consistent(audio_duration: float, source_duration: float) -> bool:
+    """Return True when audio duration is within tolerance of source duration."""
+    return (
+        math.isfinite(audio_duration)
+        and audio_duration > 0
+        and math.isfinite(source_duration)
+        and source_duration > 0
+        and abs(audio_duration - source_duration) <= AUDIO_DURATION_TOLERANCE_SECONDS
+    )
+
+
+def extract_complete_audio(
+    video_file: str | Path, work_dir: str | Path
+) -> tuple[str, float, float, bool]:
+    """Extract complete mono Opus audio from video_file into work_dir."""
+    source_duration = ffprobe_format_duration(video_file)
+    target = Path(work_dir) / EXTRACTED_AUDIO_NAME
+
+    if target.exists():
+        if extracted_audio_is_valid(target):
+            cached_duration = ffprobe_format_duration(target)
+            if audio_duration_consistent(cached_duration, source_duration):
+                print("Complete audio already exists, skipping extraction.")
+                return str(target), cached_duration, source_duration, True
+            print(
+                "Cached extracted audio is inconsistent with the source; removing it."
+            )
+        else:
+            print("Cached extracted audio is invalid; removing it.")
+        target.unlink(missing_ok=True)
+
+    tmp_path = Path(f"{target}.tmp")
+    tmp_path.unlink(missing_ok=True)
+    print("Extracting complete mono Ogg Opus audio...")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_file),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-sn",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-f",
+        "ogg",
+        str(tmp_path),
+    ]
+    try:
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Failed to extract complete audio. "
+            "The source may not contain an audio stream."
+        ) from e
+
+    try:
+        if not extracted_audio_is_valid(tmp_path):
+            raise RuntimeError(
+                "Extracted audio validation failed: expected one mono Opus audio "
+                "stream at 48 kHz with a positive duration."
+            )
+
+        duration = ffprobe_format_duration(tmp_path)
+        if not audio_duration_consistent(duration, source_duration):
+            raise RuntimeError(
+                f"Extracted audio duration {duration:.3f}s is not consistent with "
+                f"the source duration {source_duration:.3f}s."
+            )
+
+        os.replace(tmp_path, target)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    print("Complete audio extraction finished.")
+    return str(target), duration, source_duration, False
+
+
 def clean_incomplete_split(chunk_dir):
+    """Remove split chunk files and segment index from chunk_dir."""
     for name in os.listdir(chunk_dir):
         if (
             re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
-            or re.fullmatch(r"context_chunk_\d+\.(mp4|webm)(\.tmp)?", name)
             or re.fullmatch(r"subtitle_chunk_\d+\.json(\.tmp)?", name)
             or name == "segments.csv"
         ):
@@ -52,6 +212,7 @@ def clean_incomplete_split(chunk_dir):
 
 
 def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
+    """Split video into stream-copy chunks and record segments.csv."""
     print(f"Splitting video into {chunk_dur_sec}-second chunks (stream copy mode)...")
     os.makedirs(chunk_dir, exist_ok=True)
     io.atomic_write_json(os.path.join(chunk_dir, io.MANIFEST_NAME), manifest)
@@ -112,18 +273,25 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
 
 
 def list_chunks(chunk_dir):
+    """Read segments.csv and return validated chunk metadata list."""
     csv_path = os.path.join(chunk_dir, "segments.csv")
     if not os.path.exists(csv_path):
         return []
 
     chunks = []
+    seen_names = set()
     with open(csv_path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
             row = line.strip()
             if not row:
                 continue
             parts = row.split(",")
-            if len(parts) < 3 or not parts[0]:
+            name = parts[0]
+            if (
+                len(parts) < 3
+                or not re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
+                or name in seen_names
+            ):
                 return []
             try:
                 start = float(parts[1])
@@ -140,231 +308,11 @@ def list_chunks(chunk_dir):
             chunks.append(
                 {
                     "idx": i,
-                    "name": parts[0],
+                    "name": name,
                     "start": start,
                     "end": end,
                     "duration": end - start,
                 }
             )
+            seen_names.add(name)
     return chunks
-
-
-def get_processing_windows(chunks, overlap_sec):
-    if not chunks:
-        return []
-
-    video_end = chunks[-1]["end"]
-    windows = []
-    for chunk in chunks:
-        owner_start = chunk["start"]
-        owner_end = chunk["end"]
-        clip_start = max(0.0, owner_start - overlap_sec)
-        clip_end = min(video_end, owner_end + overlap_sec)
-        windows.append(
-            {
-                **chunk,
-                "clip_start": clip_start,
-                "clip_end": clip_end,
-                "clip_duration": clip_end - clip_start,
-                "owner_start": owner_start,
-                "owner_end": owner_end,
-                "owner_start_rel": owner_start - clip_start,
-                "owner_end_rel": owner_end - clip_start,
-            }
-        )
-    return windows
-
-
-def available_cpu_count():
-    return os.process_cpu_count() or 1
-
-
-def suggested_clip_workers(api_workers):
-    return min(api_workers, available_cpu_count())
-
-
-def ffmpeg_threads_for_workers(clip_workers):
-    if clip_workers <= 1:
-        return 0
-    return max(1, available_cpu_count() // clip_workers)
-
-
-def overlap_codec_args(ext, codec, threads=None):
-    threads = available_cpu_count() if threads is None else threads
-    if codec == "vp9":
-        if ext != ".webm":
-            raise ValueError("VP9 input requires WebM overlap clips")
-        return [
-            "-c:v",
-            "libvpx-vp9",
-            "-crf",
-            "32",
-            "-b:v",
-            "0",
-            "-deadline",
-            "good",
-            "-cpu-used",
-            "4",
-            "-threads",
-            str(threads),
-            "-tile-columns",
-            "2",
-            "-row-mt",
-            "1",
-            "-frame-parallel",
-            "1",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "128k",
-        ]
-
-    if codec == "h264":
-        if ext != ".mp4":
-            raise ValueError("H.264 input requires MP4 overlap clips")
-        return [
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "32",
-            "-b:v",
-            "0",
-            "-threads",
-            str(threads),
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-        ]
-
-    if codec == "hevc":
-        if ext != ".mp4":
-            raise ValueError("HEVC input requires MP4 overlap clips")
-        return [
-            "-c:v",
-            "libx265",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "32",
-            "-threads",
-            "8",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-        ]
-
-    raise ValueError(f"Overlap format not supported: {ext}")
-
-
-def create_overlap_clip(
-    video_file,
-    chunk_dir,
-    chunk_idx,
-    clip_start,
-    clip_end,
-    clip_ext,
-    ffmpeg_threads=None,
-):
-    clip_name = f"context_chunk_{chunk_idx:03d}{clip_ext}"
-    clip_path = os.path.join(chunk_dir, clip_name)
-    if os.path.exists(clip_path):
-        probe = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                clip_path,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        try:
-            cached_duration = float(probe.stdout.strip())
-        except ValueError:
-            cached_duration = 0.0
-        if probe.returncode == 0 and cached_duration > 0:
-            return clip_name
-        os.remove(clip_path)
-    tmp_path = f"{clip_path}.tmp"
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
-
-    duration = clip_end - clip_start
-    if duration <= 0:
-        raise ValueError(
-            f"Invalid overlap clip duration for chunk {chunk_idx}: {duration}"
-        )
-
-    manifest = io.load_manifest(chunk_dir)
-    video_codec = manifest.get("video_codec")
-
-    print(
-        f"Creating overlap clip {clip_name} "
-        f"({core.format_time(clip_start)} to {core.format_time(clip_end)})..."
-    )
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss",
-        core.format_time(clip_start),
-        "-i",
-        video_file,
-        "-t",
-        f"{duration:.3f}",
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a?",
-        "-sn",
-        *overlap_codec_args(clip_ext, video_codec, ffmpeg_threads),
-        "-f",
-        "webm" if clip_ext == ".webm" else "mp4",
-        tmp_path,
-    ]
-    try:
-        subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        os.replace(tmp_path, clip_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    return clip_name
-
-
-def attach_overlap_clip(
-    video_file, chunk_dir, chunk, overlap_sec, clip_ext, ffmpeg_threads=None
-):
-    if overlap_sec > 0:
-        clip_name = create_overlap_clip(
-            video_file,
-            chunk_dir,
-            chunk["idx"],
-            chunk["clip_start"],
-            chunk["clip_end"],
-            clip_ext,
-            ffmpeg_threads,
-        )
-    else:
-        clip_name = chunk["name"]
-
-    return {
-        **chunk,
-        "clip_name": clip_name,
-    }

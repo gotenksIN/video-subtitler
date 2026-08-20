@@ -1,12 +1,11 @@
 """Media pipeline behavior against real FFmpeg fixtures.
 
-Tests exercise probing, splitting, segment listing, processing windows,
-and overlap clips on tiny generated videos. They assert observable
-artifact properties, not command lines or internal representation.
+Tests exercise probing, splitting, and segment listing on tiny generated
+videos. They assert observable artifact properties, not command lines or
+internal representation.
 """
 
 import itertools
-import json
 import shutil
 import subprocess
 
@@ -434,149 +433,63 @@ def test_segment_index_missing_means_no_chunks(tmp_path):
     assert media.list_chunks(str(tmp_path)) == []
 
 
-def test_processing_windows_add_context_and_clamp_at_video_edges():
-    chunks = [
-        {"idx": 0, "name": "chunk_000.mp4", "start": 0.0, "end": 10.0},
-        {"idx": 1, "name": "chunk_001.mp4", "start": 10.0, "end": 18.0},
-    ]
+@pytest.mark.parametrize(
+    "index",
+    [
+        "unexpected.mp4,0,1\n",
+        "chunk_000.mp4,0,1\nchunk_000.mp4,1,2\n",
+    ],
+)
+def test_segment_index_rejects_invalid_or_duplicate_chunk_names(tmp_path, index):
+    (tmp_path / "segments.csv").write_text(index, encoding="utf-8")
 
-    windows = media.get_processing_windows(chunks, 2.0)
-
-    assert [(w["clip_start"], w["clip_end"]) for w in windows] == [
-        (0.0, 12.0),
-        (8.0, 18.0),
-    ]
-    assert [w["clip_duration"] for w in windows] == [12.0, 10.0]
-    assert [(w["owner_start_rel"], w["owner_end_rel"]) for w in windows] == [
-        (0.0, 10.0),
-        (2.0, 10.0),
-    ]
-    assert [w["name"] for w in windows] == ["chunk_000.mp4", "chunk_001.mp4"]
+    assert media.list_chunks(str(tmp_path)) == []
 
 
-def test_processing_windows_without_overlap_match_owner_intervals():
-    chunks = [{"idx": 0, "name": "chunk_000.mp4", "start": 5.0, "end": 9.0}]
-
-    windows = media.get_processing_windows(chunks, 0)
-
-    assert len(windows) == 1
-    assert (windows[0]["clip_start"], windows[0]["clip_end"]) == (5.0, 9.0)
-    assert (windows[0]["owner_start_rel"], windows[0]["owner_end_rel"]) == (
-        0.0,
-        4.0,
-    )
-
-
-def test_processing_windows_without_chunks_is_empty():
-    assert media.get_processing_windows([], 2.0) == []
-
-
-def _write_overlap_manifest(chunk_dir, codec):
-    (chunk_dir / io.MANIFEST_NAME).write_text(
-        json.dumps({"video_codec": codec}), encoding="utf-8"
-    )
-
-
-def test_overlap_clip_is_decodable_and_keeps_primary_codec(
+def test_extract_complete_audio_produces_mono_opus_at_48khz(
     video_fixture, media_tools, tmp_path
 ):
-    chunk_dir = tmp_path / "work"
-    chunk_dir.mkdir()
-    _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    clip_start, clip_end = 1.0, 5.0
-
-    name = media.create_overlap_clip(
-        str(video_fixture["path"]),
-        str(chunk_dir),
-        0,
-        clip_start,
-        clip_end,
-        video_fixture["ext"],
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    audio_path, duration, source_dur, reused = media.extract_complete_audio(
+        str(video_fixture["path"]), str(work_dir)
     )
-
-    clip = chunk_dir / name
-    assert name == f"context_chunk_000{video_fixture['ext']}"
-    assert _primary_video_codec(media_tools["ffprobe"], clip) == video_fixture["codec"]
-    assert _stream_types(media_tools["ffprobe"], clip) == ["video", "audio"]
-    assert _container_duration(media_tools["ffprobe"], clip) == pytest.approx(
-        clip_end - clip_start, abs=0.25
-    )
-    assert not list(chunk_dir.glob("*.tmp"))
+    assert reused is False
+    assert (work_dir / media.EXTRACTED_AUDIO_NAME).is_file()
+    assert duration > 0
+    assert abs(duration - source_dur) <= media.AUDIO_DURATION_TOLERANCE_SECONDS
+    assert media.extracted_audio_is_valid(audio_path) is True
 
 
-def test_valid_overlap_clip_is_reused_without_reencoding(video_fixture, tmp_path):
-    chunk_dir = tmp_path / "work"
-    chunk_dir.mkdir()
-    _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    first = media.create_overlap_clip(
-        str(video_fixture["path"]), str(chunk_dir), 0, 1.0, 5.0, video_fixture["ext"]
-    )
-    clip = chunk_dir / first
-    before = (clip.stat().st_size, clip.stat().st_mtime_ns, clip.read_bytes())
-
-    second = media.create_overlap_clip(
-        str(video_fixture["path"]), str(chunk_dir), 0, 1.0, 5.0, video_fixture["ext"]
-    )
-
-    assert second == first
-    assert (clip.stat().st_size, clip.stat().st_mtime_ns, clip.read_bytes()) == before
+def test_extract_complete_audio_fails_when_source_has_no_audio(mpeg4_video, tmp_path):
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    assert media.has_audio_stream(str(mpeg4_video)) is False
+    with pytest.raises(RuntimeError, match="may not contain an audio stream"):
+        media.extract_complete_audio(str(mpeg4_video), str(work_dir))
 
 
-def test_corrupted_overlap_clip_is_regenerated_without_tmp_files(
-    video_fixture, media_tools, tmp_path
+def test_extract_complete_audio_reuses_valid_cache_and_regenerates_corrupt(
+    video_fixture, tmp_path
 ):
-    chunk_dir = tmp_path / "work"
-    chunk_dir.mkdir()
-    _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    name = media.create_overlap_clip(
-        str(video_fixture["path"]), str(chunk_dir), 2, 1.0, 4.0, video_fixture["ext"]
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _audio_path, dur1, _, reused1 = media.extract_complete_audio(
+        str(video_fixture["path"]), str(work_dir)
     )
-    clip = chunk_dir / name
-    clip.write_bytes(b"corrupted clip")
-    (chunk_dir / f"{name}.tmp").write_bytes(b"stale temporary")
+    assert reused1 is False
 
-    regenerated = media.create_overlap_clip(
-        str(video_fixture["path"]), str(chunk_dir), 2, 1.0, 4.0, video_fixture["ext"]
+    # Second run reuses valid cache
+    _, dur2, _, reused2 = media.extract_complete_audio(
+        str(video_fixture["path"]), str(work_dir)
     )
+    assert reused2 is True
+    assert dur2 == dur1
 
-    assert regenerated == name
-    assert clip.stat().st_size > 0
-    assert _container_duration(media_tools["ffprobe"], clip) > 0
-    assert not list(chunk_dir.glob("*.tmp"))
-
-
-def test_attach_with_overlap_builds_a_decodable_context_clip(
-    video_fixture, media_tools, tmp_path
-):
-    chunk_dir = tmp_path / "work"
-    chunk_dir.mkdir()
-    _write_overlap_manifest(chunk_dir, video_fixture["codec"])
-    chunk = {
-        "idx": 0,
-        "name": f"chunk_000{video_fixture['ext']}",
-        "start": 1.0,
-        "end": 3.0,
-        "clip_start": 0.0,
-        "clip_end": 4.0,
-    }
-
-    result = media.attach_overlap_clip(
-        str(video_fixture["path"]),
-        str(chunk_dir),
-        chunk,
-        1.0,
-        video_fixture["ext"],
+    # Corrupted cache is removed and regenerated
+    (work_dir / media.EXTRACTED_AUDIO_NAME).write_bytes(b"corrupted")
+    _, dur3, _, reused3 = media.extract_complete_audio(
+        str(video_fixture["path"]), str(work_dir)
     )
-
-    clip_name = result["clip_name"]
-    assert clip_name == f"context_chunk_000{video_fixture['ext']}"
-    assert _container_duration(media_tools["ffprobe"], chunk_dir / clip_name) > 0
-
-
-def test_attach_without_overlap_selects_the_stream_copy_chunk(tmp_path):
-    chunk = {"idx": 1, "name": "chunk_001.mp4", "start": 0.0, "end": 2.0}
-
-    result = media.attach_overlap_clip("source.mp4", str(tmp_path), chunk, 0, ".mp4")
-
-    assert result["clip_name"] == "chunk_001.mp4"
-    assert not (tmp_path / "context_chunk_001.mp4").exists()
+    assert reused3 is False
+    assert dur3 > 0
