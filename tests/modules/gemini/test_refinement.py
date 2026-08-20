@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from google.genai import types
+from google.genai import errors, types
 
 from modules import core, gemini
 from tests.support.gemini_fakes import (
@@ -274,6 +274,47 @@ def test_youtube_analysis_sdk_failure_preserves_previous_output(tmp_path, monkey
     assert read_captions(source)[0][2] == "First"
 
 
+def test_youtube_analysis_retries_transient_server_failure(tmp_path, monkeypatch):
+    source = write_vtt(
+        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
+    )
+    output = tmp_path / "output.vtt"
+    client = ScriptedGeminiClient(
+        [
+            research_call(),
+            youtube_call(
+                error=errors.ServerError(
+                    503,
+                    {
+                        "error": {
+                            "code": 503,
+                            "message": "Deadline expired before operation could complete.",
+                            "status": "UNAVAILABLE",
+                        }
+                    },
+                )
+            ),
+            youtube_call(pieces=("Direct video identities",)),
+            refinement_call(['{"changes": []}']),
+        ]
+    )
+    use_client(monkeypatch, client)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
+
+    gemini.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "high",
+        context_urls=["https://youtu.be/VIDEO_ID"],
+    )
+
+    assert len(client.requests) == 4
+    assert read_captions(output)[0][2] == "First"
+
+
 def test_research_sdk_failure_preserves_previous_output(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
@@ -355,9 +396,7 @@ def test_invalid_refinement_changes_rejected_without_mutation(
     assert output.read_text(encoding="utf-8") == "previous"
 
 
-def test_refinement_removes_boundary_duplicate_created_by_a_text_change(
-    tmp_path, monkeypatch
-):
+def test_refinement_applies_text_changes_without_deleting_cues(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt",
         [
@@ -380,40 +419,9 @@ def test_refinement_removes_boundary_duplicate_created_by_a_text_change(
     )
     use_client(monkeypatch, client)
 
-    gemini.global_refine_subtitles(
-        source,
-        output,
-        "key",
-        None,
-        "refiner",
-        "high",
-        boundary_provenance=[0, 1],
-    )
+    gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
 
     assert read_captions(output) == [
-        ("00:00:00.000", "00:00:04.000", "Host: Shared opening line")
+        ("00:00:00.000", "00:00:04.000", "Host: Shared opening line"),
+        ("00:00:03.000", "00:00:05.000", "Host: Shared opening line"),
     ]
-
-
-def test_mismatched_provenance_is_rejected_before_any_request(tmp_path, monkeypatch):
-    source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
-    )
-    output = tmp_path / "output.vtt"
-    output.write_text("previous", encoding="utf-8")
-    client = ScriptedGeminiClient([research_call(), refinement_call([])])
-    use_client(monkeypatch, client)
-
-    with pytest.raises(ValueError, match="one chunk index per caption"):
-        gemini.global_refine_subtitles(
-            source,
-            output,
-            "key",
-            None,
-            "refiner",
-            "high",
-            boundary_provenance=[],
-        )
-
-    assert client.requests == []
-    assert output.read_text(encoding="utf-8") == "previous"

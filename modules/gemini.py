@@ -1,13 +1,17 @@
-"""Gemini API clients, prompts, request configs, chunk requests, and refinement."""
+"""Gemini clients, prompts, configs, chunk requests, and audio/text refinement."""
 
+import hashlib
 import json
 import os
+import time
+from pathlib import Path
 
 import webvtt
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+from pydantic import ValidationError
 
-from modules import core, io
+from modules import core, io, media
 
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
@@ -15,9 +19,16 @@ DEFAULT_CHUNK_MODEL = "gemini-3.7-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "medium"
+DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.7-flash"
+AUDIO_REFINE_THINKING_LEVEL = "high"
+AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
+AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
+TRANSIENT_SERVER_CODES = {500, 502, 503, 504}
+STREAM_REQUEST_ATTEMPTS = 3
 
 
 def validate_thinking_level_for_model(model_name, thinking_level):
+    """Validate thinking level against model capabilities."""
     if thinking_level == "minimal" and "flash" not in model_name.lower():
         raise ValueError(
             "--thinking-level minimal is only supported by Flash models. Use low, medium, or high for this model."
@@ -25,6 +36,7 @@ def validate_thinking_level_for_model(model_name, thinking_level):
 
 
 def create_client(api_key, base_url):
+    """Create a Gemini API client instance with configured credentials."""
     kwargs = {}
     if api_key:
         kwargs["api_key"] = api_key
@@ -42,6 +54,7 @@ def build_content_config(**kwargs):
 
 
 def generate_content_config(thinking_level):
+    """Build the response configuration for chunk video generation."""
     kwargs = {
         "temperature": 0.0,
         "response_mime_type": "application/json",
@@ -54,9 +67,8 @@ def generate_content_config(thinking_level):
     return build_content_config(**kwargs)
 
 
-def build_generation_prompt(
-    clip_duration, owner_start_rel, owner_end_rel, source_title=None
-):
+def build_generation_prompt(chunk_duration, source_title=None):
+    """Build the prompt for per-chunk video subtitle generation."""
     source_block = ""
     if source_title:
         source_block = (
@@ -67,15 +79,13 @@ def build_generation_prompt(
         )
     return f"""You are an expert subtitle generator and translator.
 
-Watch this {clip_duration:.3f}-second video clip.
+Watch this {chunk_duration:.3f}-second video clip.
 
-The main chunk window is {core.format_time(owner_start_rel)} to {core.format_time(owner_end_rel)} in this clip. Video before or after that window is context only.
-
-Generate accurate, natural English subtitles for dialogue and meaningful on-screen text throughout the entire clip, including the context windows. Captions outside the main window will be filtered later.
+Generate accurate, natural English subtitles for dialogue and meaningful on-screen text throughout the entire clip.
 
 {source_block}TIMING
 
-1. Create timestamps relative to the beginning of the full clip, ranging from 00:00:00.000 to {core.format_time(clip_duration)}.
+1. Create timestamps relative to the beginning of the clip, ranging from 00:00:00.000 to {core.format_time(chunk_duration)}.
 2. For spoken dialogue, start at the exact first audible syllable and end at the exact end of the last audible syllable.
 3. For on-screen text, start when the text becomes visible and end when it disappears.
 4. Preserve real silent gaps. Do not stretch captions through silence, reaction shots, or scene changes.
@@ -127,6 +137,7 @@ FORMATTING
 
 
 def load_cached_captions(out_json, chunk_duration):
+    """Load and validate cached captions from a chunk JSON file."""
     if not os.path.exists(out_json):
         return None
     try:
@@ -150,33 +161,30 @@ def process_chunk(
     thinking_level,
     source_title=None,
 ):
+    """Process one video chunk and publish validated caption JSON."""
     chunk_idx = chunk["idx"]
-    clip_name = chunk["clip_name"]
-    clip_duration = chunk["clip_duration"]
-    owner_start_rel = chunk["owner_start_rel"]
-    owner_end_rel = chunk["owner_end_rel"]
+    chunk_name = chunk["name"]
+    chunk_duration = chunk["duration"]
     out_json = os.path.join(chunk_dir, f"subtitle_chunk_{chunk_idx:03d}.json")
-    chunk_path = os.path.join(chunk_dir, clip_name)
+    chunk_path = os.path.join(chunk_dir, chunk_name)
 
-    cached = load_cached_captions(out_json, clip_duration)
+    cached = load_cached_captions(out_json, chunk_duration)
     if cached is not None:
-        print(f"Skipping {clip_name} - already processed.")
+        print(f"Skipping {chunk_name} - already processed.")
         return True
 
-    prompt = build_generation_prompt(
-        clip_duration, owner_start_rel, owner_end_rel, source_title
-    )
+    prompt = build_generation_prompt(chunk_duration, source_title)
 
     try:
         with open(chunk_path, "rb") as f:
             video_data = f.read()
         if len(video_data) > INLINE_VIDEO_WARNING_BYTES:
             print(
-                f"[Worker-{chunk_idx:03d}] Warning: {clip_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
+                f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
                 "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
             )
 
-        print(f"[Worker-{chunk_idx:03d}] Generating {clip_name} using Gemini API...")
+        print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
             response_stream = client.models.generate_content_stream(
@@ -193,13 +201,13 @@ def process_chunk(
                     full_json_text += response_chunk.text
 
         parsed_response = core.SubtitleResponse.model_validate_json(full_json_text)
-        validated = core.validate_captions(parsed_response.captions, clip_duration)
+        validated = core.validate_captions(parsed_response.captions, chunk_duration)
         io.atomic_write_json(out_json, validated)
 
-        print(f"[Worker-{chunk_idx:03d}] Finished {clip_name}.")
+        print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
         return True
     except Exception as e:  # noqa: BLE001 - A chunk failure must keep the run resumable.
-        print(f"[Worker-{chunk_idx:03d}] ERROR processing {clip_name}: {e}")
+        print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
         return False
 
 
@@ -366,7 +374,7 @@ SCRIPT
 
 
 def build_research_config(thinking_level, ordinary_urls):
-    """Plain-text config that always enables Google Search grounding."""
+    """Build plain-text config with Google Search grounding."""
     tools = [types.Tool(google_search=types.GoogleSearch())]
     if ordinary_urls:
         tools.append(types.Tool(url_context=types.UrlContext()))
@@ -382,7 +390,7 @@ def build_research_config(thinking_level, ordinary_urls):
 
 
 def build_youtube_analysis_config(thinking_level):
-    """Plain-text config for the direct YouTube analysis pass. No tools."""
+    """Build plain-text config for direct YouTube analysis without tools."""
     kwargs = {"temperature": 0.0}
     if thinking_level is not None:
         kwargs["thinking_config"] = types.ThinkingConfig(
@@ -392,7 +400,7 @@ def build_youtube_analysis_config(thinking_level):
 
 
 def build_refinement_config(thinking_level):
-    """Structured config for the script refinement pass. No tools."""
+    """Build structured config for script refinement without tools."""
     kwargs = {
         "temperature": 0.0,
         "response_mime_type": "application/json",
@@ -435,7 +443,7 @@ def collect_stream_metadata(response_stream):
 
 
 def retrieval_status_value(status):
-    """Return the plain status string for a enum or raw value."""
+    """Return the plain status string for an enum or raw value."""
     return getattr(status, "value", status)
 
 
@@ -473,6 +481,7 @@ def verify_refinement_grounding(
 def print_refinement_grounding(
     search_queries, grounded_sources, retrieved_urls, context_urls
 ):
+    """Print summary of search queries, grounded sources, and URL retrieval."""
     unique_queries = list(dict.fromkeys(search_queries))
     if unique_queries:
         print("Search queries:")
@@ -504,17 +513,12 @@ def global_refine_subtitles(
     thinking_level,
     source_title=None,
     context_urls=None,
-    boundary_provenance=None,
 ):
+    """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
     youtube_urls, ordinary_urls = core.classify_context_urls(context_urls)
     print(f"Loading {input_vtt} for global refinement...")
     vtt = webvtt.read(input_vtt)
-    if boundary_provenance is not None and len(vtt) != len(boundary_provenance):
-        raise ValueError(
-            "boundary dedup requires one chunk index per caption: "
-            f"{len(vtt)} captions, {len(boundary_provenance)} indices"
-        )
 
     script_lines = []
     for i, caption in enumerate(vtt):
@@ -569,12 +573,27 @@ def global_refine_subtitles(
                 for url in youtube_urls
             ]
             youtube_contents.append(build_youtube_analysis_prompt(source_title))
-            youtube_stream = client.models.generate_content_stream(
-                model=model_name,
-                contents=youtube_contents,
-                config=build_youtube_analysis_config(thinking_level),
-            )
-            youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
+            for attempt in range(STREAM_REQUEST_ATTEMPTS):
+                try:
+                    youtube_stream = client.models.generate_content_stream(
+                        model=model_name,
+                        contents=youtube_contents,
+                        config=build_youtube_analysis_config(thinking_level),
+                    )
+                    youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
+                    break
+                except errors.ServerError as error:
+                    if (
+                        error.code not in TRANSIENT_SERVER_CODES
+                        or attempt == STREAM_REQUEST_ATTEMPTS - 1
+                    ):
+                        raise
+                    delay = 2**attempt
+                    print(
+                        f"YouTube analysis failed with Gemini {error.code}; "
+                        f"retrying in {delay} second(s)..."
+                    )
+                    time.sleep(delay)
 
     # 3. Structured refinement pass. No tools; the identity sections supply
     # context.
@@ -611,8 +630,347 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
-    if boundary_provenance is not None:
-        core.dedup_boundary_overlap(vtt, boundary_provenance)
-
     io.atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
+
+
+def load_script_entries(vtt_path):
+    """Read a VTT into script entries with sequential request-only IDs."""
+    vtt = webvtt.read(str(vtt_path))
+    entries = []
+    for index, caption in enumerate(vtt):
+        entries.append(
+            {
+                "id": index,
+                "start": core.format_time(core.parse_time(caption.start)),
+                "end": core.format_time(core.parse_time(caption.end)),
+                "text": caption.text,
+                "classification": core.classify_cue_text(caption.text),
+            }
+        )
+    return entries
+
+
+def build_audio_refinement_prompt(
+    source_entries, boundaries, audio_duration, source_title=None
+):
+    boundary_lines = "\n".join(
+        f"- {core.format_time(boundary)}" for boundary in boundaries
+    )
+    script_lines = "\n".join(
+        f"[{entry['id']}] {entry['start']} --> {entry['end']} "
+        f"[{entry['classification']}]: {entry['text']}"
+        for entry in source_entries
+    )
+    mode_block = (
+        "MODE: boundary-limited\n\n"
+        "Repair authority is limited to connected regions spanning five "
+        "seconds before and five seconds after each actual segment boundary.\n"
+        "Every cue outside those regions must remain byte-for-byte identical "
+        "in text and timing.\n"
+        "A changed cue may use one repair region plus the full original time "
+        "extents of every referenced source cue that intersects that same "
+        "region. It must stay inside that combined envelope. All referenced "
+        "source cues must share the same repair region. Recovered cues must "
+        "stay inside a repair region."
+    )
+    title_block = ""
+    if source_title:
+        title_block = (
+            "SOURCE TITLE\n\n"
+            f"{source_title}\n\n"
+            "Names in the source title are candidate identities only.\n\n"
+        )
+    return f"""You are an expert audio subtitle repair editor.
+
+Listen to the complete attached audio and compare it with the complete subtitle script below.
+
+{title_block}COMPLETE AUDIO DURATION
+
+{audio_duration:.3f} seconds
+
+ACTUAL SEGMENT BOUNDARIES
+
+{boundary_lines}
+
+The script segments were cut at these source timestamps. A spoken turn or visual cue crossing a boundary may be missing, duplicated, split, mistranslated, or poorly timed in the stitched script.
+
+SCRIPT
+
+{script_lines}
+
+{mode_block}
+
+REPAIR RULES
+
+1. Fix dialogue that disagrees with what the audio says: add missing spoken dialogue, delete duplicated or hallucinated dialogue, merge split turns, split merged turns, rewrite mistranslations, and retime cues to the audible syllables.
+2. Preserve silent gaps. Start dialogue at the first audible syllable and end it at the last audible syllable.
+3. Keep visual content untouched. The audio cannot establish what appears on screen. Preserve every [bracketed] visual fragment exactly as it appears, attached to its original cue lineage. Pure editorial cues must remain byte-for-byte identical in text and timing.
+4. A mixed cue may change timing when its dialogue is repaired, but every bracketed fragment must be preserved exactly once within that lineage.
+5. Do not add bracketed text to a recovered cue.
+6. Keep speaker labels and their turn structure. Do not guess identities from the audio.
+7. Do not describe sounds, music, or actions unless the script already does.
+8. Every output cue must contain text.
+
+RESPONSE FORMAT
+
+Return one sparse patch object. Do not return the complete script.
+- "contractVersion": exactly "{AUDIO_REFINE_RESPONSE_CONTRACT}".
+- "cues": only changed, replacement, split, merged, or recovered cues, in script order. Omit every unchanged source cue; the host preserves omitted cues exactly.
+- "deletedSourceIds": IDs of false dialogue cues removed from the script. Omission alone never deletes a source cue.
+- One source ID with changed text or timing is a rewrite or retime.
+- Multiple strictly increasing source IDs in one cue are a merge.
+- One source ID repeated in adjacent output cues is a split; a split cue must carry only that ID.
+- An empty "sourceIds" list is recovered spoken dialogue.
+- Every changed source ID must appear in a patch cue or in "deletedSourceIds", never both. Unmentioned IDs remain unchanged.
+- Timestamps must be source-relative in canonical HH:MM:SS.mmm format.
+- Return only valid JSON matching the response schema.
+"""
+
+
+def audio_refinement_config():
+    """Build structured config for boundary audio refinement without tools."""
+    schema = core.AudioRefinementResponse.model_json_schema()
+    cue_schema = schema.pop("$defs")["AudioRefinedCue"]
+    schema["properties"]["cues"]["items"] = cue_schema
+
+    def remove_additional_properties(value):
+        if isinstance(value, dict):
+            return {
+                key: remove_additional_properties(item)
+                for key, item in value.items()
+                if key != "additionalProperties"
+            }
+        if isinstance(value, list):
+            return [remove_additional_properties(item) for item in value]
+        return value
+
+    return build_content_config(
+        temperature=0.0,
+        response_mime_type="application/json",
+        # The Gemini endpoint rejects Pydantic's additionalProperties keyword.
+        # Host-side parsing still enforces extra="forbid" on both models.
+        response_json_schema=remove_additional_properties(schema),
+        thinking_config=types.ThinkingConfig(
+            thinking_level=AUDIO_REFINE_THINKING_LEVEL.upper()
+        ),
+        max_output_tokens=AUDIO_REFINE_MAX_OUTPUT_TOKENS,
+    )
+
+
+def run_audio_refinement_request(
+    api_key,
+    base_url,
+    model,
+    source_entries,
+    boundaries,
+    audio_duration,
+    audio_path,
+    source_title=None,
+):
+    """Run one streamed audio-refinement request and return (raw_text, response)."""
+    prompt = build_audio_refinement_prompt(
+        source_entries, boundaries, audio_duration, source_title
+    )
+    with open(audio_path, "rb") as handle:
+        audio_bytes = handle.read()
+    if len(audio_bytes) > INLINE_VIDEO_WARNING_BYTES:
+        print(
+            f"Warning: {audio_path} is {len(audio_bytes) / 1024 / 1024:.1f} MB. "
+            "Gemini docs recommend inline audio below 20 MB; it will still be sent."
+        )
+    with create_client(api_key, base_url) as client:
+        print("Sending complete audio and script for boundary audio refinement...")
+        response_stream = client.models.generate_content_stream(
+            model=model,
+            contents=[
+                types.Part.from_bytes(
+                    data=audio_bytes, mime_type=media.AUDIO_MIME_TYPE
+                ),
+                prompt,
+            ],
+            config=audio_refinement_config(),
+        )
+        full_json_text = ""
+        for response_chunk in response_stream:
+            if response_chunk.text:
+                full_json_text += response_chunk.text
+            for candidate in getattr(response_chunk, "candidates", None) or []:
+                reason = getattr(candidate, "finish_reason", None)
+                reason_text = str(getattr(reason, "value", reason)).upper()
+                if reason_text == "MAX_TOKENS":
+                    raise RuntimeError(
+                        "Audio refinement response exceeded the configured "
+                        "output budget (MAX_TOKENS)."
+                    )
+    try:
+        return full_json_text, core.AudioRefinementResponse.model_validate_json(
+            full_json_text
+        )
+    except ValidationError as error:
+        raise RuntimeError(
+            "Parsing or validating the audio refinement response failed: "
+            f"{error}\nRaw response:\n{full_json_text}"
+        ) from error
+
+
+def audio_refinement_cache_identity(
+    script_path, audio_path, audio_duration, boundaries, model
+):
+    """Return cache identity of one audio-refinement response."""
+    return {
+        "script_sha256": hashlib.sha256(Path(script_path).read_bytes()).hexdigest(),
+        "audio_sha256": hashlib.sha256(Path(audio_path).read_bytes()).hexdigest(),
+        "audio_duration": audio_duration,
+        "boundaries": list(boundaries),
+        "model": model,
+        "thinking_level": AUDIO_REFINE_THINKING_LEVEL,
+        "response_contract": AUDIO_REFINE_RESPONSE_CONTRACT,
+        "mode": "boundary",
+    }
+
+
+def audio_cache_paths(work_dir):
+    """Return boundary audio-refinement cache artifact paths."""
+    return (
+        Path(work_dir) / "audio_refinement.json",
+        Path(work_dir) / "audio_refinement.meta.json",
+    )
+
+
+def store_audio_refinement_cache(work_dir, identity, response):
+    """Save validated audio refinement response and metadata to cache."""
+    response_path, meta_path = audio_cache_paths(work_dir)
+    io.atomic_write_json(response_path, response.model_dump(by_alias=True))
+    io.atomic_write_json(meta_path, {"identity": identity})
+
+
+def load_cached_audio_refinement(work_dir, identity):
+    """Load cached audio refinement response matching identity, or return None."""
+    response_path, meta_path = audio_cache_paths(work_dir)
+    if not response_path.exists() or not meta_path.exists():
+        return None
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not isinstance(stored, dict) or stored.get("identity") != identity:
+            raise ValueError("cache identity mismatch")
+        response = core.AudioRefinementResponse.model_validate(
+            json.loads(response_path.read_text(encoding="utf-8"))
+        )
+    except (ValueError, OSError) as error:
+        print(f"Ignoring invalid audio refinement cache {response_path}: {error}")
+        discard_audio_refinement_cache(work_dir)
+        return None
+    return response
+
+
+def discard_audio_refinement_cache(work_dir):
+    """Remove cached audio refinement response and metadata files."""
+    for path in audio_cache_paths(work_dir):
+        path.unlink(missing_ok=True)
+
+
+def validated_cached_audio_refinement(
+    work_dir, identity, source_entries, audio_duration, boundaries
+):
+    """Return output for a valid cache, or discard an invalid cache."""
+    cached = load_cached_audio_refinement(work_dir, identity)
+    if cached is None:
+        return None
+    try:
+        validated = core.validate_audio_refinement_response(
+            cached, source_entries, audio_duration, boundaries
+        )
+    except ValueError as error:
+        print(
+            f"Ignoring semantically invalid cached audio refinement response: {error}"
+        )
+        discard_audio_refinement_cache(work_dir)
+        return None
+    print("Reusing cached boundary audio refinement response.")
+    return validated
+
+
+def revalidate_candidate(candidate_path, output_entries):
+    """Verify that VTT serialization preserved every validated cue exactly."""
+    vtt = webvtt.read(str(candidate_path))
+    actual = [(caption.start, caption.end, caption.text) for caption in vtt]
+    expected = [
+        (entry["start"], entry["end"], entry["text"]) for entry in output_entries
+    ]
+    if actual != expected:
+        raise ValueError(
+            "Serialized candidate does not match the validated audio "
+            "refinement response"
+        )
+
+
+def boundary_audio_refine_subtitles(
+    stitched_vtt,
+    audio_path,
+    audio_duration,
+    boundaries,
+    work_dir,
+    output_vtt,
+    api_key,
+    base_url,
+    model_name=DEFAULT_AUDIO_REFINE_MODEL,
+    source_title=None,
+):
+    """Run or reuse boundary audio refinement and publish atomically."""
+    source_entries = load_script_entries(stitched_vtt)
+    identity = audio_refinement_cache_identity(
+        stitched_vtt, audio_path, audio_duration, boundaries, model_name
+    )
+    validated = validated_cached_audio_refinement(
+        work_dir, identity, source_entries, audio_duration, boundaries
+    )
+    response_to_cache = None
+    raw_json = None
+    if validated is None:
+        raw_json, response = run_audio_refinement_request(
+            api_key,
+            base_url,
+            model_name,
+            source_entries,
+            boundaries,
+            audio_duration,
+            audio_path,
+            source_title=source_title,
+        )
+        response_to_cache = response
+    candidate_path = Path(work_dir) / "audio_refined.vtt"
+    candidate_tmp = Path(work_dir) / "audio_refined.vtt.tmp"
+    candidate_tmp.unlink(missing_ok=True)
+    try:
+        if response_to_cache is not None:
+            try:
+                validated = core.validate_audio_refinement_response(
+                    response_to_cache,
+                    source_entries,
+                    audio_duration,
+                    boundaries,
+                )
+            except ValueError as error:
+                raise RuntimeError(
+                    "boundary audio refinement response failed validation: "
+                    f"{error}\nRaw response:\n{raw_json}"
+                ) from error
+        output_entries = validated
+        candidate_vtt = webvtt.WebVTT()
+        for entry in output_entries:
+            candidate_vtt.captions.append(
+                webvtt.Caption(entry["start"], entry["end"], entry["text"])
+            )
+        io.atomic_save_vtt(candidate_vtt, candidate_tmp)
+        revalidate_candidate(candidate_tmp, output_entries)
+        os.replace(candidate_tmp, candidate_path)
+        if response_to_cache is not None:
+            store_audio_refinement_cache(work_dir, identity, response_to_cache)
+    except Exception:
+        candidate_tmp.unlink(missing_ok=True)
+        discard_audio_refinement_cache(work_dir)
+        raise
+    if Path(output_vtt) != candidate_path:
+        io.atomic_save_vtt(candidate_vtt, output_vtt)
+    print(f"Saved boundary audio-refined subtitles to {output_vtt}")
