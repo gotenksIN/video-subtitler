@@ -184,6 +184,21 @@ Each row contains `chunk_NNN.<ext>,start,end`.
 When any nonblank row is malformed or has invalid timestamps, the split is regenerated.
 A reusable index must match stored `chunk_NNN` files exactly.
 
+### Chunk generation retry
+
+Each chunk worker makes up to 3 attempts per chunk: one initial attempt plus up to 2 retries.
+A retry happens only after a transient failure:
+- Response parsing or caption validation fails, for example malformed JSON, a schema violation, inverted timestamps, or a collapsed interval.
+- The Gemini SDK raises `ServerError` with code 500, 502, 503, or 504.
+
+A retry waits 1 second after the first attempt and 2 seconds after the second.
+A successful attempt publishes the chunk JSON atomically.
+Permanent failures do not retry.
+Examples are 401 and 403 responses, a missing chunk file, and unexpected exceptions.
+The chunk fails immediately.
+When every attempt fails, the worker logs the final error and publishes no JSON.
+The run stays resumable because valid published chunks are skipped on the next run.
+
 ## Structured data schemas
 
 ### Chunk generation: `SubtitleResponse`

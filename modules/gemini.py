@@ -186,26 +186,60 @@ def process_chunk(
 
         print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
-        with create_client(api_key, base_url) as client:
-            response_stream = client.models.generate_content_stream(
-                model=model_name,
-                contents=[
-                    types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
-                    prompt,
-                ],
-                config=generate_content_config(thinking_level),
-            )
-            full_json_text = ""
-            for response_chunk in response_stream:
-                if response_chunk.text:
-                    full_json_text += response_chunk.text
+        for attempt in range(STREAM_REQUEST_ATTEMPTS):
+            transient_error = None
+            try:
+                with create_client(api_key, base_url) as client:
+                    response_stream = client.models.generate_content_stream(
+                        model=model_name,
+                        contents=[
+                            types.Part.from_bytes(
+                                data=video_data, mime_type=chunk_mime
+                            ),
+                            prompt,
+                        ],
+                        config=generate_content_config(thinking_level),
+                    )
+                    full_json_text = ""
+                    for response_chunk in response_stream:
+                        if response_chunk.text:
+                            full_json_text += response_chunk.text
+            except errors.ServerError as error:
+                if error.code not in TRANSIENT_SERVER_CODES:
+                    raise
+                transient_error = error
 
-        parsed_response = core.SubtitleResponse.model_validate_json(full_json_text)
-        validated = core.validate_captions(parsed_response.captions, chunk_duration)
-        io.atomic_write_json(out_json, validated)
+            if transient_error is None:
+                # Parsing and caption validation raise ValueError subclasses,
+                # so every ValueError here marks an unusable model response.
+                try:
+                    parsed_response = core.SubtitleResponse.model_validate_json(
+                        full_json_text
+                    )
+                    validated = core.validate_captions(
+                        parsed_response.captions, chunk_duration
+                    )
+                except ValueError as error:
+                    transient_error = error
 
-        print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
-        return True
+            if transient_error is not None:
+                if attempt == STREAM_REQUEST_ATTEMPTS - 1:
+                    print(
+                        f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
+                        f"{transient_error}"
+                    )
+                    return False
+                delay = 2**attempt
+                print(
+                    f"[Worker-{chunk_idx:03d}] Warning: Attempt {attempt + 1} failed "
+                    f"for {chunk_name} ({transient_error}); retrying in {delay}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            io.atomic_write_json(out_json, validated)
+            print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
+            return True
     except Exception as e:  # noqa: BLE001 - A chunk failure must keep the run resumable.
         print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
         return False

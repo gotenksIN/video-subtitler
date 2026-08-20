@@ -2,8 +2,7 @@
 
 import json
 
-import pytest
-from google.genai import types
+from google.genai import errors, types
 
 from modules import core, gemini
 from tests.support.gemini_fakes import ScriptedGeminiClient, chunk_call, use_client
@@ -15,6 +14,12 @@ def chunk_state(idx=0, name="chunk_000.mp4", duration=2.0):
         "name": name,
         "duration": duration,
     }
+
+
+def valid_captions_call(text="Hi"):
+    return chunk_call(
+        [json.dumps({"captions": [{"id": 0, "start": "0", "end": "1", "text": text}]})]
+    )
 
 
 def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
@@ -115,18 +120,45 @@ def test_invalid_captions_cache_is_regenerated_via_api(tmp_path, monkeypatch):
     assert [cap["text"] for cap in saved] == ["Fresh"]
 
 
-@pytest.mark.parametrize(
-    "pieces",
-    [
-        ["not json"],
-        ['{"captions": [{"id": "not-an-int"}]}'],
-        ['{"captions": [{"id": 0, "start": "0", "end": "0", "text": "bad"}]}'],
-    ],
-)
-def test_invalid_chunk_response_fails_without_publishing(tmp_path, monkeypatch, pieces):
+def test_transient_chunk_failure_retries_and_publishes_valid_result(
+    tmp_path, monkeypatch
+):
     (tmp_path / "chunk_000.mp4").write_bytes(b"video")
-    client = ScriptedGeminiClient([chunk_call(pieces)])
+    invalid_timing = chunk_call(
+        ['{"captions": [{"id": 0, "start": "1", "end": "0", "text": "bad"}]}']
+    )
+    client = ScriptedGeminiClient([invalid_timing, valid_captions_call("Hi")])
     use_client(monkeypatch, client)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
+
+    assert gemini.process_chunk(
+        "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+    )
+
+    saved = json.loads(
+        (tmp_path / "subtitle_chunk_000.json").read_text(encoding="utf-8")
+    )
+    assert saved == [
+        {
+            "id": 0,
+            "start": "00:00:00.000",
+            "end": "00:00:01.000",
+            "text": "Hi",
+        }
+    ]
+    assert len(client.requests) == 2
+
+
+def test_repeated_transient_chunk_failures_exhaust_retries_without_publishing(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "chunk_000.mp4").write_bytes(b"video")
+    invalid_timing = chunk_call(
+        ['{"captions": [{"id": 0, "start": "1", "end": "0", "text": "bad"}]}']
+    )
+    client = ScriptedGeminiClient([invalid_timing] * 3)
+    use_client(monkeypatch, client)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
 
     assert (
         gemini.process_chunk(
@@ -136,14 +168,31 @@ def test_invalid_chunk_response_fails_without_publishing(tmp_path, monkeypatch, 
     )
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
+    assert len(client.requests) == 3
 
 
-def test_chunk_sdk_failure_fails_without_publishing(tmp_path, monkeypatch):
+def test_permanent_chunk_failure_fails_immediately_without_retry(tmp_path, monkeypatch):
     (tmp_path / "chunk_000.mp4").write_bytes(b"video")
     client = ScriptedGeminiClient(
-        [chunk_call([], error=RuntimeError("quota exhausted"))]
+        [
+            chunk_call(
+                [],
+                error=errors.ClientError(
+                    403,
+                    {
+                        "error": {
+                            "code": 403,
+                            "message": "Permission denied.",
+                            "status": "PERMISSION_DENIED",
+                        }
+                    },
+                ),
+            )
+        ]
+        * 3
     )
     use_client(monkeypatch, client)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
 
     assert (
         gemini.process_chunk(
@@ -153,3 +202,4 @@ def test_chunk_sdk_failure_fails_without_publishing(tmp_path, monkeypatch):
     )
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
+    assert len(client.requests) == 1
