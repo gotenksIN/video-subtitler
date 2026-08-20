@@ -113,13 +113,23 @@ def test_refinement_stream_pieces_are_assembled_before_parsing(tmp_path, monkeyp
 
 
 def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypatch):
+    identity_body = "Jane Doe: Host. Evidence: official program page."
+    terminology_body = "Season Premiere: recurring program title spelling."
+    research_text = (
+        "PARTICIPANTS AND SPEAKERS:\n"
+        f"{identity_body}\n"
+        "\n"
+        "TOPIC TERMINOLOGY AND PROPER NOUNS:\n"
+        f"{terminology_body}\n"
+    )
     source = write_vtt(
-        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "Only")]
+        tmp_path / "source.vtt",
+        [("00:00:00.000", "00:00:01.000", "JANE DOE: Only")],
     )
     output = tmp_path / "output.vtt"
     client = ScriptedGeminiClient(
         [
-            research_call(pieces=("Researched identities",)),
+            research_call(pieces=(research_text,)),
             refinement_call(['{"changes": []}']),
         ]
     )
@@ -137,7 +147,16 @@ def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypat
     assert research.config.temperature == 0.0
     assert any(tool.google_search is not None for tool in research.config.tools)
     assert all(tool.url_context is None for tool in research.config.tools)
-    assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
+
+    refinement_contents = client.requests[1].contents
+    assert identity_body in refinement_contents
+    assert terminology_body in refinement_contents
+    assert refinement_contents.index(identity_body) < refinement_contents.index(
+        terminology_body
+    )
+    assert "PARTICIPANTS AND SPEAKERS:" not in refinement_contents
+    assert "TOPIC TERMINOLOGY AND PROPER NOUNS:" not in refinement_contents
+    assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Jane Doe: Only")]
 
 
 def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch):

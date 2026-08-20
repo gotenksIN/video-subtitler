@@ -245,8 +245,13 @@ def process_chunk(
         return False
 
 
+IDENTITY_RESEARCH_SECTION = "PARTICIPANTS AND SPEAKERS"
+TERMINOLOGY_RESEARCH_SECTION = "TOPIC TERMINOLOGY AND PROPER NOUNS"
+NON_NAME_LABELS = frozenset({"evidence", "role", "aliases", "sources", "notes"})
+
+
 def build_identity_research_prompt(source_title=None, context_urls=(), youtube_urls=()):
-    """Build the plain-text prompt for the grounded web identity research pass."""
+    """Build the plain-text prompt for the grounded web research pass."""
     title_block = ""
     if source_title:
         title_block = f"\nSOURCE TITLE\n\n{source_title}\n"
@@ -256,7 +261,8 @@ def build_identity_research_prompt(source_title=None, context_urls=(), youtube_u
         url_block = (
             "\nCONTEXT URLS\n\n"
             f"{url_lines}\n"
-            "Read the content at these URLs. They may identify the participants.\n"
+            "Read the content at these URLs. They may identify the "
+            "participants and the topic.\n"
         )
     youtube_block = ""
     if youtube_urls:
@@ -267,20 +273,62 @@ def build_identity_research_prompt(source_title=None, context_urls=(), youtube_u
             "Do not open these URLs. Their video content is analyzed in a "
             "separate pass. Treat the URLs as identifiers only.\n"
         )
-    return f"""You research speaker identities for an English subtitle localization pass.
+    return f"""You research speaker identities and topic terminology for an English subtitle localization pass.
 
-Return a concise plain-text summary of the participants who speak in this video.
-For each participant return their name in official English styling, their role, and the evidence for that attribution.
-Evidence must come from reputable web sources.
+Use Google Search to research this video and return a concise plain-text summary with exactly two sections, in this order, using these exact section headers.
+
+{IDENTITY_RESEARCH_SECTION}:
+Canonical English public names, aliases, and roles for the people who speak in this video.
+Begin each entry on its own line with the canonical English public name or the stable role, followed by a colon, then give the aliases, the role, and the cited evidence.
+
+{TERMINOLOGY_RESEARCH_SECTION}:
+Canonical English spelling of the recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or the context URLs.
+Give one canonical spelling per line with the cited source.
 {title_block}{url_block}{youtube_block}REQUIREMENTS
 
 1. Use Google Search at least once and rely on reputable evidence.
 2. Cite the source for each attribution so the evidence can be reviewed.
-3. Rank identity evidence: reputable grounded web evidence first, the source title last.
-4. Web evidence may establish speaker identity and canonical proper-name spelling only. It must never infer or change dialogue content, meaning, or events.
-5. When identity cannot be established, state one stable descriptive role such as Host, Resident, Shop Owner, or Producer when the role is clear; otherwise state that the speaker stays unlabeled.
+3. Rank evidence: reputable grounded web evidence first, the source title last.
+4. Grounded research establishes canonical spelling and verified entities only. It must never infer, invent, or alter spoken dialogue content, meaning, or events.
+5. When a participant's identity cannot be established, state one stable descriptive role such as Host, Resident, Shop Owner, or Producer when the role is clear; otherwise state that the speaker stays unlabeled.
 6. Return plain text only, with no markdown formatting.
 """
+
+
+def split_research_sections(research_text):
+    """Split research text into identity and terminology section bodies.
+
+    Section headers are matched case-insensitively with an optional trailing
+    colon. Lines before the first header stay in the identity section so
+    research output without section headers keeps working.
+    """
+    identity_lines = []
+    terminology_lines = []
+    target = identity_lines
+    for line in research_text.splitlines():
+        header = line.strip().upper().removesuffix(":")
+        if header == IDENTITY_RESEARCH_SECTION:
+            target = identity_lines
+        elif header == TERMINOLOGY_RESEARCH_SECTION:
+            target = terminology_lines
+        else:
+            target.append(line)
+    identity = "\n".join(identity_lines).strip()
+    terminology = "\n".join(terminology_lines).strip()
+    return identity, terminology
+
+
+def extract_grounded_names(identity_section):
+    """Collect canonical name entries from the identity research section."""
+    names = {}
+    for line in identity_section.splitlines():
+        match = core.SPEAKER_LABEL_RE.match(line.lstrip(" \t-*"))
+        if not match:
+            continue
+        label = match.group(2).strip()
+        if label and label.casefold() not in NON_NAME_LABELS:
+            names.setdefault(label.casefold(), label)
+    return list(names.values())
 
 
 def build_youtube_analysis_prompt(source_title=None):
@@ -302,7 +350,11 @@ They must never infer or change dialogue content, meaning, or events.
 
 
 def build_refinement_prompt(
-    full_script, source_title=None, identity_context=None, youtube_context=None
+    full_script,
+    source_title=None,
+    identity_context=None,
+    terminology_context=None,
+    youtube_context=None,
 ):
     source_block = ""
     if source_title:
@@ -323,6 +375,17 @@ def build_refinement_prompt(
             "proper-name spelling only. It must never change dialogue "
             "meaning, events, or facts.\n"
         )
+    terminology_block = ""
+    if terminology_context:
+        terminology_block = (
+            "\nGROUNDED TERMINOLOGY CONTEXT\n\n"
+            f"{terminology_context}\n"
+            "The terminology context above was researched with grounded web "
+            "evidence. It establishes canonical spelling of proper nouns, "
+            "series and program titles, organizations, products, and "
+            "locations only. It must never change dialogue meaning, events, "
+            "or facts.\n"
+        )
     youtube_block = ""
     if youtube_context:
         youtube_block = (
@@ -339,7 +402,7 @@ def build_refinement_prompt(
 Below is the complete subtitle script for a video.
 
 You do not have access to the source video or audio. Never infer or reconstruct source content that is not established by the provided script.
-{source_block}{identity_block}{youtube_block}Use the complete script as global context and correct only lines with a clear problem involving:
+{source_block}{identity_block}{terminology_block}{youtube_block}Use the complete script as global context and correct only lines with a clear problem involving:
 
 1. Speaker labels that are missing, inconsistent, conflicting, or attached to on-screen text. Audit speaker labels first, before polishing any text.
 2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
@@ -364,42 +427,45 @@ SEMANTIC PRESERVATION
 TERMINOLOGY AND LOCALIZATION
 
 15. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
-16. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
-17. Do not replace understandable English with unexplained romanized source-language terms.
-18. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
-19. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
-20. Preserve visible footnote markers such as "*".
-21. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
+16. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organization names, and location names.
+17. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
+18. Do not replace understandable English with unexplained romanized source-language terms.
+19. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
+20. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
+21. Preserve visible footnote markers such as "*".
+22. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
 
 SPEAKER LABELS
 
-22. Rank speaker identity evidence in this order: an explicit introduction or title card within the script; the grounded identity context and the direct video analysis; the source title.
-23. Use each confidently established person's official English name styling consistently.
-24. Normalize labels when the evidence confidently establishes the identity.
-25. Treat an abrupt label change near a chunk boundary as a likely generation error and normalize it to the established identity.
-26. When conflicting identities are attached to one speaker and no identity is confidently established, replace them all with one stable descriptive role when the role is established in the script; otherwise remove the uncertain label.
-27. Preserve each speaker's turn when multiple speakers occur in one caption.
-28. When consecutive lines within one caption have the same speaker label and form one continuous turn, keep the label only once. Preserve every sentence, its order, and readable line breaks. Do not merge separate captions or alternating speaker turns.
-29. Never infer identity from appearance.
-30. Never add speaker labels to on-screen text.
-31. The grounded identity context and the direct video analysis may establish speaker identity and canonical proper-name spelling only. They must never change dialogue meaning, events, or facts.
+23. Rank speaker identity evidence in this order: an explicit introduction or title card within the script; the grounded identity context and the direct video analysis; the source title.
+24. Use each confidently established person's official English name styling consistently.
+25. A speaker label prefix such as "Name:" identifies who is speaking, using their established canonical English name or role.
+26. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
+27. Normalize labels when the evidence confidently establishes the identity.
+28. Treat an abrupt label change near a chunk boundary as a likely generation error and normalize it to the established identity.
+29. When conflicting identities are attached to one speaker and no identity is confidently established, replace them all with one stable descriptive role when the role is established in the script; otherwise remove the uncertain label.
+30. Preserve each speaker's turn when multiple speakers occur in one caption.
+31. When consecutive lines within one caption have the same speaker label and form one continuous turn, keep the label only once. Preserve every sentence, its order, and readable line breaks. Do not merge separate captions or alternating speaker turns.
+32. Never infer identity from appearance.
+33. Never add speaker labels to on-screen text.
+34. The grounded identity context and the direct video analysis may establish speaker identity and canonical proper-name spelling only. They must never change dialogue meaning, events, or facts.
 
 ON-SCREEN TEXT
 
-32. Preserve square brackets around on-screen editorial text.
-33. Keep on-screen text distinct from dialogue.
-34. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
-35. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
-36. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
+35. Preserve square brackets around on-screen editorial text.
+36. Keep on-screen text distinct from dialogue.
+37. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
+38. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
+39. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
 
 FORMATTING AND OUTPUT
 
-37. Preserve line breaks when they distinguish multiple speakers.
-38. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
-39. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
-40. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
-41. Do not return unchanged entries.
-42. Do not return timestamps, markdown, or explanations.
+40. Preserve line breaks when they distinguish multiple speakers.
+41. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
+42. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
+43. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
+44. Do not return unchanged entries.
+45. Do not return timestamps, markdown, or explanations.
 
 SCRIPT
 
@@ -561,14 +627,14 @@ def global_refine_subtitles(
 
     full_script = "\n".join(script_lines)
 
-    # 1. Grounded web identity research pass. Plain text with Google Search.
+    # 1. Grounded web research pass. Plain text with Google Search.
     # No video Parts: YouTube content is analyzed in a separate request.
     research_prompt = build_identity_research_prompt(
         source_title, ordinary_urls, youtube_urls
     )
     with create_client(api_key, base_url) as client:
         print(
-            "Researching speaker identities with Google Search "
+            "Researching participants and terminology with Google Search "
             "(this may take a minute)..."
         )
         research_stream = client.models.generate_content_stream(
@@ -630,10 +696,15 @@ def global_refine_subtitles(
                     )
                     time.sleep(delay)
 
-    # 3. Structured refinement pass. No tools; the identity sections supply
-    # context.
+    # 3. Structured refinement pass. No tools; the grounded identity and
+    # terminology sections supply context.
+    identity_section, terminology_section = split_research_sections(research_text)
     prompt = build_refinement_prompt(
-        full_script, source_title, research_text, youtube_analysis_text
+        full_script,
+        source_title,
+        identity_context=identity_section,
+        terminology_context=terminology_section,
+        youtube_context=youtube_analysis_text,
     )
 
     with create_client(api_key, base_url) as client:
@@ -665,7 +736,12 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
-    core.canonicalize_speaker_casing(vtt, grounded_names=grounded_names)
+    # Caller-supplied grounded names win over researched names on a
+    # case-insensitive collision inside canonicalize_speaker_casing.
+    researched_names = extract_grounded_names(identity_section)
+    core.canonicalize_speaker_casing(
+        vtt, grounded_names=[*researched_names, *(grounded_names or ())]
+    )
     io.atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
 

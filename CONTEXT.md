@@ -305,7 +305,7 @@ Canonical spelling selection per group:
 
 Publication boundary:
 
-- `gemini.global_refine_subtitles()` canonicalizes with its `grounded_names` argument before it saves the refined VTT atomically.
+- `gemini.global_refine_subtitles()` extracts grounded names from the identity research section, merges them with its `grounded_names` argument, and canonicalizes before it saves the refined VTT atomically.
 - `pipeline.run_generation()` canonicalizes without grounded names when it publishes the final artifact directly without text refinement.
 
 ## Stitching and pure-editorial boundary merging
@@ -349,25 +349,32 @@ Request configuration:
 
 ## Global text refinement
 
-Refines the full script using grounded identity research.
+Refines the full script using grounded identity and terminology research.
 
 1. **Grounded web research pass:**
    - Tool: Google Search + optional URL Context.
-   - Output: Plain text summary of participant names in official English styling, roles, and evidence.
+   - Output: Plain text with two sections:
+     - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
+     - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
+   - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
    - Grounding verification: Research stream must contain non-empty search queries, grounded sources, and successful URL retrieval.
 2. **Direct YouTube video pass:**
    - Attached video Parts for public YouTube URLs.
    - Retries transient 500, 502, 503, and 504 server errors up to 3 times with exponential backoff.
 3. **Structured refinement pass:**
    - Model: `gemini-3.1-pro-preview` (thinking level `medium`, temp `0.0`).
-   - Input: Full script with identity context sections.
+   - Input: Full script with separate `GROUNDED IDENTITY CONTEXT` and `GROUNDED TERMINOLOGY CONTEXT` blocks.
+   - Section splitting: The host splits the research text into identity and terminology sections at the section headers. Header matching is case-insensitive with an optional trailing colon, and text before the first header stays in the identity section, so research output without headers keeps working as identity context.
    - Tasks:
      1. Speaker label auditing (intro/title card > web/YouTube research > source title).
-     2. English polishing, idiom localization, formatting cleanup.
-     3. Forbids retiming, merging, splitting, adding, or deleting cues.
+     2. Speaker label prefixes (`Name:`) identify who is speaking using the established canonical English name or role; spoken dialogue text stays faithful to the spoken audio and never alters spoken names, nicknames, titles, or address terms merely to match a speaker label prefix.
+     3. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
+     4. English polishing, idiom localization, formatting cleanup.
+     5. Forbids retiming, merging, splitting, adding, or deleting cues.
    - Output: `RefinementResponse` applied atomically to target.
 4. **Speaker label casing canonicalization:**
    - `core.canonicalize_speaker_casing(vtt, grounded_names)` runs deterministically after the model changes and before the atomic save.
+   - `gemini.global_refine_subtitles()` extracts the canonical name entries (leading `Name:` lines) from the identity research section and merges them with its `grounded_names` argument; caller-supplied names win case-insensitive collisions.
 
 ## Work state, locking, and recovery
 
