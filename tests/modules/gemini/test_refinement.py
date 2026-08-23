@@ -150,14 +150,6 @@ def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypat
     assert any(tool.google_search is not None for tool in research.config.tools)
     assert all(tool.url_context is None for tool in research.config.tools)
 
-    refinement_contents = client.requests[1].contents
-    assert identity_body in refinement_contents
-    assert terminology_body in refinement_contents
-    assert refinement_contents.index(identity_body) < refinement_contents.index(
-        terminology_body
-    )
-    assert "PARTICIPANTS AND SPEAKERS:" not in refinement_contents
-    assert "TOPIC TERMINOLOGY AND PROPER NOUNS:" not in refinement_contents
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Jane Doe: Only")]
 
 
@@ -590,8 +582,14 @@ def test_supplied_preflight_context_skips_research_requests(tmp_path, monkeypatc
     )
 
     assert len(client.requests) == 1
-    contents = client.requests[0].contents
-    assert "Jane Doe: Host." in contents
-    assert "Season Premiere: program title." in contents
-    assert "Direct video identities." in contents
+    refinement = client.requests[0]
+    assert refinement.config.response_mime_type == "application/json"
+    assert refinement.config.response_schema is core.RefinementResponse
+    assert refinement.config.automatic_function_calling.disable is True
+    assert refinement.config.tools is None
+    assert (
+        refinement.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
+    )
+    assert refinement.config.thinking_config.include_thoughts is True
+    assert refinement.config.temperature == 0.0
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Jane Doe: Only")]

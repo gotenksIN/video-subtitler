@@ -8,22 +8,24 @@ import webvtt
 from modules import io
 
 
-def test_json_publication_overwrites_the_target_and_cleans_up(tmp_path):
+@pytest.mark.parametrize(
+    ("preexisting", "value"),
+    [
+        (False, [1, 2]),
+        (True, {"text": "plain ascii"}),
+    ],
+    ids=["new target", "overwrite"],
+)
+def test_json_publication_creates_or_overwrites_the_target(
+    tmp_path, preexisting, value
+):
     target = tmp_path / "captions.json"
-    target.write_text("old", encoding="utf-8")
+    if preexisting:
+        target.write_text("old", encoding="utf-8")
 
-    io.atomic_write_json(target, {"text": "plain ascii"})
+    io.atomic_write_json(target, value)
 
-    assert json.loads(target.read_text(encoding="utf-8")) == {"text": "plain ascii"}
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["captions.json"]
-
-
-def test_json_publication_creates_a_new_target(tmp_path):
-    target = tmp_path / "captions.json"
-
-    io.atomic_write_json(target, [1, 2])
-
-    assert json.loads(target.read_text(encoding="utf-8")) == [1, 2]
+    assert json.loads(target.read_text(encoding="utf-8")) == value
     assert sorted(path.name for path in tmp_path.iterdir()) == ["captions.json"]
 
 

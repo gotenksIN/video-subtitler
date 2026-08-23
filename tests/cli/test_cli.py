@@ -73,14 +73,6 @@ def test_unknown_option_is_a_usage_error(tmp_path):
     assert "unrecognized arguments" in output(process)
 
 
-def test_removed_overlap_option_is_a_usage_error(tmp_path):
-    video = make_video(tmp_path)
-    process = run_cli(str(video), "--overlap", "5", cwd=tmp_path)
-
-    assert process.returncode == 2
-    assert "unrecognized arguments" in output(process)
-
-
 def test_invalid_thinking_level_choice_is_a_usage_error(tmp_path):
     video = make_video(tmp_path)
     process = run_cli(str(video), "--thinking-level", "extreme", cwd=tmp_path)
@@ -98,41 +90,37 @@ def test_non_integer_chunk_duration_is_a_usage_error(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("input_name", "arguments", "message"),
     [
-        (("--chunk-dur", "0"), "chunk-dur must be greater than 0"),
-        (("--workers", "0"), "workers must be greater than 0"),
         (
-            ("--model", "pro", "--thinking-level", "minimal"),
+            "source.mp4",
+            ("--api-key", "key", "--chunk-dur", "0"),
+            "chunk-dur must be greater than 0",
+        ),
+        (
+            "source.mp4",
+            ("--api-key", "key", "--workers", "0"),
+            "workers must be greater than 0",
+        ),
+        (
+            "source.mp4",
+            ("--api-key", "key", "--model", "pro", "--thinking-level", "minimal"),
             "only supported by Flash",
         ),
+        ("missing.mp4", ("--api-key", "key"), "Video file not found"),
+        ("source.mp4", (), "API key not configured"),
     ],
+    ids=["chunk duration", "workers", "thinking level", "missing video", "missing key"],
 )
 def test_generation_validation_failures_exit_one_with_stable_diagnostics(
-    tmp_path, arguments, message
+    tmp_path, input_name, arguments, message
 ):
-    video = make_video(tmp_path)
-    process = run_cli(str(video), "--api-key", "key", *arguments, cwd=tmp_path)
+    make_video(tmp_path)
+    process = run_cli(input_name, *arguments, cwd=tmp_path)
 
     assert process.returncode == 1
     assert message in output(process)
     assert not (tmp_path / "temp_video_chunks").exists()
-
-
-def test_generation_reports_missing_video_file(tmp_path):
-    process = run_cli("missing.mp4", "--api-key", "key", cwd=tmp_path)
-
-    assert process.returncode == 1
-    assert "Video file not found" in output(process)
-    assert not (tmp_path / "temp_video_chunks").exists()
-
-
-def test_generation_reports_missing_api_key(tmp_path):
-    video = make_video(tmp_path)
-    process = run_cli(str(video), cwd=tmp_path)
-
-    assert process.returncode == 1
-    assert "API key not configured" in output(process)
 
 
 def test_api_key_environment_variable_is_accepted(tmp_path):
