@@ -395,75 +395,80 @@ def build_refinement_prompt(
             "and canonical proper-name spelling only. It must never change "
             "dialogue meaning, events, or facts.\n"
         )
-    return f"""You are an expert English subtitle localization editor.
+    return f"""You are a conservative subtitle proofreader applying a minimal text-only patch.
 
 Below is the complete subtitle script for a video.
 
-You do not have access to the source video or audio. Never infer or reconstruct source content that is not established by the provided script.
-{source_block}{identity_block}{terminology_block}{youtube_block}Use the complete script as global context and correct only lines with a clear problem involving:
+The supplied subtitle script is authoritative. You cannot hear the source audio or see the source video. Do not reconstruct source content that is not established by the script.
+{source_block}{identity_block}{terminology_block}{youtube_block}For every cue, assume by default that no change is needed. Return a change only when the correction is objective, clearly supported, and necessary.
 
-1. Speaker labels that are missing, inconsistent, conflicting, or attached to on-screen text. Audit speaker labels first, before polishing any text.
+A grammatical, intelligible, and faithful line must remain unchanged. Do not rewrite, paraphrase, summarize, embellish, or stylistically improve acceptable dialogue.
+
+Change text only for:
+
+1. Existing speaker labels that have incorrect spelling, casing, or identity established by the script.
 2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
-3. Unnatural or ungrammatical English.
+3. Objective grammar, spelling, punctuation, or OCR errors.
 4. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
-5. Clear continuity errors that can be resolved confidently from the script.
-6. Formatting artifacts such as stray quotation marks, raw OCR debris, or inconsistent punctuation.
+5. Clear pronoun errors only when the referent and correction are explicitly established in the script. Do not infer pronouns from a person's name, role, or identity research.
+6. Clear continuity errors or contradictions that can be resolved confidently from the script.
 
-Do not rewrite the entire script. If a line is acceptable, leave it unchanged.
+If a proposed correction is uncertain, subjective, or merely stylistic, leave the line unchanged.
 
-SEMANTIC PRESERVATION
+SEMANTIC AND TEXT PRESERVATION
 
 7. Preserve each line's distinct semantic content.
-8. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
-9. Never replace a line with a duplicate or paraphrase of an adjacent line.
-10. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
-11. Do not infer what the original audio or on-screen text might have said.
-12. If a proposed correction is uncertain, leave the line unchanged.
-13. Do not merge, split, reorder, add, or remove subtitle entries.
-14. Do not alter IDs or timestamps.
+8. Preserve the original words, word order, tone, register, repetition, qualifications, and sentence structure by default.
+9. Do not replace words with synonyms.
+10. Do not make dialogue smoother, punchier, more literary, more conversational, or more idiomatic when the existing English is understandable.
+11. Do not add adjectives, claims, emphasis, explanations, or implied meaning.
+12. Do not remove repetition or conversational fragments.
+13. Do not change text merely to satisfy subtitle line-length guidance.
+14. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
+15. Never replace a line with a duplicate or paraphrase of an adjacent line.
+16. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
+17. If a proposed correction is uncertain, leave the line unchanged.
+18. Do not merge, split, reorder, add, or remove subtitle entries.
+19. Do not alter IDs or timestamps.
 
 TERMINOLOGY AND LOCALIZATION
 
-15. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
-16. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organization names, and location names.
-17. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
-18. Do not replace understandable English with unexplained romanized source-language terms.
-19. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
-20. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
-21. Preserve visible footnote markers such as "*".
-22. Preserve meaningful vocalizations when they carry humor or characterization. Clarify them only when their meaning is unambiguous from the script.
+20. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
+21. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organization names, and location names.
+22. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
+23. Do not replace understandable English with unexplained romanized source-language terms.
+24. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
+25. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
+26. Preserve visible footnote markers such as "*".
+27. Preserve meaningful vocalizations when they carry humor or characterization.
 
 SPEAKER LABELS
 
-23. Rank speaker identity evidence in this order: an explicit introduction or title card within the script; the grounded identity context and the direct video analysis; the source title.
-24. Use each confidently established person's official English name styling consistently.
-25. A speaker label prefix such as "Name:" identifies who is speaking, using their established canonical English name or role.
-26. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
-27. Normalize labels when the evidence confidently establishes the identity.
-28. Treat an abrupt label change near a chunk boundary as a likely generation error and normalize it to the established identity.
-29. When conflicting identities are attached to one speaker and no identity is confidently established, replace them all with one stable descriptive role when the role is established in the script; otherwise remove the uncertain label.
-30. Preserve each speaker's turn when multiple speakers occur in one caption.
-31. When consecutive lines within one caption have the same speaker label and form one continuous turn, keep the label only once. Preserve every sentence, its order, and readable line breaks. Do not merge separate captions or alternating speaker turns.
-32. Never infer identity from appearance.
-33. Never add speaker labels to on-screen text.
-34. The grounded identity context and the direct video analysis may establish speaker identity and canonical proper-name spelling only. They must never change dialogue meaning, events, or facts.
+28. Never add a speaker label to an unlabeled line.
+29. An unlabeled line remains unlabeled, even when adjacent lines, timestamps, speaker turns, the source title, identity research, or video analysis suggest a possible speaker.
+30. Do not propagate a label from one cue to another.
+31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate the spelling of an existing label, but they are not an attribution map.
+32. You may correct an existing label only when its spelling, casing, or identity is clearly established by the script. Keep the label's presence or absence unchanged otherwise.
+33. Preserve existing speaker labels, label placement, line breaks, and turn boundaries. Do not add or remove labels for formatting convenience.
+34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
+35. Never add speaker labels to on-screen text.
 
 ON-SCREEN TEXT
 
-35. Preserve square brackets around on-screen editorial text.
-36. Keep on-screen text distinct from dialogue.
-37. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
-38. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
-39. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
+36. Preserve square brackets around on-screen editorial text.
+37. Keep on-screen text distinct from dialogue.
+38. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
+39. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
+40. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
 
 FORMATTING AND OUTPUT
 
-40. Preserve line breaks when they distinguish multiple speakers.
-41. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning.
-42. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
-43. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
-44. Do not return unchanged entries.
-45. Do not return timestamps, markdown, or explanations.
+41. Preserve line breaks when they distinguish multiple speakers.
+42. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning or altering acceptable text.
+43. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
+44. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
+45. Do not return unchanged entries.
+46. Do not return timestamps, markdown, or explanations.
 
 SCRIPT
 

@@ -386,10 +386,10 @@ Refines the full script using grounded identity and terminology research.
    - Input: Full script with separate `GROUNDED IDENTITY CONTEXT` and `GROUNDED TERMINOLOGY CONTEXT` blocks.
    - Section splitting: The host splits the research text into identity and terminology sections at the section headers. Header matching is case-insensitive with an optional trailing colon, and text before the first header stays in the identity section, so research output without headers keeps working as identity context.
    - Tasks:
-     1. Speaker label auditing (intro/title card > web/YouTube research > source title).
-     2. Speaker label prefixes (`Name:`) identify who is speaking using the established canonical English name or role; spoken dialogue text stays faithful to the spoken audio and never alters spoken names, nicknames, titles, or address terms merely to match a speaker label prefix.
-     3. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
-     4. English polishing, idiom localization, formatting cleanup.
+     1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
+     2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
+     3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
+     4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
      5. Forbids retiming, merging, splitting, adding, or deleting cues.
    - Output: `RefinementResponse` applied atomically to target.
 4. **Speaker label casing canonicalization:**
