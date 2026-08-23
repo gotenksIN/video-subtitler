@@ -110,6 +110,11 @@ It defaults to `high`.
 `minimal` is valid only when the model name contains `flash` (case-insensitive).
 The text refinement pass always uses `medium`.
 The audio refinement pass always uses `high`.
+Every request configured with a thinking level sets `include_thoughts=True`.
+Thought tokens stream in real time across the transport boundary.
+These tokens keep the HTTP streaming connection active.
+Host stream consumers accumulate candidate answer text only.
+The host excludes thought-only stream chunks (`text=None`) from assembled JSON and research text outputs.
 
 Direct CLI defaults:
 - `--chunk-dur 60` seconds.
@@ -332,6 +337,7 @@ Repairs boundary faults by listening to `extracted_audio.ogg`.
 Request configuration:
 - `DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.7-flash"`
 - Fixed thinking level: `HIGH`
+- Thought streaming enabled through `include_thoughts=True`
 - Max output tokens: `65536`
 - Response MIME: `application/json` with `AudioRefinementResponse` schema.
 - Automatic function calling disabled explicitly via `build_content_config()`.

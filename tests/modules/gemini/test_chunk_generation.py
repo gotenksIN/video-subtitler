@@ -6,7 +6,12 @@ import pytest
 from google.genai import errors, types
 
 from modules import core, gemini
-from tests.support.gemini_fakes import ScriptedGeminiClient, chunk_call, use_client
+from tests.support.gemini_fakes import (
+    ScriptedGeminiClient,
+    chunk_call,
+    stream_chunk,
+    use_client,
+)
 
 
 def chunk_state(idx=0, name="chunk_000.mp4", duration=2.0):
@@ -53,10 +58,46 @@ def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
     assert request.config.automatic_function_calling.disable is True
     assert request.config.tools is None
     assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert request.config.thinking_config.include_thoughts is True
     assert request.config.temperature == 0.0
 
     saved = json.loads(
         (tmp_path / "subtitle_chunk_003.json").read_text(encoding="utf-8")
+    )
+    assert saved == [
+        {
+            "id": 0,
+            "start": "00:00:00.000",
+            "end": "00:00:01.000",
+            "text": "Hi",
+        }
+    ]
+
+
+def test_chunk_generation_ignores_thought_stream_chunks_during_json_assembly(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "chunk_000.mp4").write_bytes(b"video")
+    client = ScriptedGeminiClient(
+        [
+            chunk_call(
+                [
+                    stream_chunk(thought=True),
+                    '{"captions": [{"id": 0, ',
+                    stream_chunk(thought=True),
+                    '"start": "0", "end": "1", "text": "Hi"}]}',
+                ]
+            )
+        ]
+    )
+    use_client(monkeypatch, client)
+
+    assert gemini.process_chunk(
+        "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+    )
+
+    saved = json.loads(
+        (tmp_path / "subtitle_chunk_000.json").read_text(encoding="utf-8")
     )
     assert saved == [
         {

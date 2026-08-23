@@ -76,10 +76,10 @@ class ScriptedGeminiClient:
                 yield SimpleNamespace(text=piece)
 
 
-def stream_chunk(text=None, finish_reason=None):
+def stream_chunk(text=None, finish_reason=None, thought=False):
     """One SDK stream chunk with optional candidate finish metadata."""
     return SimpleNamespace(
-        text=text,
+        text=None if thought else text,
         candidates=[SimpleNamespace(finish_reason=finish_reason)],
     )
 

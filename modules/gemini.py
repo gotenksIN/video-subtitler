@@ -54,6 +54,16 @@ def build_content_config(**kwargs):
     return types.GenerateContentConfig(**kwargs)
 
 
+def build_thinking_config(thinking_level):
+    """Build a thinking configuration with thought streaming enabled."""
+    if thinking_level is None:
+        return None
+    return types.ThinkingConfig(
+        thinking_level=thinking_level.upper(),
+        include_thoughts=True,
+    )
+
+
 def generate_content_config(thinking_level):
     """Build the response configuration for chunk video generation."""
     kwargs = {
@@ -61,10 +71,9 @@ def generate_content_config(thinking_level):
         "response_mime_type": "application/json",
         "response_schema": core.SubtitleResponse,
     }
-    if thinking_level is not None:
-        kwargs["thinking_config"] = types.ThinkingConfig(
-            thinking_level=thinking_level.upper()
-        )
+    thinking_config = build_thinking_config(thinking_level)
+    if thinking_config is not None:
+        kwargs["thinking_config"] = thinking_config
     return build_content_config(**kwargs)
 
 
@@ -471,20 +480,18 @@ def build_research_config(thinking_level, ordinary_urls):
         "temperature": 0.0,
         "tools": tools,
     }
-    if thinking_level is not None:
-        kwargs["thinking_config"] = types.ThinkingConfig(
-            thinking_level=thinking_level.upper()
-        )
+    thinking_config = build_thinking_config(thinking_level)
+    if thinking_config is not None:
+        kwargs["thinking_config"] = thinking_config
     return build_content_config(**kwargs)
 
 
 def build_youtube_analysis_config(thinking_level):
     """Build plain-text config for direct YouTube analysis without tools."""
     kwargs = {"temperature": 0.0}
-    if thinking_level is not None:
-        kwargs["thinking_config"] = types.ThinkingConfig(
-            thinking_level=thinking_level.upper()
-        )
+    thinking_config = build_thinking_config(thinking_level)
+    if thinking_config is not None:
+        kwargs["thinking_config"] = thinking_config
     return build_content_config(**kwargs)
 
 
@@ -495,10 +502,9 @@ def build_refinement_config(thinking_level):
         "response_mime_type": "application/json",
         "response_schema": core.RefinementResponse,
     }
-    if thinking_level is not None:
-        kwargs["thinking_config"] = types.ThinkingConfig(
-            thinking_level=thinking_level.upper()
-        )
+    thinking_config = build_thinking_config(thinking_level)
+    if thinking_config is not None:
+        kwargs["thinking_config"] = thinking_config
     return build_content_config(**kwargs)
 
 
@@ -837,9 +843,7 @@ def audio_refinement_config():
         # The Gemini endpoint rejects Pydantic's additionalProperties keyword.
         # Host-side parsing still enforces extra="forbid" on both models.
         response_json_schema=remove_additional_properties(schema),
-        thinking_config=types.ThinkingConfig(
-            thinking_level=AUDIO_REFINE_THINKING_LEVEL.upper()
-        ),
+        thinking_config=build_thinking_config(AUDIO_REFINE_THINKING_LEVEL),
         max_output_tokens=AUDIO_REFINE_MAX_OUTPUT_TOKENS,
     )
 

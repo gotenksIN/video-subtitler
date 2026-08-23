@@ -88,6 +88,7 @@ def test_audio_request_sends_inline_ogg_bytes_with_sparse_config(tmp_path, monke
     assert isinstance(request.contents[1], str)
     assert request.config.automatic_function_calling.disable is True
     assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert request.config.thinking_config.include_thoughts is True
     assert request.config.max_output_tokens == gemini.AUDIO_REFINE_MAX_OUTPUT_TOKENS
     assert read_captions(output) == refined_captions()
 

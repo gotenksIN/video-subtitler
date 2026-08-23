@@ -37,3 +37,14 @@ def test_client_creation_always_configures_retry_options(monkeypatch):
     gemini.create_client(None, None)
 
     assert received == {"http_options": {"retry_options": types.HttpRetryOptions()}}
+
+
+def test_thinking_config_enabled_sets_level_and_include_thoughts():
+    config = gemini.build_thinking_config("medium")
+
+    assert config.thinking_level == types.ThinkingLevel.MEDIUM
+    assert config.include_thoughts is True
+
+
+def test_thinking_config_none_returns_none():
+    assert gemini.build_thinking_config(None) is None
