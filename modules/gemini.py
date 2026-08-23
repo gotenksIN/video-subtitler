@@ -453,22 +453,26 @@ SPEAKER LABELS
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.
 
-ON-SCREEN TEXT
+ON-SCREEN AND MIXED CUES
 
-36. Preserve square brackets around on-screen editorial text.
-37. Keep on-screen text distinct from dialogue.
-38. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
-39. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
-40. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
+36. Treat every complete outer [bracketed fragment] as protected on-screen editorial content.
+37. In mixed cues containing both on-screen text and spoken dialogue (for example, "[Graphic text] Spoken dialogue"), preserve both the bracketed fragment and the dialogue in the same cue.
+38. A mixed cue must never become dialogue-only or graphic-only. Never drop the spoken dialogue or the bracketed on-screen text.
+39. Edit only the dialogue outside brackets unless an objective visual-text error requires correction.
+40. For an editorial cue (bracket-only), preserve every bracketed fragment and its outer brackets.
+41. For a dialogue cue, do not introduce bracketed text.
+42. Keep on-screen text distinct from dialogue. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
+43. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
+44. Correct incomprehensible literal caption idioms only when the intended meaning can be established from the full script.
 
 FORMATTING AND OUTPUT
 
-41. Preserve line breaks when they distinguish multiple speakers.
-42. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning or altering acceptable text.
-43. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
-44. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
-45. Do not return unchanged entries.
-46. Do not return timestamps, markdown, or explanations.
+45. Preserve line breaks when they distinguish multiple speakers.
+46. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning or altering acceptable text.
+47. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
+48. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
+49. Do not return unchanged entries.
+50. Do not return timestamps, markdown, or explanations.
 
 SCRIPT
 

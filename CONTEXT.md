@@ -390,7 +390,8 @@ Refines the full script using grounded identity and terminology research.
      2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
      3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
      4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
-     5. Forbids retiming, merging, splitting, adding, or deleting cues.
+     5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
+     6. Forbids retiming, merging, splitting, adding, or deleting cues.
    - Output: `RefinementResponse` applied atomically to target.
 4. **Speaker label casing canonicalization:**
    - `core.canonicalize_speaker_casing(vtt, grounded_names)` runs deterministically after the model changes and before the atomic save.
