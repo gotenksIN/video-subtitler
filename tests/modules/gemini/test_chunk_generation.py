@@ -217,6 +217,53 @@ def test_repeated_transient_chunk_failures_exhaust_retries_without_publishing(
     assert sleeps == [1, 2]
 
 
+def test_chunk_request_includes_candidate_names_in_the_prompt(tmp_path, monkeypatch):
+    (tmp_path / "chunk_000.mp4").write_bytes(b"video")
+    client = ScriptedGeminiClient([valid_captions_call()])
+    use_client(monkeypatch, client)
+
+    assert gemini.process_chunk(
+        "key",
+        None,
+        chunk_state(),
+        tmp_path,
+        "model",
+        "video/mp4",
+        "high",
+        candidate_names=["Jane Doe", "John Q"],
+    )
+
+    prompt = client.requests[0].contents[-1]
+    assert "Jane Doe" in prompt
+    assert "John Q" in prompt
+
+
+def test_chunk_request_omits_candidate_names_when_none_or_empty(tmp_path, monkeypatch):
+    (tmp_path / "chunk_000.mp4").write_bytes(b"video")
+    (tmp_path / "chunk_001.mp4").write_bytes(b"video")
+    client = ScriptedGeminiClient([valid_captions_call(), valid_captions_call()])
+    use_client(monkeypatch, client)
+
+    assert gemini.process_chunk(
+        "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+    )
+    assert gemini.process_chunk(
+        "key",
+        None,
+        chunk_state(idx=1, name="chunk_001.mp4"),
+        tmp_path,
+        "model",
+        "video/mp4",
+        "high",
+        candidate_names=[],
+    )
+
+    assert len(client.requests) == 2
+    for request in client.requests:
+        assert "Jane Doe" not in request.contents[-1]
+        assert "John Q" not in request.contents[-1]
+
+
 @pytest.mark.parametrize(
     "error",
     [

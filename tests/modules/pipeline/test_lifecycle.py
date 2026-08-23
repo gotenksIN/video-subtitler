@@ -1,9 +1,11 @@
 """Complete generation lifecycle and recovery outcomes."""
 
+from dataclasses import replace
+
 import pytest
 import webvtt
 
-from modules import gemini, media, pipeline
+from modules import core, gemini, media, pipeline
 from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
@@ -18,6 +20,7 @@ def prepare_generation(
         lambda _path: (".mp4", "video/mp4", "h264"),
     )
     monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
+    install_preflight(monkeypatch)
     tools = FakeMediaTools()
     monkeypatch.setattr(media.subprocess, "run", tools.run)
     config = pipeline.GenerationConfig(
@@ -32,6 +35,16 @@ def prepare_generation(
         refine_text=refine_text,
     )
     return config, tools
+
+
+def install_preflight(monkeypatch, grounded_names=()):
+    monkeypatch.setattr(
+        gemini,
+        "run_preflight_context",
+        lambda *_args, **_kwargs: core.PreflightContext(
+            grounded_names=list(grounded_names)
+        ),
+    )
 
 
 def write_two_chunk_subtitles(monkeypatch):
@@ -97,6 +110,70 @@ def test_toggle_combinations_publish_the_selected_artifact_and_clean_work(
     ]
     work = active_work_directory(tmp_path)
     assert sorted(path.name for path in work.iterdir()) == [pipeline.LOCK_NAME]
+
+
+def test_preflight_grounded_names_reach_chunk_workers_and_text_refinement(
+    tmp_path, monkeypatch
+):
+    config, _tools = prepare_generation(tmp_path, monkeypatch, refine_text=True)
+    install_preflight(monkeypatch, grounded_names=["Jane Doe"])
+    received = []
+
+    def process(_key, _base, chunk, chunk_dir, _model, _mime, _level, _title, names):
+        received.append(names)
+        write_chunk_subtitles(
+            chunk_dir,
+            chunk["idx"],
+            [{"id": 0, "start": "0.5", "end": "1.5", "text": f"Cue {chunk['idx']}"}],
+        )
+        return True
+
+    monkeypatch.setattr(gemini, "process_chunk", process)
+
+    seen = {}
+
+    def text_refine(input_vtt, output_vtt, *_args, **kwargs):
+        seen["preflight"] = kwargs["preflight_context"]
+        value = webvtt.read(input_vtt)
+        value.save(str(output_vtt))
+
+    monkeypatch.setattr(gemini, "global_refine_subtitles", text_refine)
+
+    pipeline.run_generation(config)
+
+    assert received == [["Jane Doe"], ["Jane Doe"]]
+    assert seen["preflight"].grounded_names == ["Jane Doe"]
+
+
+@pytest.mark.parametrize(
+    ("refine_model", "expected_model"),
+    [(None, "model"), ("refine-model", "refine-model")],
+    ids=["chunk-model-fallback", "refine-model"],
+)
+def test_preflight_uses_the_refinement_model_and_run_context(
+    tmp_path, monkeypatch, refine_model, expected_model
+):
+    config, _tools = prepare_generation(tmp_path, monkeypatch)
+    config = replace(
+        config,
+        refine_model=refine_model,
+        context_urls=("https://example.com/notes",),
+    )
+    received = {}
+
+    def preflight(*_args, **kwargs):
+        received.update(kwargs)
+        return core.PreflightContext()
+
+    monkeypatch.setattr(gemini, "run_preflight_context", preflight)
+    write_two_chunk_subtitles(monkeypatch)
+
+    pipeline.run_generation(config)
+
+    assert received["model_name"] == expected_model
+    assert received["thinking_level"] == gemini.REFINEMENT_THINKING_LEVEL
+    assert received["source_title"] == "source"
+    assert received["context_urls"] == ["https://example.com/notes"]
 
 
 def test_missing_audio_stream_fails_before_splitting(tmp_path, monkeypatch):

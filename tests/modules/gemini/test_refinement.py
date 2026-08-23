@@ -450,3 +450,148 @@ def test_refinement_applies_text_changes_without_deleting_cues(tmp_path, monkeyp
         ("00:00:00.000", "00:00:04.000", "Host: Shared opening line"),
         ("00:00:03.000", "00:00:05.000", "Host: Shared opening line"),
     ]
+
+
+# --- Preflight context (Pass 0) ---
+
+
+def test_run_preflight_context_splits_sections_and_collects_grounded_names(
+    monkeypatch,
+):
+    research_text = (
+        "PARTICIPANTS AND SPEAKERS:\n"
+        "Jane Doe: Host.\n"
+        "John Q: Guest.\n"
+        "\n"
+        "TOPIC TERMINOLOGY AND PROPER NOUNS:\n"
+        "Season Premiere: program title.\n"
+    )
+    client = ScriptedGeminiClient([research_call(pieces=(research_text,))])
+    use_client(monkeypatch, client)
+
+    context = gemini.run_preflight_context("key", None, "refiner", "medium")
+
+    assert context.contract_version == "preflight-v1"
+    assert context.identity_context == "Jane Doe: Host.\nJohn Q: Guest."
+    assert context.terminology_context == "Season Premiere: program title."
+    assert context.youtube_context is None
+    assert context.grounded_names == ["Jane Doe", "John Q"]
+
+
+def test_run_preflight_context_analyzes_youtube_urls_directly(monkeypatch):
+    youtube_url = "https://youtu.be/VIDEO_ID"
+    client = ScriptedGeminiClient(
+        [research_call(), youtube_call(pieces=("Direct video identities",))]
+    )
+    use_client(monkeypatch, client)
+
+    context = gemini.run_preflight_context(
+        "key", None, "refiner", "high", context_urls=[youtube_url]
+    )
+
+    assert context.youtube_context == "Direct video identities"
+    analysis = client.requests[1]
+    video_parts = [part for part in analysis.contents if not isinstance(part, str)]
+    assert [part.file_data.file_uri for part in video_parts] == [youtube_url]
+    assert all(part.file_data.mime_type == "video/*" for part in video_parts)
+    assert isinstance(analysis.contents[-1], str)
+
+
+def test_run_preflight_context_skips_youtube_analysis_without_youtube_urls(
+    monkeypatch,
+):
+    client = ScriptedGeminiClient([research_call()])
+    use_client(monkeypatch, client)
+
+    context = gemini.run_preflight_context("key", None, "refiner", "medium")
+
+    assert context.youtube_context is None
+    assert len(client.requests) == 1
+
+
+def test_run_preflight_context_keeps_youtube_context_empty_for_blank_analysis(
+    monkeypatch,
+):
+    client = ScriptedGeminiClient([research_call(), youtube_call(pieces=("   ",))])
+    use_client(monkeypatch, client)
+
+    context = gemini.run_preflight_context(
+        "key", None, "refiner", "high", context_urls=["https://youtu.be/VIDEO_ID"]
+    )
+
+    assert context.youtube_context is None
+
+
+def test_run_preflight_context_fails_without_search_grounding(monkeypatch):
+    def ungrounded(response_stream):
+        text = "".join(chunk.text or "" for chunk in response_stream)
+        return text, [], [], {}
+
+    monkeypatch.setattr(gemini, "collect_stream_metadata", ungrounded)
+    client = ScriptedGeminiClient([research_call()])
+    use_client(monkeypatch, client)
+
+    with pytest.raises(RuntimeError, match="no Google Search grounding"):
+        gemini.run_preflight_context("key", None, "refiner", "medium")
+
+
+def test_preflight_context_cache_round_trips_through_the_work_directory(tmp_path):
+    preflight = core.PreflightContext(
+        identity_context="Jane Doe: Host.",
+        terminology_context="Season Premiere: program title.",
+        youtube_context="Direct video identities.",
+        grounded_names=["Jane Doe"],
+    )
+
+    gemini.store_preflight_context(tmp_path, preflight)
+
+    assert gemini.load_cached_preflight_context(tmp_path) == preflight
+
+
+def test_missing_preflight_context_cache_returns_none(tmp_path):
+    assert gemini.load_cached_preflight_context(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["{invalid json", '{"contractVersion": "preflight-v2"}'],
+    ids=["invalid json", "wrong contract version"],
+)
+def test_invalid_preflight_context_cache_is_discarded(tmp_path, payload):
+    path = tmp_path / gemini.PREFLIGHT_CONTEXT_FILENAME
+    path.write_text(payload, encoding="utf-8")
+
+    assert gemini.load_cached_preflight_context(tmp_path) is None
+    assert not path.exists()
+
+
+def test_supplied_preflight_context_skips_research_requests(tmp_path, monkeypatch):
+    source = write_vtt(
+        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "JANE DOE: Only")]
+    )
+    output = tmp_path / "output.vtt"
+    client = ScriptedGeminiClient([refinement_call(['{"changes": []}'])])
+    use_client(monkeypatch, client)
+
+    gemini.global_refine_subtitles(
+        source,
+        output,
+        "key",
+        None,
+        "refiner",
+        "medium",
+        context_urls=["https://example.com/notes"],
+        preflight_context=core.PreflightContext(
+            identity_context="Jane Doe: Host.",
+            terminology_context="Season Premiere: program title.",
+            youtube_context="Direct video identities.",
+            grounded_names=["Jane Doe"],
+        ),
+    )
+
+    assert len(client.requests) == 1
+    contents = client.requests[0].contents
+    assert "Jane Doe: Host." in contents
+    assert "Season Premiere: program title." in contents
+    assert "Direct video identities." in contents
+    assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Jane Doe: Only")]

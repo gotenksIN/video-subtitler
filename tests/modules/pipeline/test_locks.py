@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from modules import gemini, media, pipeline
+from modules import core, gemini, media, pipeline
 from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
@@ -57,6 +57,11 @@ def test_generation_holds_the_work_lock_during_api_work(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
     monkeypatch.setattr(media.subprocess, "run", FakeMediaTools().run)
+    monkeypatch.setattr(
+        gemini,
+        "run_preflight_context",
+        lambda *_args, **_kwargs: core.PreflightContext(),
+    )
     config = pipeline.GenerationConfig(
         video_path=video,
         output_path=tmp_path / "output.vtt",

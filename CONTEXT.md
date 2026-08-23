@@ -5,10 +5,11 @@ This context defines the architecture, data schemas, algorithms, prompt contract
 ## Purpose
 
 This project is a Python command-line tool that creates English WebVTT subtitles from video.
-It uses an audio-first pipeline with three Gemini passes:
-1. Stream-copy video chunks are subtitled concurrently with Gemini Flash.
-2. A boundary-limited audio pass listens to the complete extracted audio and repairs faults near chunk boundaries.
-3. A grounded text pass improves the complete subtitle script with identity research.
+It uses an audio-first pipeline with four Gemini passes:
+1. A preflight pass researches participant identities and topic terminology before chunk generation.
+2. Stream-copy video chunks are subtitled concurrently with Gemini Flash.
+3. A boundary-limited audio pass listens to the complete extracted audio and repairs faults near chunk boundaries.
+4. A grounded text pass improves the complete subtitle script with the preflight research context.
 
 The design targets accurate speech timing, faithful translation, and useful on-screen text.
 It favors throughput and resumability.
@@ -18,6 +19,19 @@ Pydantic validates every structured model response before it reaches the output 
 
 ## System model
 
+The pipeline runs four passes over one work directory:
+
+```mermaid
+flowchart TD
+    A[Source video and context URLs] --> B[Pass 0: Preflight research and video analysis]
+    B --> C[preflight_context.json]
+    C --> D[Pass 1: Parallel chunk generation]
+    D --> E[Pass 2: Boundary audio refinement]
+    C --> F[Pass 3: Global text refinement]
+    E --> F
+    F --> G[Final subtitles]
+```
+
 The normal generation path runs these stages:
 
 ```mermaid
@@ -25,19 +39,20 @@ flowchart TD
     A[Source video] --> B[Probe primary video stream]
     B --> C[Build manifest and lock work directory]
     C --> D[Probe first audio stream and extract mono Opus when enabled]
-    D --> E[Stream-copy contiguous video chunks]
-    E --> F[Generate chunk subtitles concurrently]
-    F --> G[Stitch at actual segment offsets]
-    G --> H[Merge exact pure-editorial boundary fragments]
-    H --> I{Audio refinement enabled?}
-    I -->|Yes| J[Boundary-limited audio refinement]
-    I -->|No| K[Use stitched VTT]
-    J --> L{Text refinement enabled?}
-    K --> L
-    L -->|Yes| M[Grounded text refinement]
-    L -->|No| N[Publish selected artifact atomically]
-    M --> N
-    N --> O[Clean completed work files]
+    D --> E[Run preflight research and store preflight_context.json]
+    E --> F[Stream-copy contiguous video chunks]
+    F --> G[Generate chunk subtitles concurrently]
+    G --> H[Stitch at actual segment offsets]
+    H --> I[Merge exact pure-editorial boundary fragments]
+    I --> J{Audio refinement enabled?}
+    J -->|Yes| K[Boundary-limited audio refinement]
+    J -->|No| L[Use stitched VTT]
+    K --> M{Text refinement enabled?}
+    L --> M
+    M -->|Yes| N[Grounded text refinement with the preflight context]
+    M -->|No| O[Publish selected artifact atomically]
+    N --> O
+    O --> P[Clean completed work files]
 ```
 
 The command holds one process lock for the complete work-directory lifecycle.
@@ -53,7 +68,7 @@ Every tracked file in this repository has a defined responsibility.
 | `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, speaker label casing canonicalization, sparse audio-patch filtering, reconstruction, and validation, and pure-editorial boundary merging. |
 | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
 | `modules/media.py` | FFmpeg and FFprobe operations for probing, complete audio extraction, and stream-copy splitting. |
-| `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, boundary audio refinement, and global text refinement. |
+| `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, preflight research, boundary audio refinement, and global text refinement. |
 | `modules/pipeline.py` | Generation configuration, locking, scheduling, stitching, and the run lifecycle. |
 | `scripts/benchmark.py` | Full-video matrix benchmark across generation, audio refinement, and text refinement models. |
 | `scripts/subtitle.sh` | Wrapper script that runs generation with terminal context URL prompting. |
@@ -192,6 +207,14 @@ Each row contains `chunk_NNN.<ext>,start,end`.
 When any nonblank row is malformed or has invalid timestamps, the split is regenerated.
 A reusable index must match stored `chunk_NNN` files exactly.
 
+### Chunk generation context
+
+Each chunk prompt carries optional context blocks before the timing rules.
+`SOURCE CONTEXT` holds the derived source title with candidate-identity warnings.
+`CANDIDATE SPEAKER IDENTITIES` holds the preflight grounded names as a candidate roster.
+The roster permits a candidate's canonical English name only when direct in-clip evidence, such as a visible name banner, lower-third, title card, or spoken introduction, establishes attribution in the clip.
+It never assigns identities from appearance alone, and it leaves uncertain dialogue unlabeled.
+
 ### Chunk generation retry
 
 HTTP transport errors, 429 rate limits, and 5xx server errors are handled natively by the Gemini SDK.
@@ -257,6 +280,26 @@ class RefinementResponse(BaseModel):
     changes: list[RefinedCaption]
 ```
 
+### Preflight context: `PreflightContext` (`preflight-v1`)
+
+```python
+class PreflightContext(BaseModel):
+    contract_version: Literal["preflight-v1"] = Field(
+        default="preflight-v1", alias="contractVersion"
+    )
+    identity_context: str = ""
+    terminology_context: str = ""
+    youtube_context: str | None = None
+    grounded_names: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+```
+
+Wire fields use camelCase (`contractVersion`).
+Host-side validation keeps `extra="forbid"`.
+The cache file stores field names through `model_dump(mode="json")`.
+`populate_by_name=True` accepts field names and aliases on load.
+
 ## Timestamp rules
 
 Accepted input shapes: `SS`, `MM:SS`, or `HH:MM:SS`.
@@ -315,7 +358,7 @@ Canonical spelling selection per group:
 
 Publication boundary:
 
-- `gemini.global_refine_subtitles()` extracts grounded names from the identity research section, merges them with its `grounded_names` argument, and canonicalizes before it saves the refined VTT atomically.
+- `gemini.global_refine_subtitles()` merges its `grounded_names` argument with the preflight context names and canonicalizes before it saves the refined VTT atomically.
 - `pipeline.run_generation()` canonicalizes without grounded names when it publishes the final artifact directly without text refinement.
 
 ## Stitching and pure-editorial boundary merging
@@ -371,31 +414,53 @@ Request configuration:
 
 Refines the full script using grounded identity and terminology research.
 
-1. **Grounded web research pass:**
+### Preflight context (Pass 0)
+
+`gemini.run_preflight_context()` produces one `PreflightContext` before chunk generation.
+`pipeline.run_generation()` runs it after audio extraction and before splitting.
+It stores the result as `preflight_context.json` in the work directory.
+A valid cached file is reused on retry, so no research request repeats.
+The cache carries no identity fields, so a retry reuses it as stored.
+A successful run removes the file during work-directory cleanup.
+The pass uses the refinement model (`config.refine_model` or `config.model`) with thinking level `medium`.
+
+1. **Grounded web research request:**
    - Tool: Google Search + optional URL Context.
    - Output: Plain text with two sections:
      - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
      - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
    - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
-   - Grounding verification: Research stream must contain non-empty search queries, grounded sources, and successful URL retrieval.
-2. **Direct YouTube video pass:**
+   - Grounding verification: The research stream must contain search queries or grounded sources, and every URL Context input must be retrieved successfully.
+2. **Direct YouTube video request:**
    - Attached video Parts for public YouTube URLs.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
-3. **Structured refinement pass:**
-   - Model: `gemini-3.1-pro-preview` (thinking level `medium`, temp `0.0`).
-   - Input: Full script with separate `GROUNDED IDENTITY CONTEXT` and `GROUNDED TERMINOLOGY CONTEXT` blocks.
+3. **Context assembly:**
    - Section splitting: The host splits the research text into identity and terminology sections at the section headers. Header matching is case-insensitive with an optional trailing colon, and text before the first header stays in the identity section, so research output without headers keeps working as identity context.
-   - Tasks:
-     1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
-     2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
-     3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
-     4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
-     5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
-     6. Forbids retiming, merging, splitting, adding, or deleting cues.
-   - Output: `RefinementResponse` applied atomically to target.
-4. **Speaker label casing canonicalization:**
-   - `core.canonicalize_speaker_casing(vtt, grounded_names)` runs deterministically after the model changes and before the atomic save.
-   - `gemini.global_refine_subtitles()` extracts the canonical name entries (leading `Name:` lines) from the identity research section and merges them with its `grounded_names` argument; caller-supplied names win case-insensitive collisions.
+   - `grounded_names` collects the canonical name entries (leading `Name:` lines) from the identity section.
+   - `youtube_context` keeps the direct analysis text when the response is non-blank.
+
+### Structured refinement (Pass 3)
+
+1. Model: `gemini-3.1-pro-preview` (thinking level `medium`, temp `0.0`).
+2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
+3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
+4. Direct runs without a preflight context execute Pass 0 first.
+   `--refine-only` works this way.
+5. Tasks:
+   1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
+   2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
+   3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
+   4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
+   5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
+   6. Forbids retiming, merging, splitting, adding, or deleting cues.
+6. Output: `RefinementResponse` applied atomically to target.
+
+### Speaker label casing canonicalization
+
+1. `core.canonicalize_speaker_casing(vtt, effective_grounded_names)` runs deterministically after the model changes and before the atomic save.
+2. `gemini.global_refine_subtitles()` merges its `grounded_names` argument with the preflight context names.
+   Exact duplicates are removed while the first occurrence stays.
+   Preflight names win case-insensitive collisions because they come later in the merged list.
 
 ## Work state, locking, and recovery
 
@@ -417,6 +482,7 @@ Locking:
 
 Atomic writes:
 - Chunk JSON uses `.tmp` sibling + `os.replace()`.
+- Preflight context uses `io.atomic_write_json()` with a `.tmp` sibling + `os.replace()`.
 - Extracted audio uses `.tmp` sibling + `os.replace()`.
 - VTT publication uses `io.atomic_save_vtt()` (`.{name}.<random>.tmp.vtt` + `os.replace()`).
 
@@ -424,6 +490,7 @@ Recovery on retry:
 - Valid `segments.csv` and chunk files skip splitting.
 - Valid `subtitle_chunk_NNN.json` files skip chunk API calls.
 - Valid `extracted_audio.ogg` (mono Opus 48kHz within duration tolerance) skips extraction.
+- Valid `preflight_context.json` skips preflight research.
 - Valid `audio_refinement.json` matching cache identity skips audio refinement.
 - Successful runs clean intermediate work files while holding lock.
 

@@ -132,6 +132,7 @@ def process_chunks(
     chunk_mime,
     thinking_level,
     source_title=None,
+    candidate_names=None,
 ):
     """Process video chunks concurrently with a thread pool and collect failures."""
     print(f"Processing {len(chunks)} chunks using {api_workers} workers...")
@@ -147,6 +148,7 @@ def process_chunks(
                 chunk_mime,
                 thinking_level,
                 source_title,
+                candidate_names,
             ): chunk["name"]
             for chunk in chunks
         }
@@ -275,6 +277,19 @@ def run_generation(config: GenerationConfig) -> None:
                 media.extract_complete_audio(config.video_path, chunk_dir)
             )
 
+        # Pass 0: Preflight identity and research context
+        preflight_context = gemini.load_cached_preflight_context(chunk_dir)
+        if preflight_context is None:
+            preflight_context = gemini.run_preflight_context(
+                api_key=config.api_key,
+                base_url=config.base_url,
+                model_name=config.refine_model or config.model,
+                thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
+                source_title=source_title,
+                context_urls=context_urls,
+            )
+            gemini.store_preflight_context(chunk_dir, preflight_context)
+
         # 1. Split video.
         media.split_video(str(config.video_path), chunk_dir, config.chunk_dur, manifest)
 
@@ -293,6 +308,7 @@ def run_generation(config: GenerationConfig) -> None:
             manifest["chunk_mime"],
             config.chunk_thinking_level,
             source_title,
+            candidate_names=preflight_context.grounded_names,
         )
         if failed:
             raise RuntimeError(
@@ -342,6 +358,7 @@ def run_generation(config: GenerationConfig) -> None:
                 thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
                 source_title=source_title,
                 context_urls=context_urls,
+                preflight_context=preflight_context,
             )
             os.replace(staging_vtt, config.output_path)
         else:

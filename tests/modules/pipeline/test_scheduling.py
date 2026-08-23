@@ -72,3 +72,31 @@ def test_stream_copy_chunks_are_forwarded_with_segment_metadata(tmp_path, monkey
         ("chunk_000.mp4", 0, 2, 2),
         ("chunk_001.mp4", 2, 4, 2),
     ]
+
+
+def test_source_title_and_candidate_names_reach_every_chunk_worker(
+    tmp_path, monkeypatch
+):
+    received = []
+
+    def process(_key, _base, _chunk, _chunk_dir, _model, _mime, _level, title, names):
+        received.append((title, names))
+        return True
+
+    monkeypatch.setattr(gemini, "process_chunk", process)
+
+    failed = pipeline.process_chunks(
+        "key",
+        None,
+        str(tmp_path),
+        CHUNKS,
+        2,
+        "model",
+        "video/mp4",
+        "high",
+        "Show Title",
+        ["Jane Doe"],
+    )
+
+    assert failed == []
+    assert received == [("Show Title", ["Jane Doe"])] * len(CHUNKS)

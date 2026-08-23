@@ -67,6 +67,18 @@ class AudioRefinementResponse(BaseModel):
     )
 
 
+class PreflightContext(BaseModel):
+    contract_version: Literal["preflight-v1"] = Field(
+        default="preflight-v1", alias="contractVersion"
+    )
+    identity_context: str = ""
+    terminology_context: str = ""
+    youtube_context: str | None = None
+    grounded_names: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
 def derive_source_title(path):
     """Return a human-readable source title from a video or subtitle filename."""
     name = Path(path).name

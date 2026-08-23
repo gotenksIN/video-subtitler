@@ -23,6 +23,7 @@ DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.7-flash"
 AUDIO_REFINE_THINKING_LEVEL = "high"
 AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
 AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
+PREFLIGHT_CONTEXT_FILENAME = "preflight_context.json"
 STREAM_REQUEST_ATTEMPTS = 3
 
 
@@ -77,7 +78,7 @@ def generate_content_config(thinking_level):
     return build_content_config(**kwargs)
 
 
-def build_generation_prompt(chunk_duration, source_title=None):
+def build_generation_prompt(chunk_duration, source_title=None, candidate_names=None):
     """Build the prompt for per-chunk video subtitle generation."""
     source_block = ""
     if source_title:
@@ -87,13 +88,25 @@ def build_generation_prompt(chunk_duration, source_title=None):
             "Names in the source title are candidate identities only. "
             "They do not prove which speaker said a specific line.\n\n"
         )
+    candidate_block = ""
+    if candidate_names:
+        names_list = "\n".join(f"- {name}" for name in candidate_names)
+        candidate_block = (
+            "CANDIDATE SPEAKER IDENTITIES\n\n"
+            f"{names_list}\n\n"
+            "Use a candidate's canonical English name only when direct in-clip evidence "
+            "(such as a visible name banner, lower-third, title card, or spoken "
+            "introduction) establishes attribution in this clip. Never assign candidate "
+            "identities from appearance alone. Leave dialogue unlabeled when attribution "
+            "is uncertain.\n\n"
+        )
     return f"""You are an expert subtitle generator and translator.
 
 Watch this {chunk_duration:.3f}-second video clip.
 
 Generate accurate, natural English subtitles for dialogue and meaningful on-screen text throughout the entire clip.
 
-{source_block}TIMING
+{source_block}{candidate_block}TIMING
 
 1. Create timestamps relative to the beginning of the clip, ranging from 00:00:00.000 to {core.format_time(chunk_duration)}.
 2. For spoken dialogue, start at the exact first audible syllable and end at the exact end of the last audible syllable.
@@ -170,6 +183,7 @@ def process_chunk(
     chunk_mime,
     thinking_level,
     source_title=None,
+    candidate_names=None,
 ):
     """Process one video chunk and publish validated caption JSON."""
     chunk_idx = chunk["idx"]
@@ -183,7 +197,7 @@ def process_chunk(
         print(f"Skipping {chunk_name} - already processed.")
         return True
 
-    prompt = build_generation_prompt(chunk_duration, source_title)
+    prompt = build_generation_prompt(chunk_duration, source_title, candidate_names)
 
     try:
         with open(chunk_path, "rb") as f:
@@ -551,11 +565,9 @@ def retrieval_status_value(status):
     return getattr(status, "value", status)
 
 
-def verify_refinement_grounding(
-    search_queries, grounded_sources, retrieved_urls, context_urls
-):
-    """Fail refinement before publication when grounding requirements are unmet."""
-    if not search_queries and not grounded_sources:
+def verify_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls):
+    """Fail research before use when grounding requirements are unmet."""
+    if not queries and not sources:
         raise RuntimeError(
             "The identity research response has no Google Search grounding. "
             "Failing without publishing output."
@@ -564,7 +576,7 @@ def verify_refinement_grounding(
     retrieved_by_identity = {
         core.url_identity(url): status for url, status in retrieved_urls.items()
     }
-    for url in context_urls:
+    for url in ordinary_urls:
         status = retrieved_by_identity.get(core.url_identity(url))
         if status is None:
             raise RuntimeError(
@@ -582,30 +594,125 @@ def verify_refinement_grounding(
             )
 
 
-def print_refinement_grounding(
-    search_queries, grounded_sources, retrieved_urls, context_urls
-):
+def print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=()):
     """Print summary of search queries, grounded sources, and URL retrieval."""
-    unique_queries = list(dict.fromkeys(search_queries))
+    unique_queries = list(dict.fromkeys(queries))
     if unique_queries:
         print("Search queries:")
         for query in unique_queries:
             print(f"  - {query}")
-    unique_sources = list(dict.fromkeys(grounded_sources))
+    unique_sources = list(dict.fromkeys(sources))
     if unique_sources:
         print("Grounded sources:")
         for title, uri in unique_sources:
             print(f"  - {title or 'Untitled'}: {uri}")
-    if context_urls:
+    if ordinary_urls:
         print("Context URL retrieval:")
         retrieved_by_identity = {
             core.url_identity(url): (url, status)
             for url, status in retrieved_urls.items()
         }
-        for url in context_urls:
+        for url in ordinary_urls:
             entry = retrieved_by_identity.get(core.url_identity(url))
             status = retrieval_status_value(entry[1]) if entry else "NOT RETRIEVED"
             print(f"  - {url}: {status}")
+
+
+def run_preflight_context(
+    api_key,
+    base_url,
+    model_name,
+    thinking_level,
+    source_title=None,
+    context_urls=None,
+) -> core.PreflightContext:
+    """Run grounded web research and direct YouTube analysis for preflight context."""
+    validated_urls = core.validate_context_urls(context_urls)
+    youtube_urls, ordinary_urls = core.classify_context_urls(validated_urls)
+
+    with create_client(api_key, base_url) as client:
+        # Step 1: Grounded web research
+        research_prompt = build_identity_research_prompt(
+            source_title=source_title,
+            context_urls=ordinary_urls,
+            youtube_urls=youtube_urls,
+        )
+        research_config = build_research_config(
+            thinking_level=thinking_level,
+            ordinary_urls=ordinary_urls,
+        )
+        research_stream = client.models.generate_content_stream(
+            model=model_name,
+            contents=research_prompt,
+            config=research_config,
+        )
+        research_text, queries, sources, retrieved_urls = collect_stream_metadata(
+            research_stream
+        )
+        verify_refinement_grounding(
+            queries=queries,
+            sources=sources,
+            retrieved_urls=retrieved_urls,
+            ordinary_urls=ordinary_urls,
+        )
+        print_refinement_grounding(
+            queries=queries,
+            sources=sources,
+            retrieved_urls=retrieved_urls,
+        )
+
+        identity_context, terminology_context = split_research_sections(research_text)
+        grounded_names = extract_grounded_names(identity_context)
+
+        # Step 2: Direct YouTube analysis
+        youtube_context = None
+        if youtube_urls:
+            print(
+                "Analyzing YouTube video directly for participants and "
+                f"proper-name observations ({len(youtube_urls)} URL(s))..."
+            )
+            youtube_prompt = build_youtube_analysis_prompt(source_title)
+            youtube_contents = [
+                types.Part.from_uri(file_uri=url, mime_type="video/*")
+                for url in youtube_urls
+            ] + [youtube_prompt]
+            youtube_config = build_youtube_analysis_config(thinking_level)
+            youtube_stream = client.models.generate_content_stream(
+                model=model_name,
+                contents=youtube_contents,
+                config=youtube_config,
+            )
+            youtube_text, _, _, _ = collect_stream_metadata(youtube_stream)
+            if youtube_text.strip():
+                youtube_context = youtube_text.strip()
+
+    return core.PreflightContext(
+        identity_context=identity_context,
+        terminology_context=terminology_context,
+        youtube_context=youtube_context,
+        grounded_names=grounded_names,
+    )
+
+
+def load_cached_preflight_context(chunk_dir) -> core.PreflightContext | None:
+    """Load a cached preflight context, or discard an invalid cache."""
+    path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return core.PreflightContext.model_validate(data)
+    except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
+        print(f"Ignoring invalid cached preflight context {path}: {e}")
+        path.unlink(missing_ok=True)
+        return None
+
+
+def store_preflight_context(chunk_dir, preflight: core.PreflightContext):
+    """Publish one preflight context atomically into the work directory."""
+    path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
+    io.atomic_write_json(path, preflight.model_dump(mode="json"))
 
 
 def global_refine_subtitles(
@@ -618,10 +725,10 @@ def global_refine_subtitles(
     source_title=None,
     context_urls=None,
     grounded_names=None,
+    preflight_context: core.PreflightContext | None = None,
 ):
     """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
-    youtube_urls, ordinary_urls = core.classify_context_urls(context_urls)
     print(f"Loading {input_vtt} for global refinement...")
     vtt = webvtt.read(input_vtt)
 
@@ -631,69 +738,21 @@ def global_refine_subtitles(
 
     full_script = "\n".join(script_lines)
 
-    # 1. Grounded web research pass. Plain text with Google Search.
-    # No video Parts: YouTube content is analyzed in a separate request.
-    research_prompt = build_identity_research_prompt(
-        source_title, ordinary_urls, youtube_urls
-    )
-    with create_client(api_key, base_url) as client:
-        print(
-            "Researching participants and terminology with Google Search "
-            "(this may take a minute)..."
+    # 1. Preflight context. Direct runs without one execute Pass 0 here;
+    # pipeline runs reuse the cached Pass 0 result.
+    if preflight_context is None:
+        preflight_context = run_preflight_context(
+            api_key, base_url, model_name, thinking_level, source_title, context_urls
         )
-        research_stream = client.models.generate_content_stream(
-            model=model_name,
-            contents=research_prompt,
-            config=build_research_config(thinking_level, ordinary_urls),
-        )
-        (
-            research_text,
-            search_queries,
-            grounded_sources,
-            retrieved_urls,
-        ) = collect_stream_metadata(research_stream)
 
-    verify_refinement_grounding(
-        search_queries, grounded_sources, retrieved_urls, ordinary_urls
-    )
-    print_refinement_grounding(
-        search_queries, grounded_sources, retrieved_urls, ordinary_urls
-    )
-
-    # 2. Direct YouTube identity analysis. Only when YouTube context URLs
-    # exist. Plain text with video Parts and no tools; request completion is
-    # the success signal for public video retrieval.
-    youtube_analysis_text = ""
-    if youtube_urls:
-        print("YouTube video context (direct video input):")
-        for url in youtube_urls:
-            print(f"  - {url}")
-        with create_client(api_key, base_url) as client:
-            print(
-                "Analyzing YouTube videos for speaker identities "
-                "(this may take a minute)..."
-            )
-            youtube_contents = [
-                types.Part.from_uri(file_uri=url, mime_type="video/*")
-                for url in youtube_urls
-            ]
-            youtube_contents.append(build_youtube_analysis_prompt(source_title))
-            youtube_stream = client.models.generate_content_stream(
-                model=model_name,
-                contents=youtube_contents,
-                config=build_youtube_analysis_config(thinking_level),
-            )
-            youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
-
-    # 3. Structured refinement pass. No tools; the grounded identity and
+    # 2. Structured refinement pass. No tools; the grounded identity and
     # terminology sections supply context.
-    identity_section, terminology_section = split_research_sections(research_text)
     prompt = build_refinement_prompt(
         full_script,
         source_title,
-        identity_context=identity_section,
-        terminology_context=terminology_section,
-        youtube_context=youtube_analysis_text,
+        identity_context=preflight_context.identity_context,
+        terminology_context=preflight_context.terminology_context,
+        youtube_context=preflight_context.youtube_context,
     )
 
     with create_client(api_key, base_url) as client:
@@ -725,12 +784,12 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
-    # Caller-supplied grounded names win over researched names on a
-    # case-insensitive collision inside canonicalize_speaker_casing.
-    researched_names = extract_grounded_names(identity_section)
-    core.canonicalize_speaker_casing(
-        vtt, grounded_names=[*researched_names, *(grounded_names or ())]
+    # Preflight-grounded names win case-insensitive collisions with caller
+    # names inside canonicalize_speaker_casing.
+    effective_grounded_names = list(
+        dict.fromkeys([*(grounded_names or ()), *preflight_context.grounded_names])
     )
+    core.canonicalize_speaker_casing(vtt, effective_grounded_names)
     io.atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
 

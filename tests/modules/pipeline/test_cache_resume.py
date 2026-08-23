@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import webvtt
 
-from modules import gemini, media, pipeline
+from modules import core, gemini, media, pipeline
 from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
@@ -36,6 +36,11 @@ def leave_resumable_failure(config, monkeypatch):
     tools = FakeMediaTools()
     monkeypatch.setattr(media.subprocess, "run", tools.run)
     monkeypatch.setattr(gemini, "process_chunk", lambda *_args: False)
+    monkeypatch.setattr(
+        gemini,
+        "run_preflight_context",
+        lambda *_args, **_kwargs: core.PreflightContext(),
+    )
 
     with pytest.raises(RuntimeError, match="Failed to process"):
         pipeline.run_generation(config)
@@ -108,6 +113,11 @@ def test_retry_after_audio_stage_failure_reuses_split_chunks_and_audio(
     config = make_config(tmp_path, monkeypatch, audio_refine=True, refine_text=False)
     tools = FakeMediaTools()
     monkeypatch.setattr(media.subprocess, "run", tools.run)
+    monkeypatch.setattr(
+        gemini,
+        "run_preflight_context",
+        lambda *_args, **_kwargs: core.PreflightContext(),
+    )
 
     def process(_key, _base, chunk, chunk_dir, *_args):
         write_chunk_subtitles(
@@ -139,3 +149,42 @@ def test_retry_after_audio_stage_failure_reuses_split_chunks_and_audio(
     assert len(tools.audio_extraction_calls()) == 1
     result = webvtt.read(config.output_path)
     assert [caption.text for caption in result] == ["Audio: Cue 0", "Audio: Cue 1"]
+
+
+def test_retry_reuses_cached_preflight_context_without_new_research(
+    tmp_path, monkeypatch
+):
+    config = make_config(tmp_path, monkeypatch, audio_refine=False, refine_text=False)
+    tools = FakeMediaTools()
+    monkeypatch.setattr(media.subprocess, "run", tools.run)
+    research_runs = []
+
+    def preflight(*_args, **_kwargs):
+        research_runs.append(1)
+        return core.PreflightContext(identity_context="Jane Doe: Host.")
+
+    monkeypatch.setattr(gemini, "run_preflight_context", preflight)
+    monkeypatch.setattr(gemini, "process_chunk", lambda *_args: False)
+
+    with pytest.raises(RuntimeError, match="Failed to process"):
+        pipeline.run_generation(config)
+
+    work_dir = next(iter(Path(pipeline.CHUNK_ROOT).iterdir()))
+    assert (work_dir / gemini.PREFLIGHT_CONTEXT_FILENAME).exists()
+
+    def process(_key, _base, chunk, chunk_dir, *_args):
+        write_chunk_subtitles(
+            chunk_dir,
+            chunk["idx"],
+            [{"id": 0, "start": "0.5", "end": "1.5", "text": f"Cue {chunk['idx']}"}],
+        )
+        return True
+
+    monkeypatch.setattr(gemini, "process_chunk", process)
+    pipeline.run_generation(config)
+
+    assert research_runs == [1]
+    assert [caption.text for caption in webvtt.read(config.output_path)] == [
+        "Cue 0",
+        "Cue 1",
+    ]

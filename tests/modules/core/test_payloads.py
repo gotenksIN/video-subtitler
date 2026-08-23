@@ -97,6 +97,46 @@ def test_refinement_response_accepts_documented_change_shape():
     assert response.changes[0].text == "Fixed"
 
 
+# --- Preflight Context Model ---
+
+
+def test_preflight_context_accepts_wire_alias_and_documented_defaults():
+    context = core.PreflightContext.model_validate({"contractVersion": "preflight-v1"})
+
+    assert context.contract_version == "preflight-v1"
+    assert context.identity_context == ""
+    assert context.terminology_context == ""
+    assert context.youtube_context is None
+    assert context.grounded_names == []
+
+
+def test_preflight_context_round_trips_through_cache_serialization():
+    context = core.PreflightContext(
+        identity_context="Jane Doe: Host.",
+        terminology_context="Season Premiere: program title.",
+        youtube_context="Direct video identities.",
+        grounded_names=["Jane Doe", "John Q"],
+    )
+
+    restored = core.PreflightContext.model_validate(context.model_dump(mode="json"))
+
+    assert restored == context
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"contractVersion": "preflight-v2"},
+        {"contractVersion": "preflight-v1", "identityContext": "renamed field"},
+        {"contractVersion": "preflight-v1", "grounded_names": "not-a-list"},
+    ],
+    ids=["wrong contract version", "extra field", "wrong names type"],
+)
+def test_preflight_context_rejects_malformed_payloads(payload):
+    with pytest.raises(ValidationError):
+        core.PreflightContext.model_validate(payload)
+
+
 # --- Chunk Caption Validation ---
 
 
