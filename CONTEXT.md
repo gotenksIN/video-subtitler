@@ -123,7 +123,7 @@ CLI arguments take precedence over environment variables.
 The chunk thinking level accepts `minimal`, `low`, `medium`, and `high`.
 It defaults to `high`.
 `minimal` is valid only when the model name contains `flash` (case-insensitive).
-The text refinement pass always uses `medium`.
+The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
 Every request configured with a thinking level sets `include_thoughts=True`.
 Thought tokens stream in real time across the transport boundary.
@@ -422,7 +422,7 @@ It stores the result as `preflight_context.json` in the work directory.
 A valid cached file is reused on retry, so no research request repeats.
 The cache carries no identity fields, so a retry reuses it as stored.
 A successful run removes the file during work-directory cleanup.
-The pass uses the refinement model (`config.refine_model` or `config.model`) with thinking level `medium`.
+The pass uses the refinement model (`config.refine_model` or `config.model`) with thinking level `high`.
 
 1. **Grounded web research request:**
    - Tool: Google Search + optional URL Context.
@@ -441,7 +441,7 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 
 ### Structured refinement (Pass 3)
 
-1. Model: `gemini-3.1-pro-preview` (thinking level `medium`, temp `0.0`).
+1. Model: `gemini-3.1-pro-preview` (thinking level `high`, temp `0.0`).
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.

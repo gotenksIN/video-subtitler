@@ -178,7 +178,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
   Supported levels are `minimal`, `low`, `medium`, and `high`.
   `minimal` requires a Flash model.
-  The global text refinement pass always uses `medium`.
+  The global text refinement pass always uses `high`.
   The boundary audio refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
