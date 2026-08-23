@@ -137,7 +137,7 @@ Text refinement has up to three Gemini requests:
    Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
 2. Direct YouTube analysis second, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
    It returns participant identities, official names and roles, and timestamped speaker-identification observations.
-   Transient Gemini server errors (500, 502, 503, and 504) retry automatically.
+   Transient Gemini transport errors and rate limits retry automatically through SDK HTTP retry options.
 3. Structured refinement last: the streamed JSON request with the `RefinementResponse` schema.
    It receives the grounded research text and the YouTube analysis text as identity context and does not use tools.
 

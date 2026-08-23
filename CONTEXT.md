@@ -189,17 +189,16 @@ A reusable index must match stored `chunk_NNN` files exactly.
 
 ### Chunk generation retry
 
-Each chunk worker makes up to 3 attempts per chunk: one initial attempt plus up to 2 retries.
-A retry happens only after a transient failure:
-- Response parsing or caption validation fails, for example malformed JSON, a schema violation, inverted timestamps, or a collapsed interval.
-- The Gemini SDK raises `ServerError` with code 500, 502, 503, or 504.
-
-A retry waits 1 second after the first attempt and 2 seconds after the second.
+HTTP transport errors, 429 rate limits, and 5xx server errors are handled natively by the Gemini SDK.
+Every client sets `http_options.retry_options` to `types.HttpRetryOptions()`, so the SDK makes up to 5 attempts with exponential backoff and jitter.
+Each chunk worker makes up to 3 attempts per chunk to recover from transient host-side response validation failures.
+Examples are malformed JSON, a schema violation, inverted timestamps, and a collapsed interval.
+A host validation retry waits 1 second after the first attempt and 2 seconds after the second.
 A successful attempt publishes the chunk JSON atomically.
 Permanent failures do not retry.
-Examples are 401 and 403 responses, a missing chunk file, and unexpected exceptions.
-The chunk fails immediately.
-When every attempt fails, the worker logs the final error and publishes no JSON.
+Examples are 401 and 403 responses, a missing chunk file, and exhausted SDK retries.
+The chunk fails immediately without publishing chunk JSON.
+When every host attempt fails, the worker logs the final error and publishes no JSON.
 The run stays resumable because valid published chunks are skipped on the next run.
 
 ## Structured data schemas
@@ -375,7 +374,7 @@ Refines the full script using grounded identity and terminology research.
    - Grounding verification: Research stream must contain non-empty search queries, grounded sources, and successful URL retrieval.
 2. **Direct YouTube video pass:**
    - Attached video Parts for public YouTube URLs.
-   - Retries transient 500, 502, 503, and 504 server errors up to 3 times with exponential backoff.
+   - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
 3. **Structured refinement pass:**
    - Model: `gemini-3.1-pro-preview` (thinking level `medium`, temp `0.0`).
    - Input: Full script with separate `GROUNDED IDENTITY CONTEXT` and `GROUNDED TERMINOLOGY CONTEXT` blocks.

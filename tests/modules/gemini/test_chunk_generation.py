@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from google.genai import errors, types
 
 from modules import core, gemini
@@ -129,7 +130,8 @@ def test_transient_chunk_failure_retries_and_publishes_valid_result(
     )
     client = ScriptedGeminiClient([invalid_timing, valid_captions_call("Hi")])
     use_client(monkeypatch, client)
-    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
+    sleeps = []
+    monkeypatch.setattr(gemini.time, "sleep", sleeps.append)
 
     assert gemini.process_chunk(
         "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
@@ -147,6 +149,7 @@ def test_transient_chunk_failure_retries_and_publishes_valid_result(
         }
     ]
     assert len(client.requests) == 2
+    assert sleeps == [1]
 
 
 def test_repeated_transient_chunk_failures_exhaust_retries_without_publishing(
@@ -158,7 +161,8 @@ def test_repeated_transient_chunk_failures_exhaust_retries_without_publishing(
     )
     client = ScriptedGeminiClient([invalid_timing] * 3)
     use_client(monkeypatch, client)
-    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
+    sleeps = []
+    monkeypatch.setattr(gemini.time, "sleep", sleeps.append)
 
     assert (
         gemini.process_chunk(
@@ -169,30 +173,43 @@ def test_repeated_transient_chunk_failures_exhaust_retries_without_publishing(
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert len(client.requests) == 3
+    assert sleeps == [1, 2]
 
 
-def test_permanent_chunk_failure_fails_immediately_without_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "error",
+    [
+        errors.ClientError(
+            403,
+            {
+                "error": {
+                    "code": 403,
+                    "message": "Permission denied.",
+                    "status": "PERMISSION_DENIED",
+                }
+            },
+        ),
+        errors.ServerError(
+            503,
+            {
+                "error": {
+                    "code": 503,
+                    "message": "Deadline expired before operation could complete.",
+                    "status": "UNAVAILABLE",
+                }
+            },
+        ),
+    ],
+    ids=["client-error-403", "server-error-503"],
+)
+def test_permanent_chunk_failure_fails_immediately_without_retry(
+    tmp_path, monkeypatch, error
+):
     (tmp_path / "chunk_000.mp4").write_bytes(b"video")
-    client = ScriptedGeminiClient(
-        [
-            chunk_call(
-                [],
-                error=errors.ClientError(
-                    403,
-                    {
-                        "error": {
-                            "code": 403,
-                            "message": "Permission denied.",
-                            "status": "PERMISSION_DENIED",
-                        }
-                    },
-                ),
-            )
-        ]
-        * 3
-    )
+    client = ScriptedGeminiClient([chunk_call([], error=error)] * 3)
     use_client(monkeypatch, client)
-    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
+    sleeps = []
+    monkeypatch.setattr(gemini.time, "sleep", sleeps.append)
 
     assert (
         gemini.process_chunk(
@@ -203,3 +220,4 @@ def test_permanent_chunk_failure_fails_immediately_without_retry(tmp_path, monke
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert len(client.requests) == 1
+    assert sleeps == []

@@ -293,11 +293,14 @@ def test_youtube_analysis_sdk_failure_preserves_previous_output(tmp_path, monkey
     assert read_captions(source)[0][2] == "First"
 
 
-def test_youtube_analysis_retries_transient_server_failure(tmp_path, monkeypatch):
+def test_youtube_analysis_server_error_propagates_without_host_retry(
+    tmp_path, monkeypatch
+):
     source = write_vtt(
         tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", "First")]
     )
     output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
     client = ScriptedGeminiClient(
         [
             research_call(),
@@ -313,25 +316,25 @@ def test_youtube_analysis_retries_transient_server_failure(tmp_path, monkeypatch
                     },
                 )
             ),
-            youtube_call(pieces=("Direct video identities",)),
-            refinement_call(['{"changes": []}']),
+            refinement_call(['{"changes": [{"id": 0, "text": "Changed"}]}']),
         ]
     )
     use_client(monkeypatch, client)
-    monkeypatch.setattr(gemini.time, "sleep", lambda _seconds: None)
 
-    gemini.global_refine_subtitles(
-        source,
-        output,
-        "key",
-        None,
-        "refiner",
-        "high",
-        context_urls=["https://youtu.be/VIDEO_ID"],
-    )
+    with pytest.raises(errors.ServerError, match="503"):
+        gemini.global_refine_subtitles(
+            source,
+            output,
+            "key",
+            None,
+            "refiner",
+            "high",
+            context_urls=["https://youtu.be/VIDEO_ID"],
+        )
 
-    assert len(client.requests) == 4
-    assert read_captions(output)[0][2] == "First"
+    assert len(client.requests) == 2
+    assert output.read_text(encoding="utf-8") == "previous"
+    assert read_captions(source)[0][2] == "First"
 
 
 def test_research_sdk_failure_preserves_previous_output(tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import webvtt
 from google import genai
-from google.genai import errors, types
+from google.genai import types
 from pydantic import ValidationError
 
 from modules import core, io, media
@@ -23,7 +23,6 @@ DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.7-flash"
 AUDIO_REFINE_THINKING_LEVEL = "high"
 AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
 AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
-TRANSIENT_SERVER_CODES = {500, 502, 503, 504}
 STREAM_REQUEST_ATTEMPTS = 3
 
 
@@ -36,12 +35,14 @@ def validate_thinking_level_for_model(model_name, thinking_level):
 
 
 def create_client(api_key, base_url):
-    """Create a Gemini API client instance with configured credentials."""
+    """Create a Gemini API client instance with configured credentials and retries."""
     kwargs = {}
     if api_key:
         kwargs["api_key"] = api_key
+    http_options = {"retry_options": types.HttpRetryOptions()}
     if base_url:
-        kwargs["http_options"] = {"base_url": base_url}
+        http_options["base_url"] = base_url
+    kwargs["http_options"] = http_options
     return genai.Client(**kwargs)
 
 
@@ -187,52 +188,40 @@ def process_chunk(
         print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
         for attempt in range(STREAM_REQUEST_ATTEMPTS):
-            transient_error = None
+            with create_client(api_key, base_url) as client:
+                response_stream = client.models.generate_content_stream(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
+                        prompt,
+                    ],
+                    config=generate_content_config(thinking_level),
+                )
+                full_json_text = ""
+                for response_chunk in response_stream:
+                    if response_chunk.text:
+                        full_json_text += response_chunk.text
+
+            # Parsing and caption validation raise ValueError subclasses,
+            # so every ValueError here marks an unusable model response.
             try:
-                with create_client(api_key, base_url) as client:
-                    response_stream = client.models.generate_content_stream(
-                        model=model_name,
-                        contents=[
-                            types.Part.from_bytes(
-                                data=video_data, mime_type=chunk_mime
-                            ),
-                            prompt,
-                        ],
-                        config=generate_content_config(thinking_level),
-                    )
-                    full_json_text = ""
-                    for response_chunk in response_stream:
-                        if response_chunk.text:
-                            full_json_text += response_chunk.text
-            except errors.ServerError as error:
-                if error.code not in TRANSIENT_SERVER_CODES:
-                    raise
-                transient_error = error
-
-            if transient_error is None:
-                # Parsing and caption validation raise ValueError subclasses,
-                # so every ValueError here marks an unusable model response.
-                try:
-                    parsed_response = core.SubtitleResponse.model_validate_json(
-                        full_json_text
-                    )
-                    validated = core.validate_captions(
-                        parsed_response.captions, chunk_duration
-                    )
-                except ValueError as error:
-                    transient_error = error
-
-            if transient_error is not None:
+                parsed_response = core.SubtitleResponse.model_validate_json(
+                    full_json_text
+                )
+                validated = core.validate_captions(
+                    parsed_response.captions, chunk_duration
+                )
+            except ValueError as error:
                 if attempt == STREAM_REQUEST_ATTEMPTS - 1:
                     print(
                         f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
-                        f"{transient_error}"
+                        f"{error}"
                     )
                     return False
                 delay = 2**attempt
                 print(
                     f"[Worker-{chunk_idx:03d}] Warning: Attempt {attempt + 1} failed "
-                    f"for {chunk_name} ({transient_error}); retrying in {delay}s..."
+                    f"for {chunk_name} ({error}); retrying in {delay}s..."
                 )
                 time.sleep(delay)
                 continue
@@ -674,27 +663,12 @@ def global_refine_subtitles(
                 for url in youtube_urls
             ]
             youtube_contents.append(build_youtube_analysis_prompt(source_title))
-            for attempt in range(STREAM_REQUEST_ATTEMPTS):
-                try:
-                    youtube_stream = client.models.generate_content_stream(
-                        model=model_name,
-                        contents=youtube_contents,
-                        config=build_youtube_analysis_config(thinking_level),
-                    )
-                    youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
-                    break
-                except errors.ServerError as error:
-                    if (
-                        error.code not in TRANSIENT_SERVER_CODES
-                        or attempt == STREAM_REQUEST_ATTEMPTS - 1
-                    ):
-                        raise
-                    delay = 2**attempt
-                    print(
-                        f"YouTube analysis failed with Gemini {error.code}; "
-                        f"retrying in {delay} second(s)..."
-                    )
-                    time.sleep(delay)
+            youtube_stream = client.models.generate_content_stream(
+                model=model_name,
+                contents=youtube_contents,
+                config=build_youtube_analysis_config(thinking_level),
+            )
+            youtube_analysis_text, *_ = collect_stream_metadata(youtube_stream)
 
     # 3. Structured refinement pass. No tools; the grounded identity and
     # terminology sections supply context.

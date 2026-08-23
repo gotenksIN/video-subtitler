@@ -1,5 +1,7 @@
 """Gemini client boundary translation."""
 
+from google.genai import types
+
 from modules import gemini
 
 
@@ -16,11 +18,14 @@ def test_client_creation_forwards_key_and_proxy_base_url(monkeypatch):
 
     assert received == {
         "api_key": "secret-key",
-        "http_options": {"base_url": "https://proxy.example.com"},
+        "http_options": {
+            "base_url": "https://proxy.example.com",
+            "retry_options": types.HttpRetryOptions(),
+        },
     }
 
 
-def test_client_creation_omits_unset_options(monkeypatch):
+def test_client_creation_always_configures_retry_options(monkeypatch):
     received = {}
 
     class RecordingClient:
@@ -31,4 +36,4 @@ def test_client_creation_omits_unset_options(monkeypatch):
 
     gemini.create_client(None, None)
 
-    assert received == {}
+    assert received == {"http_options": {"retry_options": types.HttpRetryOptions()}}
