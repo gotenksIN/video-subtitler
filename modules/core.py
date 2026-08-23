@@ -581,12 +581,15 @@ def validate_audio_refinement_response(
                 f"Audio refinement cue {start} --> {end} rounds to a "
                 "non-positive interval"
             )
+        cue_text = "\n".join(
+            line.rstrip() for line in cue.text.strip().splitlines() if line.strip()
+        )
         response_cues.append(
             {
                 "source_ids": cue_ids,
                 "start": format_time(start_ms / 1000),
                 "end": end,
-                "text": cue.text,
+                "text": cue_text,
             }
         )
 

@@ -1057,9 +1057,20 @@ def revalidate_candidate(candidate_path, output_entries):
         (entry["start"], entry["end"], entry["text"]) for entry in output_entries
     ]
     if actual != expected:
+        diff_preview = ""
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            if a != e:
+                diff_preview = (
+                    f" (first mismatch at index {i}: actual={a!r}, expected={e!r})"
+                )
+                break
+        if not diff_preview and len(actual) != len(expected):
+            diff_preview = (
+                f" (length mismatch: actual={len(actual)}, expected={len(expected)})"
+            )
         raise ValueError(
             "Serialized candidate does not match the validated audio "
-            "refinement response"
+            f"refinement response{diff_preview}"
         )
 
 
