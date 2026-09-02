@@ -116,8 +116,8 @@ CLI arguments take precedence over environment variables.
 | --- | --- | --- | --- |
 | `GEMINI_API_KEY` | `--api-key` | None | Required Gemini credential. |
 | `GEMINI_API_BASE` | `--base-url` | SDK default | Optional Gemini-compatible proxy base URL. |
-| `GEMINI_MODEL` | `--model` | `gemini-3.7-flash` | Chunk video model. |
-| `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-3.7-flash` | Boundary audio refinement model. |
+| `GEMINI_MODEL` | `--model` | `gemini-3.8-flash` | Chunk video model. |
+| `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-3.8-flash` | Boundary audio refinement model. |
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-3.1-pro-preview` | Full-script refinement model. |
 
 The chunk thinking level accepts `minimal`, `low`, `medium`, and `high`.
@@ -378,7 +378,7 @@ Stitching offsets chunk-relative timestamps by each segment's actual `start` fro
 Repairs boundary faults by listening to `extracted_audio.ogg`.
 
 Request configuration:
-- `DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.7-flash"`
+- `DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.8-flash"`
 - Fixed thinking level: `HIGH`
 - Thought streaming enabled through `include_thoughts=True`
 - Max output tokens: `65536`

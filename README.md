@@ -67,8 +67,8 @@ flowchart TD
 
    # Optional: set a custom base URL or change default models
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3.7-flash
-   GEMINI_AUDIO_REFINE_MODEL=gemini-3.7-flash
+   GEMINI_MODEL=gemini-3.8-flash
+   GEMINI_AUDIO_REFINE_MODEL=gemini-3.8-flash
    GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
    ```
 
@@ -100,12 +100,12 @@ Noninteractive usage never prompts.
 
 Benchmark subtitle generation and refinement models across full video runs:
 ```bash
-./scripts/benchmark.py "your_video.webm" --case gemini-3.7-flash:gemini-3.7-flash:gemini-3.1-pro-preview
+./scripts/benchmark.py "your_video.webm" --case gemini-3.8-flash:gemini-3.8-flash:gemini-3.1-pro-preview
 ```
 
 Compare generated subtitles against a reference WebVTT file:
 ```bash
-./scripts/benchmark.py "your_video.webm" --model gemini-3.7-flash --reference-vtt "reference.vtt"
+./scripts/benchmark.py "your_video.webm" --model gemini-3.8-flash --reference-vtt "reference.vtt"
 ```
 
 The benchmark saves generated subtitles and `benchmark-results.json` to the output directory.
@@ -119,7 +119,7 @@ uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt
 
 ### Audio-first processing and refinement
 
-By default, the pipeline uses `gemini-3.7-flash` for chunk video generation and boundary audio refinement, and `gemini-3.1-pro-preview` for global text refinement.
+By default, the pipeline uses `gemini-3.8-flash` for chunk video generation and boundary audio refinement, and `gemini-3.1-pro-preview` for global text refinement.
 Chunk processing limits context to 60 seconds per stream-copy chunk.
 The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
 The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
@@ -182,8 +182,8 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
   The boundary audio refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
-- `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.7-flash`).
-- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-3.7-flash`).
+- `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.8-flash`).
+- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-3.8-flash`).
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
 - `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
   Repeat the option to supply several URLs.
