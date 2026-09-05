@@ -17,105 +17,104 @@ See `docs/agents/triage-labels.md`.
 Use the single-context domain layout.
 See `docs/agents/domain.md`.
 
-`CONTEXT.md` is the authoritative technical and architectural specification for this repository.
-It describes the pipeline, schemas, authority rules, caching, and domain model from first principles.
-Read `CONTEXT.md` before changing code, tests, scripts, or documentation.
-Always keep `CONTEXT.md` up-to-date whenever architecture, schemas, pipeline flow, or domain concepts change.
+`CONTEXT.md` is the authoritative technical and architectural specification.
+Read it before changing code, tests, scripts, or documentation.
+Update it when architecture, schemas, pipeline flow, or domain concepts change.
 
 ## Development rules
 
-Use ASCII for documentation, code, and comments unless existing content requires another character set.
+Use ASCII for documentation, code, and comments unless existing content or a Unicode behavior fixture requires another character set.
 Keep comments rare and explain non-obvious behavior.
-PEP 758 parenthesis-free `except X, Y:` syntax is valid in this repository.
-Use atomic output publication for final files.
-Do not use legacy `google-generativeai`.
+Write readable idiomatic Go with one statement per line, normal multiline control flow, descriptive names, explicit error handling, and manageable functions.
+Run `gofmt` as you work.
+Do not use compressed semicolon-delimited Go.
 
-When a Gemini request does not require automatic function calling, construct its config with `build_content_config()` so AFC is disabled explicitly instead of relying on SDK defaults.
-This requirement applies to structured, plain-text, tool-enabled, and tool-free requests that do not require automatic function calling.
-Test each Gemini request type at the adapter boundary.
-Assert behaviorally required request configuration, including disabled AFC, without binding coverage to config builder structure.
+Maintain the authoritative local development environment:
+- `GOROOT=/home/gotenks/Projects/go`
+- Go tools live at `/home/gotenks/Projects/go/bin` (`go`, `gofmt`).
+- `GOPATH=/home/gotenks/Projects/go-workspace`
+- `GOMODCACHE=/home/gotenks/Projects/go-workspace/pkg/mod`
+- Tool binaries installed under GOPATH live at `/home/gotenks/Projects/go-workspace/bin`.
+- Build cache lives at `~/.cache/go-build`.
+- LLVM tools live at `/home/gotenks/Projects/llvm/bin`.
+- C compiler is `CC=/home/gotenks/Projects/llvm/bin/clang` (Clang 23.1.0) with libc/GCC dev packages for Cgo linking.
+- Do not use `~/go` for cache or source lookups.
+- Propagate these paths to every child agent.
 
+Add `/home/gotenks/Projects/go/bin` and `/home/gotenks/Projects/llvm/bin` to `PATH`.
+The supported target is Linux amd64.
+Build final binaries with `CGO_ENABLED=0`.
+The optional `scripts/yt-dl.sh` helper may retain its `uvx` and `yt-dlp` prerequisite.
+Do not add Python or `uv` requirements to `bin/video-subtitler` or `scripts/subtitle.sh`.
+
+Use atomic publication for final files and caches.
 Do not add automatic cache revisions without approval.
+Keep cache reuse and invalidation correct for artifacts produced by the Go pipeline.
+Do not add compatibility code or parity tests for the retired Python implementation.
 Do not change timing semantics casually.
-Do not remove failed-run artifacts that support resume.
+Retain failed-run artifacts that support resume.
+Keep `.env` values and API keys out of output and tests.
 
-Keep the five modules in `modules/` on an acyclic dependency graph:
-- `modules/core.py` and `modules/io.py` are foundations with no project-internal imports.
-- `modules/media.py` depends only on `io`.
-- `modules/gemini.py` depends on `core`, `io`, and `media` (for `AUDIO_MIME_TYPE`).
-- `modules/pipeline.py` orchestrates media and Gemini and owns the run lifecycle.
-- `gemini_subs.py` stays CLI-only: dotenv loading, argument parsing, validation, and dispatch.
+The Go Gemini SDK has no client-side automatic function calling loop.
+Direct model requests must not add function declarations or host function execution.
+Keep Google Search and URL Context enabled where the preflight contract requires them.
+Set `HTTPOptions.RetryOptions` explicitly on every Gemini client.
+Wrap the client HTTP transport with the project-owned SSE normalizing transport to handle leading and repeated empty stream lines.
+Keep thought streaming enabled for configured thinking levels and exclude thought parts from assembled response text.
 
-Use semantic line breaks in Markdown prose: put each complete sentence on its own source line.
-Use active voice, present tense, ASD-STE100 short sentences, and sentence-case headings.
-Do not use exclamation points in documentation.
+Keep project packages acyclic:
+
+- `internal/vtt` and `internal/storage` are foundations.
+- `internal/core` owns schemas, timing, classification, and repair authority.
+- `internal/media` owns FFmpeg and FFprobe operations.
+- `internal/gemini` owns prompts, request translation, response parsing, and Gemini caches.
+- `internal/pipeline` owns locking, scheduling, stitching, publication, and run lifecycle.
+- `cmd/video-subtitler` owns dotenv loading, argument parsing, validation routing, and dispatch.
 
 ## Testing principles
 
 Test contracts through public or executable interfaces.
-Assert outputs, side effects, errors, and externally visible state that distinguish a conforming implementation from a broken one.
+Assert outputs, side effects, errors, and externally visible state.
 Every test must protect a behavioral contract.
-Remove tests that only prove a feature, API, command, handler, or registration exists.
-Let the typechecker enforce static type relationships.
-Do not add runtime tests that a typecheck alone satisfies.
+Let the compiler enforce static type relationships.
 
-Test adapters against project-owned contracts at the integration boundary.
-Do not simulate external providers or encode assumptions about their payload, event, or API shapes in unit tests.
-For adapters such as Gemini, verify only the translation and behavior the project owns.
-Do not test private structure, helper names, prompt prose, exact FFmpeg command arrays, manifest representation, or worker formulas.
-Use real FFmpeg media fixtures and stateful Gemini scenario fakes at external boundaries.
+Test adapters at the project-owned boundary.
+Use local HTTP servers for Gemini request and response translation.
+Do not call live or paid providers in tests.
+Use real FFmpeg media fixtures for media behavior.
+Do not test private helper names, prompt prose, exact FFmpeg command arrays, or worker formulas.
 
-## Simplicity (YAGNI)
+## Simplicity
 
-Implement only current, explicit requirements.
-Do not add speculative features, abstractions, configuration, dependencies, or extensibility for hypothetical future use.
-Prefer the smallest clear change that reuses existing code and standard facilities.
-Delete obsolete code when safe.
-
-Before writing a utility or adding a dependency, search the repository for an existing implementation and its callers.
-Then check the standard library and already-declared dependencies.
-Reuse an established option when it fits.
-Ask before adding a new dependency.
+Implement only explicit requirements.
+Do not add speculative abstractions, options, dependencies, or tests.
+Search the repository and standard library before adding a helper or dependency.
+Ask before adding a direct dependency.
 
 ## Validation matrix
 
-Run only checks strictly relevant to the changed files.
-Never chain full test suites, unchanged tool checks, or multi-command verification runs for small, focused edits.
-For documentation or instruction edits, do not run pytest, ruff, compileall, shellcheck, or CLI help commands.
+Run only checks relevant to changed files unless a cross-package migration requires the complete offline suite.
 
 | Changed files | Required checks |
 | --- | --- |
-| Documentation or instructions only | No code validation. Check Markdown semantics manually. |
-| `scripts/*.sh` | `shellcheck <changed-script>` on the changed script only. |
-| `modules/core.py` | `uv run pytest tests/modules/core`. |
-| `modules/io.py` | `uv run pytest tests/modules/io`. |
-| `modules/media.py` | `uv run pytest tests/modules/media`. |
-| `modules/gemini.py` | `uv run pytest tests/modules/gemini`. |
-| `modules/pipeline.py` | `uv run pytest tests/modules/pipeline`. |
-| `gemini_subs.py` | `uv run pytest tests/cli` and `uv run python gemini_subs.py --help`. |
-| `tests/` | Run only the specific changed test file. |
-| Python production or test files | `uv run ruff check <changed-file>` and `uv run ruff format --check <changed-file>`. |
-| `scripts/benchmark.py` | Run `./scripts/benchmark.py --help` and `uv run ruff check scripts/benchmark.py` when changed. |
-
-Run the full pytest suite only when the user explicitly requests it or when a change touches cross-module boundaries without clear ownership.
+| Documentation or instructions only | Check Markdown semantics manually. |
+| `scripts/*.sh` | `shellcheck <changed-script>`. |
+| Go production or test files | `/home/gotenks/Projects/go/bin/gofmt -w <changed-files>` and `/home/gotenks/Projects/go/bin/go test <affected-packages>`. |
+| Cross-package Go changes | `PATH=/home/gotenks/Projects/go/bin:/home/gotenks/Projects/llvm/bin:$PATH CC=/home/gotenks/Projects/llvm/bin/clang CGO_ENABLED=1 /home/gotenks/Projects/go/bin/go test -race ./...` and `/home/gotenks/Projects/go/bin/go vet ./...`. |
+| CLI changes | Build `bin/video-subtitler` and run `bin/video-subtitler --help`. |
+| Release or build changes | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 /home/gotenks/Projects/go/bin/go build -trimpath -o bin/video-subtitler ./cmd/video-subtitler` and inspect the binary format. |
 
 ## Git workflow
 
-Never create commits unless the user explicitly asks for them.
-When the user requests per-task commits, commit each discrete task before starting the next one.
-Before every commit, run the exact full commands `git status`, `git diff`, and `git log -10`.
-Do not replace these required inspections with abbreviated variants such as `git status --short`, `git diff --stat`, or `git log --oneline`.
-Read the full commit messages from `git log -10`, including their bodies and trailers.
-Stage only files that belong to the current task.
+Never create commits unless the user explicitly asks.
+Never push, rewrite history, or change the default branch unless the user explicitly asks.
+Preserve unrelated work.
 
-Format commit messages per repository conventions:
-- Use the subject format `<scope>: <Capitalized summary>`. Derive the lowercase scope from the component or directory you changed.
-- Write the summary in the imperative mood and do not end it with a period.
-- Keep the subject near 50 characters and never longer than 72 characters.
-- Add a concise, technical body when the subject does not provide enough context. Explain what changed and why.
-- Separate the subject from the body with a blank line and wrap body text at 72 characters.
+Before every authorized commit, run the exact commands `git status`, `git diff`, and `git log -10`.
+Stage only files for the task.
+Use the subject format `<scope>: <Capitalized imperative summary>`.
+Keep the subject at or below 72 characters and omit a trailing period.
 
-Check commit signing once per session with `git config commit.gpgsign` and `git config user.signingkey`.
-Remember the result for the rest of the session.
-If both are set, sign every commit with the configured method and use `git commit --signoff`.
-Do not amend commits, push, or rewrite history unless the user explicitly asks.
+GitHub exposes a manual `workflow_dispatch` workflow only when its workflow file exists on the default branch.
+Do not claim a release workflow present only on `go-rewrite` is dispatchable.
+Keep releases manual-only and build the selected ref and tag the exact selected commit.

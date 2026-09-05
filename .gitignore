@@ -1,16 +1,7 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
+# Go build output
+bin/
 build/
 dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-env/
-venv/
-ENV/
 
 # Environment variables (Sensitive)
 .env
@@ -28,7 +19,6 @@ ENV/
 
 # Temporary processing directories
 temp_video_chunks/
-benchmark_results/
 
 # Subtitle output files
 *.vtt

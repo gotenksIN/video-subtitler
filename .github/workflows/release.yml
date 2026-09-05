@@ -1,0 +1,138 @@
+name: Manual release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to release
+        required: true
+        default: go-rewrite
+      tag:
+        description: Release tag to create
+        required: true
+
+concurrency:
+  group: manual-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "${RELEASE_TAG#-}" = "$RELEASE_TAG"
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Resolve selected commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Install media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh
+
+  build:
+    needs:
+      - resolve
+      - verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build static Linux amd64 binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -ldflags="-s -w" -o video-subtitler ./cmd/video-subtitler
+      - name: Create checksum
+        run: sha256sum video-subtitler > video-subtitler.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: |
+            video-subtitler
+            video-subtitler.sha256
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - resolve
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+      - name: Create tag and release for selected commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          test "${RELEASE_TAG#-}" = "$RELEASE_TAG"
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          existing_target="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '[.object.type, .object.sha] | @tsv' 2>/dev/null || true)"
+          if [ -n "$existing_target" ]; then
+            IFS=$'\t' read -r target_type target_sha <<< "$existing_target"
+            while [ "$target_type" = tag ]; do
+              target="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$target_sha" --jq '[.object.type, .object.sha] | @tsv')"
+              IFS=$'\t' read -r target_type target_sha <<< "$target"
+            done
+            test "$target_type" = commit
+            test "$target_sha" = "$RELEASE_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$RELEASE_TAG" \
+              -f sha="$RELEASE_SHA"
+          fi
+          gh release create "$RELEASE_TAG" \
+            video-subtitler \
+            video-subtitler.sha256 \
+            --verify-tag \
+            --generate-notes \
+            --title "$RELEASE_TAG"

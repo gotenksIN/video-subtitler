@@ -25,5 +25,5 @@ if [ -t 0 ]; then
     fi
 fi
 
-uv run --project "$REPO_ROOT" "${REPO_ROOT}/gemini_subs.py" "$VIDEO" \
+"${REPO_ROOT}/bin/video-subtitler" "$VIDEO" \
     --output "$OUTPUT" "${CONTEXT_ARGS[@]}"
