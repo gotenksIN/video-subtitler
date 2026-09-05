@@ -185,6 +185,52 @@ Locks release automatically when the process exits.
 Intermediate JSON caches, staging files, and final VTT outputs write to temporary files before atomic replacement with `os.Rename`.
 An interrupted run or error never leaves a corrupted final output file.
 
+## Benchmark
+
+Run full-pipeline matrix benchmarking across model tuples:
+
+```bash
+bin/video-subtitler benchmark video.webm \
+  --case gemini-3.8-flash:gemini-3.8-flash:gemini-3.1-pro-preview
+```
+
+Run independent chunk-only models and compare against reference subtitles:
+
+```bash
+bin/video-subtitler benchmark video.webm \
+  --model gemini-3.8-flash \
+  --reference-vtt reference.vtt \
+  --output-dir benchmark_results
+```
+
+### Benchmark options
+
+- `--case GEN:AUDIO:REFINE`: Full three-model pipeline case.
+  Repeat this option to compare multiple model combinations.
+- `--model MODEL`: Chunk-only model without audio or text refinement.
+  Repeat this option to compare multiple standalone chunk models.
+- `--reference-vtt PATH`: Reference WebVTT file for accuracy comparison.
+- `--context-url URL`: Grounding URL for preflight and text refinement.
+- `--output-dir PATH`: Directory for benchmark outputs.
+  Default: `benchmark_results`.
+- `--chunk-dur SECONDS`: Chunk duration in seconds.
+  Default: `60`.
+- `--workers COUNT`: Maximum concurrent chunk workers.
+  Default: `7`.
+- `--thinking-level LEVEL`: Thinking level.
+  Default: `high`.
+- `--api-key KEY`: Gemini API key override.
+- `--base-url URL`: Gemini proxy base URL override.
+- `-h`, `--help`: Show benchmark command help.
+
+The benchmark runner stages video splitting, audio extraction, and chunk generation in separate subdirectories to maximize cache reuse across cases.
+It outputs stage VTT files and a structured `benchmark-results.json` file.
+When you supply `--reference-vtt`, the report includes comparison metrics:
+- Word-level text similarity based on matching contiguous word blocks.
+- Active speech duration for reference and generated subtitles.
+- Temporal overlap in seconds.
+- Temporal recall, precision, and intersection-over-union (IoU).
+
 ## Development
 
 Packages follow an acyclic architecture:
@@ -194,6 +240,7 @@ Packages follow an acyclic architecture:
 - `internal/media`: FFmpeg and FFprobe media operations.
 - `internal/gemini`: Gemini client management, prompts, response parsing, and cache validation.
 - `internal/pipeline`: Process locking, worker scheduling, segment stitching, and run lifecycle.
+- `internal/benchmark`: Benchmark staging, execution, and metrics calculation.
 - `cmd/video-subtitler`: CLI argument parsing, environment loading, and dispatch.
 
 Run offline verification checks with portable defaults:

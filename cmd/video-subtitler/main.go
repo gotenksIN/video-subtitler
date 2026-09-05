@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gotenksIN/video-subtitler/internal/benchmark"
 	"github.com/gotenksIN/video-subtitler/internal/core"
 	"github.com/gotenksIN/video-subtitler/internal/gemini"
 	"github.com/gotenksIN/video-subtitler/internal/pipeline"
@@ -34,6 +35,20 @@ Options:
   --disable-text-refine         Disable global text refinement
   --refine-only                 Refine an input VTT
   -h, --help                    Show help
+
+Use "video-subtitler benchmark --help" for benchmark options.
+`)
+}
+func benchmarkUsage() {
+	fmt.Print(`usage: video-subtitler benchmark [OPTIONS] VIDEO
+
+Options:
+  --case GEN:AUDIO:REFINE       Repeatable full-pipeline case
+  --model MODEL                 Repeatable chunk-only model
+  --context-url URL             Repeatable grounding URL
+  --reference-vtt PATH          Reference subtitle file
+  --output-dir PATH             Output directory
+  --api-key, --base-url, --chunk-dur, --workers, --thinking-level
 `)
 }
 
@@ -55,9 +70,12 @@ var valueFlags = map[string]bool{
 	"--workers":            true,
 	"--thinking-level":     true,
 	"--context-url":        true,
+	"--case":               true,
+	"--reference-vtt":      true,
+	"--output-dir":         true,
 }
 
-func parse(args []string) (parsed, error) {
+func parse(args []string, benchmarkMode bool) (parsed, error) {
 	result := parsed{map[string][]string{}, map[string]bool{}, nil}
 	for i := 0; i < len(args); i++ {
 		argument := args[i]
@@ -110,6 +128,9 @@ func parse(args []string) (parsed, error) {
 		}
 		result.positionals = append(result.positionals, argument)
 	}
+	if err := validateModeOptions(result, benchmarkMode); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -130,11 +151,38 @@ func isOption(value string) bool {
 	return strings.HasPrefix(value, "--") && strings.Contains(value, "=")
 }
 
+func validateModeOptions(arguments parsed, benchmarkMode bool) error {
+	if benchmarkMode {
+		for _, option := range []string{"--output", "-o", "--refine-model", "--audio-refine-model"} {
+			if len(arguments.values[option]) > 0 {
+				return fmt.Errorf("unrecognized arguments: %s", option)
+			}
+		}
+		for _, option := range []string{"--disable-audio-refine", "--disable-text-refine", "--refine-only"} {
+			if arguments.bools[option] {
+				return fmt.Errorf("unrecognized arguments: %s", option)
+			}
+		}
+		return nil
+	}
+	for _, option := range []string{"--case", "--reference-vtt", "--output-dir"} {
+		if len(arguments.values[option]) > 0 {
+			return fmt.Errorf("unrecognized arguments: %s", option)
+		}
+	}
+	return nil
+}
+
 func validateOptionValue(option, value string) error {
 	switch option {
 	case "--chunk-dur", "--workers":
 		if _, err := strconv.Atoi(value); err != nil {
 			return fmt.Errorf("argument %s: invalid int value: %q", option, value)
+		}
+	case "--case":
+		models := strings.Split(value, ":")
+		if len(models) != 3 || models[0] == "" || models[1] == "" || models[2] == "" {
+			return fmt.Errorf("invalid case %q; expected GEN:AUDIO:REFINE", value)
 		}
 	case "--thinking-level":
 		for _, level := range gemini.ThinkingLevels {
@@ -186,23 +234,43 @@ func loadEnv() {
 func main() {
 	loadEnv()
 	args := os.Args[1:]
-	arguments, err := parse(args)
+	benchmarkMode := len(args) > 0 && args[0] == "benchmark"
+	if benchmarkMode {
+		args = args[1:]
+	}
+	arguments, err := parse(args, benchmarkMode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(2)
 	}
 	if arguments.bools["-h"] || arguments.bools["--help"] {
-		usage()
+		if benchmarkMode {
+			benchmarkUsage()
+		} else {
+			usage()
+		}
 		return
 	}
 	if len(arguments.positionals) != 1 {
-		usage()
+		if benchmarkMode {
+			benchmarkUsage()
+		} else {
+			usage()
+		}
 		os.Exit(2)
 	}
 	ctx := context.Background()
-	err = runMain(ctx, arguments)
+	if benchmarkMode {
+		err = runBenchmark(ctx, arguments)
+	} else {
+		err = runMain(ctx, arguments)
+	}
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		if benchmarkMode {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		} else {
+			fmt.Printf("Error: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -280,4 +348,39 @@ func firstNonempty(first, fallback string) string {
 		return first
 	}
 	return fallback
+}
+func runBenchmark(ctx context.Context, arguments parsed) error {
+	chunkDuration, err := number(arguments, "--chunk-dur", 60)
+	if err != nil {
+		return err
+	}
+	workers, err := number(arguments, "--workers", 7)
+	if err != nil {
+		return err
+	}
+	cases := []benchmark.Case{}
+	for _, raw := range arguments.values["--case"] {
+		models := strings.Split(raw, ":")
+		if len(models) != 3 || models[0] == "" || models[1] == "" || models[2] == "" {
+			return fmt.Errorf("invalid case %q; expected GEN:AUDIO:REFINE", raw)
+		}
+		cases = append(cases, benchmark.Case{
+			Generation: models[0],
+			Audio:      models[1],
+			Refine:     models[2],
+		})
+	}
+	return benchmark.Run(ctx, benchmark.Config{
+		Video:       arguments.positionals[0],
+		APIKey:      last(arguments, "--api-key", env("GEMINI_API_KEY", "")),
+		BaseURL:     last(arguments, "--base-url", env("GEMINI_API_BASE", "")),
+		Models:      arguments.values["--model"],
+		Cases:       cases,
+		ContextURLs: arguments.values["--context-url"],
+		Reference:   last(arguments, "--reference-vtt", ""),
+		OutputDir:   last(arguments, "--output-dir", ""),
+		ChunkDur:    chunkDuration,
+		Workers:     workers,
+		Thinking:    last(arguments, "--thinking-level", ""),
+	})
 }

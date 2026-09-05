@@ -73,6 +73,7 @@ Every tracked file in this repository has a defined responsibility.
 | `internal/media/` | FFmpeg and FFprobe operations for probing, complete audio extraction, and stream-copy splitting. |
 | `internal/gemini/` | Gemini clients, prompts, request configs, chunk requests, preflight research, boundary audio refinement, and global text refinement. |
 | `internal/pipeline/` | Generation configuration, locking, scheduling, stitching, publication, and the run lifecycle. |
+| `internal/benchmark/` | Full-video matrix benchmark and comparison metrics. |
 | `bin/video-subtitler` | Ignored repository-local Linux amd64 executable produced by the build. |
 | `scripts/subtitle.sh` | Wrapper script that runs generation with terminal context URL prompting. |
 | `scripts/yt-dl.sh` | Optional `uvx` and `yt-dlp` helper that downloads VP9/WebM video. |
@@ -93,6 +94,7 @@ Keep packages on an acyclic dependency graph:
 - `internal/media` depends on `internal/storage`.
 - `internal/gemini` depends on core, media, storage, VTT, and the upstream Gemini SDK.
 - `internal/pipeline` orchestrates core, media, Gemini, storage, and VTT.
+- `internal/benchmark` uses the pipeline stages and owns benchmark metrics.
 - `cmd/video-subtitler` stays CLI-only.
 
 ## Runtime requirements
@@ -525,6 +527,29 @@ Recovery on retry:
 - Valid `preflight_context.json` skips preflight research.
 - Valid `audio_refinement.json` matching cache identity skips audio refinement.
 - Successful runs clean intermediate work files while holding lock.
+
+## Benchmark runner (`video-subtitler benchmark`)
+
+Runs matrix benchmarking across 3 passes:
+- `--case GEN:AUDIO:REFINE`: 3-tuple model cases.
+- `--model`: Independent chunk-only models.
+- `--context-url`: Grounding URLs for text refinement.
+- `--reference-vtt`: Optional reference subtitles for comparison.
+- `--output-dir`: Output directory for benchmark artifacts (default `benchmark_results`).
+- `--chunk-dur`: Chunk duration in seconds (default 60).
+- `--workers`: Maximum concurrent chunk workers (default 7).
+- `--thinking-level`: Thinking level (`minimal`, `low`, `medium`, `high`; default `high`).
+- Outputs `benchmark_results/benchmark-results.json` and stage VTTs.
+
+### Comparison metrics
+
+- Text normalization: strip WebVTT cue markup, strip the leading speaker label, strip punctuation, and lowercase words.
+- `text_similarity`: twice the number of matching words divided by the total word count in both scripts.
+  Match the longest contiguous word blocks recursively, with earliest-reference and then earliest-generated positions breaking ties.
+  Two empty scripts have a similarity of 1.
+- `temporal_recall`: `overlap_seconds / reference_seconds`.
+- `temporal_precision`: `overlap_seconds / generated_seconds`.
+- `temporal_iou`: `overlap_seconds / (ref_seconds + gen_seconds - overlap_seconds)`.
 
 ## CI and manual release
 

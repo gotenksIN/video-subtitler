@@ -53,6 +53,9 @@ func TestCLIParsingContracts(t *testing.T) {
 		{"workers", []string{"video.mp4", "--workers", "not-a-number"}, "invalid int value"},
 		{"chunk duration", []string{"video.mp4", "--chunk-dur=bad"}, "invalid int value"},
 		{"empty integer", []string{"video.mp4", "--workers="}, "invalid int value"},
+		{"benchmark workers", []string{"benchmark", "video.mp4", "--workers", "bad"}, "invalid int value"},
+		{"benchmark case", []string{"benchmark", "video.mp4", "--case", "one:two"}, "invalid case"},
+		{"empty case model", []string{"benchmark", "video.mp4", "--case=one::three"}, "invalid case"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := exec.Command(binary, test.args...)

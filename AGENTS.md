@@ -69,6 +69,7 @@ Keep project packages acyclic:
 - `internal/media` owns FFmpeg and FFprobe operations.
 - `internal/gemini` owns prompts, request translation, response parsing, and Gemini caches.
 - `internal/pipeline` owns locking, scheduling, stitching, publication, and run lifecycle.
+- `internal/benchmark` owns benchmark staging and metrics.
 - `cmd/video-subtitler` owns dotenv loading, argument parsing, validation routing, and dispatch.
 
 ## Testing principles
@@ -101,7 +102,7 @@ Run only checks relevant to changed files unless a cross-package migration requi
 | `scripts/*.sh` | `shellcheck <changed-script>`. |
 | Go production or test files | `/home/gotenks/Projects/go/bin/gofmt -w <changed-files>` and `/home/gotenks/Projects/go/bin/go test <affected-packages>`. |
 | Cross-package Go changes | `PATH=/home/gotenks/Projects/go/bin:/home/gotenks/Projects/llvm/bin:$PATH CC=/home/gotenks/Projects/llvm/bin/clang CGO_ENABLED=1 /home/gotenks/Projects/go/bin/go test -race ./...` and `/home/gotenks/Projects/go/bin/go vet ./...`. |
-| CLI changes | Build `bin/video-subtitler` and run `bin/video-subtitler --help`. |
+| CLI changes | Build `bin/video-subtitler` and run `bin/video-subtitler --help` plus `bin/video-subtitler benchmark --help`. |
 | Release or build changes | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 /home/gotenks/Projects/go/bin/go build -trimpath -o bin/video-subtitler ./cmd/video-subtitler` and inspect the binary format. |
 
 ## Git workflow
