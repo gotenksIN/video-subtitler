@@ -8,8 +8,6 @@ on real files, not on internal call sequences or prompt wording.
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-import webvtt
-
 from modules import gemini
 
 
@@ -76,55 +74,19 @@ class ScriptedGeminiClient:
                 yield SimpleNamespace(text=piece)
 
 
-def stream_chunk(text=None, finish_reason=None, thought=False):
-    """One SDK stream chunk with optional candidate finish metadata."""
-    return SimpleNamespace(
-        text=None if thought else text,
-        candidates=[SimpleNamespace(finish_reason=finish_reason)],
-    )
-
-
-def chunk_call(pieces, error=None):
-    """One scripted chunk-generation response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
-def research_call(pieces=("Research text",), error=None):
-    """One scripted grounded identity research response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
-def youtube_call(pieces=("YouTube analysis",), error=None):
-    """One scripted direct YouTube analysis response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
-def refinement_call(pieces, error=None):
-    """One scripted structured refinement response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
-def audio_call(pieces, error=None):
-    """One scripted audio-refinement response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
 def use_client(monkeypatch, client):
     """Route every create_client call in modules.gemini to one scripted fake."""
     monkeypatch.setattr(gemini, "create_client", lambda *args, **kwargs: client)
 
 
-def write_vtt(path, captions):
-    """Write a real WebVTT file with (start, end, text) caption tuples."""
-    value = webvtt.WebVTT()
-    value.captions.extend(
-        webvtt.Caption(start, end, text) for start, end, text in captions
+def grounded_chunk(text="Verified context"):
+    """One response chunk with observable Google Search grounding."""
+    web = SimpleNamespace(title="Official source", uri="https://example.com/song")
+    metadata = SimpleNamespace(
+        web_search_queries=["song artist"],
+        grounding_chunks=[SimpleNamespace(web=web)],
     )
-    value.save(str(path))
-    return path
-
-
-def read_captions(path):
-    """Return (start, end, text) tuples from a real WebVTT file."""
-    vtt = webvtt.read(str(path))
-    return [(caption.start, caption.end, caption.text) for caption in vtt]
+    return SimpleNamespace(
+        text=text,
+        candidates=[SimpleNamespace(finish_reason=None, grounding_metadata=metadata)],
+    )

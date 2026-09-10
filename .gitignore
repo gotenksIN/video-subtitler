@@ -1,43 +1,41 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
+.pytest_cache/
+.ruff_cache/
+.venv/
 build/
 dist/
-wheels/
-*.egg-info
+*.egg-info/
 
-# Virtual environments
-.venv
-env/
-venv/
-ENV/
-
-# Environment variables (Sensitive)
+# Credentials
 .env
 .env.local
 .env.*
 !.env.example
 
-# Media files (Large files)
-*.mp4
-*.webm
-*.ogg
+# Song audio
+*.aac
+*.aiff
+*.alac
+*.ape
+*.flac
+*.m4a
 *.mp3
+*.ogg
+*.opus
 *.wav
-*.mkv
+*.wma
 
-# Temporary processing directories
-temp_video_chunks/
-benchmark_results/
+# Generated lyrics
+*.lrc
+*.ttml
+lyrics-output/
 
-# Subtitle output files
-*.vtt
+# Working audio and failure diagnostics
+.lyrics-generator-work/
 
-# OS generated files
+# OS files
 .DS_Store
-.DS_Store?
 ._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db

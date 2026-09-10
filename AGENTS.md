@@ -1,24 +1,9 @@
 # Agent specification
 
-## Agent skills
-
-### Issue tracker
-
-Track issues in GitHub Issues for `gotenksIN/video-subtitler`.
-See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the five default triage labels.
-See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Use the single-context domain layout.
-See `docs/agents/domain.md`.
+## Domain specification
 
 `CONTEXT.md` is the authoritative technical and architectural specification for this repository.
-It describes the pipeline, schemas, authority rules, caching, and domain model from first principles.
+It describes the pipeline, schemas, authority rules, and domain model from first principles.
 Read `CONTEXT.md` before changing code, tests, scripts, or documentation.
 Always keep `CONTEXT.md` up-to-date whenever architecture, schemas, pipeline flow, or domain concepts change.
 
@@ -32,19 +17,19 @@ Do not use legacy `google-generativeai`.
 
 When a Gemini request does not require automatic function calling, construct its config with `build_content_config()` so AFC is disabled explicitly instead of relying on SDK defaults.
 This requirement applies to structured, plain-text, tool-enabled, and tool-free requests that do not require automatic function calling.
-Test each Gemini request type at the adapter boundary.
-Assert behaviorally required request configuration, including disabled AFC, without binding coverage to config builder structure.
+Verify adapter calls at external boundaries for meaningful application behavior, such as preventing unintended automatic tool execution.
+Do not mandate exhaustive schema or request-shape assertions merely as contracts.
 
-Do not add automatic cache revisions without approval.
+Run each invocation from scratch without caching stage results.
 Do not change timing semantics casually.
-Do not remove failed-run artifacts that support resume.
+Preserve failed-run artifacts for diagnosis.
 
 Keep the five modules in `modules/` on an acyclic dependency graph:
 - `modules/core.py` and `modules/io.py` are foundations with no project-internal imports.
-- `modules/media.py` depends only on `io`.
+- `modules/media.py` has no project-internal imports.
 - `modules/gemini.py` depends on `core`, `io`, and `media` (for `AUDIO_MIME_TYPE`).
 - `modules/pipeline.py` orchestrates media and Gemini and owns the run lifecycle.
-- `gemini_subs.py` stays CLI-only: dotenv loading, argument parsing, validation, and dispatch.
+- `gemini_lyrics.py` stays CLI-only: dotenv loading, argument parsing, validation, and dispatch.
 
 Use semantic line breaks in Markdown prose: put each complete sentence on its own source line.
 Use active voice, present tense, ASD-STE100 short sentences, and sentence-case headings.
@@ -52,18 +37,18 @@ Do not use exclamation points in documentation.
 
 ## Testing principles
 
-Test contracts through public or executable interfaces.
-Assert outputs, side effects, errors, and externally visible state that distinguish a conforming implementation from a broken one.
-Every test must protect a behavioral contract.
-Remove tests that only prove a feature, API, command, handler, or registration exists.
+Maintain a minimal, robust test suite focused on behavior rather than contracts.
+Do not write new tests unless the user or specification explicitly requests them.
+Verify observable outcomes and critical failure modes through public or executable interfaces.
+Assert outputs, side effects, errors, and externally visible state.
+Remove tests that assert only feature presence, registrations, or internal mechanics.
 Let the typechecker enforce static type relationships.
 Do not add runtime tests that a typecheck alone satisfies.
 
-Test adapters against project-owned contracts at the integration boundary.
-Do not simulate external providers or encode assumptions about their payload, event, or API shapes in unit tests.
-For adapters such as Gemini, verify only the translation and behavior the project owns.
-Do not test private structure, helper names, prompt prose, exact FFmpeg command arrays, manifest representation, or worker formulas.
-Use real FFmpeg media fixtures and stateful Gemini scenario fakes at external boundaries.
+Verify adapters at integration boundaries for project-owned translation and behavior.
+Do not simulate external providers or test external library mechanics.
+Do not assert schema shapes, request payload structures, helper names, prompt prose, exact FFmpeg command arrays, manifest representation, or worker formulas.
+Verify media handling with real FFmpeg audio inputs and use stateful Gemini scenario fakes at external boundaries.
 
 ## Simplicity (YAGNI)
 
@@ -89,13 +74,12 @@ For documentation or instruction edits, do not run pytest, ruff, compileall, she
 | `scripts/*.sh` | `shellcheck <changed-script>` on the changed script only. |
 | `modules/core.py` | `uv run pytest tests/modules/core`. |
 | `modules/io.py` | `uv run pytest tests/modules/io`. |
-| `modules/media.py` | `uv run pytest tests/modules/media`. |
+| `modules/media.py` | Minimal manual check of audio probing and normalization with real audio. |
 | `modules/gemini.py` | `uv run pytest tests/modules/gemini`. |
 | `modules/pipeline.py` | `uv run pytest tests/modules/pipeline`. |
-| `gemini_subs.py` | `uv run pytest tests/cli` and `uv run python gemini_subs.py --help`. |
+| `gemini_lyrics.py` | `uv run pytest tests/cli` and `uv run python gemini_lyrics.py --help`. |
 | `tests/` | Run only the specific changed test file. |
 | Python production or test files | `uv run ruff check <changed-file>` and `uv run ruff format --check <changed-file>`. |
-| `scripts/benchmark.py` | Run `./scripts/benchmark.py --help` and `uv run ruff check scripts/benchmark.py` when changed. |
 
 Run the full pytest suite only when the user explicitly requests it or when a change touches cross-module boundaries without clear ownership.
 

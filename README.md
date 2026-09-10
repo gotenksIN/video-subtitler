@@ -1,241 +1,155 @@
-# Gemini subtitle generator
+# Lyrics generator
 
-A Python CLI that uses the Google Gemini API to generate English WebVTT subtitles from video.
-It uses a 4-pass pipeline:
-1. Researches participant identities and topic terminology with grounded search and video analysis.
-2. Generates chunk subtitles concurrently using candidate speaker identities.
-3. Repairs chunk boundaries against the complete extracted audio.
-4. Refines the complete script with structured proofreading and the preflight context.
+This command-line tool generates line-timed lyrics from complete song audio files.
+It recovers lyrics directly from audio without requiring published text.
+It supports unsegmented audio inputs, including FLAC and MP3 formats.
+Gemini Pro grounds song and artist context with Google Search.
+Gemini Flash transcribes the source language across the complete audio.
+Gemini Pro checks the draft against the complete audio and returns text and timing corrections for existing lines.
+Unchanged lines and fields retain their Flash values.
+The audio remains authoritative throughout generation.
 
-## Pipeline overview
+The tool outputs a same-stem `.lrc` file containing source lyrics.
+An optional translation target produces a same-stem `.ttml` file formatted for Gramophone.
+The TTML body preserves source lyrics and timing.
+Translation metadata links to source lines with internal `itunes:key` attributes.
 
-```mermaid
-flowchart TD
-    Video[Source video & URLs] --> Research[0. Grounded web & YouTube preflight research]
-    Video --> Audio[Extract complete audio]
+## Non-goals
 
-    Research --> Context[preflight_context.json]
-    Video --> Split[1. Stream-copy split]
+The project explicitly excludes these features:
+- Video chunking or video stream processing.
+- Word-level karaoke timing spans.
+- Performer assignment or duet tags.
+- Musical part divisions such as verse or chorus tags.
+- Transliteration or romanization tracks.
 
-    Split --> Chunks[Concurrent video chunks]
-    Context --> FlashGen
-    Chunks --> FlashGen[Gemini Flash: Subtitle generation with candidate roster]
-    FlashGen --> Stitch[Stitch & merge visual fragments]
+## Requirements
 
-    Stitch --> AudioPass[2. Boundary audio refinement]
-    Audio --> AudioPass
+- Python 3.14 or later
+- [uv](https://docs.astral.sh/uv/)
+- `ffmpeg` and `ffprobe` in `PATH`
+- A Gemini API key
 
-    AudioPass --> ProRefine[3. Gemini Pro: Structured text polish with preflight context]
-    Context --> ProRefine
-    ProRefine --> Output[Final English WebVTT subtitles]
-```
+On Linux, you can install static FFmpeg binaries in `~/.local/bin`:
 
-## Features
-
-- **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
-- **Concurrent processing:** Process video chunks in parallel using multiple Gemini API workers.
-- **Boundary audio refinement:** Extract the complete audio track and repair dialogue faults near chunk boundaries with a boundary-limited Gemini Flash pass.
-- **Structured outputs:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and invalid chunk output.
-- **Grounded refinement:** Run web identity research with Google Search, optional direct YouTube video analysis, and structured script polish.
-  Speaker identities use verified evidence instead of appearance guesses.
-- **Resumable failures:** Keep temporary work directories on failure so retries reuse valid completed chunks, extracted audio, and refinement caches.
-  Clean up temporary work files on success.
-- **Safe outputs:** Write chunk JSON, audio, and final WebVTT files atomically to prevent corrupted output.
-
-## Prerequisites
-
-- [uv](https://github.com/astral-sh/uv) - Python package installer and resolver.
-- [FFmpeg](https://ffmpeg.org/) - Install `ffmpeg` and `ffprobe` in your system `PATH`.
-  - **Headless and X11-free installation (WSL/Ubuntu Server):** Install a precompiled GPL static build to avoid X11 and GUI dependencies.
-    Use the BtbN static build installer for your user binary directory:
-    ```bash
-    ./scripts/ffmpeg.sh
-    ```
-    Add `~/.local/bin` to your `PATH` by adding `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional tool executed automatically with `uvx`.
-
-## Installation
-
-1. Clone this repository.
-2. Install dependencies with `uv`:
-   ```bash
-   uv sync
-   ```
-3. Create a `.env` file in the root directory and add your Gemini API credentials:
-   ```env
-   GEMINI_API_KEY=your_api_key_here
-
-   # Optional: set a custom base URL or change default models
-   GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3.8-flash
-   GEMINI_AUDIO_REFINE_MODEL=gemini-3.8-flash
-   GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
-   ```
-
-## Usage
-
-Run the CLI using `uv run`.
-
-### Helper scripts
-
-Install or upgrade the BtbN GPL static FFmpeg build in `~/.local/bin`:
 ```bash
 ./scripts/ffmpeg.sh
 ```
 
-Download a YouTube video as VP9 video with audio, falling back to WebM when VP9 is unavailable:
+Install dependencies:
+
 ```bash
-./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
+uv sync
 ```
 
-Generate subtitles for a local video:
+Copy `.env.example` to `.env` and set `GEMINI_API_KEY`:
+
 ```bash
-./scripts/subtitle.sh "your_video.webm"
+cp .env.example .env
 ```
 
-The subtitle helper writes output to `your_video.webm.vtt`.
-When standard input is a terminal, it prompts once for an optional context URL for grounded refinement.
-Press Enter with a blank answer to skip it.
-Noninteractive usage never prompts.
+## Usage
 
-Benchmark subtitle generation and refinement models across full video runs:
+Generate source lyrics next to an audio file:
+
 ```bash
-./scripts/benchmark.py "your_video.webm" --case gemini-3.8-flash:gemini-3.8-flash:gemini-3.1-pro-preview
+uv run python gemini_lyrics.py "song.mp3"
 ```
 
-Compare generated subtitles against a reference WebVTT file:
+Generate source lyrics and bilingual TTML with explicit metadata:
+
 ```bash
-./scripts/benchmark.py "your_video.webm" --model gemini-3.8-flash --reference-vtt "reference.vtt"
+uv run python gemini_lyrics.py "song.flac" \
+  --artist "Artist Name" \
+  --title "Song Title" \
+  --target-language en \
+  --output-dir output
 ```
 
-The benchmark saves generated subtitles and `benchmark-results.json` to the output directory.
+### Local benchmark files and output protection
 
-### Generation mode
+To evaluate output against a reference, provide a local song and same-stem lyric file, for example:
+- `3RACHA (Bang Chan, Changbin, HAN).flac`
+- `3RACHA (Bang Chan, Changbin, HAN).lrc`
 
-Generate English subtitles from a video:
+The benchmark LRC file serves only as an offline evaluation target.
+The pipeline never reads existing lyric files as prompt context or generation input.
+
+The CLI protects existing files from accidental replacement.
+When an output file already exists, validation halts before media processing or API calls.
+Running the tool on this local FLAC file without `--output-dir` fails because the same-stem benchmark LRC already exists.
+Specify `--output-dir` when testing against benchmark audio:
+
 ```bash
-uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
+uv run python gemini_lyrics.py "3RACHA (Bang Chan, Changbin, HAN).flac" \
+  --artist "3RACHA" \
+  --title "3RACHA" \
+  --target-language en \
+  --output-dir lyrics-output
 ```
 
-### Audio-first processing and refinement
+## Options
 
-By default, the pipeline uses `gemini-3.8-flash` for chunk video generation and boundary audio refinement, and `gemini-3.1-pro-preview` for global text refinement.
-Chunk processing limits context to 60 seconds per stream-copy chunk.
-The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
-The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
+| Option | Environment variable | Default | Description |
+| --- | --- | --- | --- |
+| `audio_file` | None | Required | Path to input audio file (such as FLAC or MP3). |
+| `--output-dir` | None | Audio file directory | Directory for generated `.lrc` and `.ttml` sidecars. |
+| `--title` | None | Audio file stem | Song title for grounded search. |
+| `--artist` | None | None | Artist name for grounded search. |
+| `--target-language` | None | None | BCP 47 language tag for optional bilingual TTML (such as `en`). |
+| `--flash-model` | `GEMINI_FLASH_MODEL` | `gemini-3.8-flash` | Gemini model for draft transcription. |
+| `--pro-model` | `GEMINI_PRO_MODEL` | `gemini-3.1-pro-preview` | Gemini model for research, refinement, and translation. |
+| `--api-key` | `GEMINI_API_KEY` | None | Gemini API key override. |
+| `--base-url` | `GEMINI_API_BASE` | None | Optional Gemini-compatible proxy base URL. |
 
-Generation publishes one artifact based on the two refinement toggles:
+## Player compatibility
 
-| Audio refinement | Text refinement | Published input |
-| --- | --- | --- |
-| Enabled (default) | Enabled (default) | Text-refined `audio_refined.vtt` |
-| Enabled | `--disable-text-refine` | `audio_refined.vtt` |
-| `--disable-audio-refine` | Enabled | Text-refined `stitched.vtt` |
-| `--disable-audio-refine` | `--disable-text-refine` | `stitched.vtt` |
+The tool produces two output sidecars:
 
-Boundary audio refinement sends the complete audio plus the stitched script to Gemini in one streamed JSON request.
-The model returns a sparse patch of only changed cues.
-The host discards patch edits outside ten-second repair windows around chunk boundaries.
-Validation rejects patches that delete visual on-screen text or alter bracketed on-screen fragments.
+1. **Source-only LRC (`.lrc`)**:
+   Emits standard `[mm:ss.xx]` line timestamps with half-up centisecond rounding.
+   Empty timestamps mark audible gaps between lyric lines.
+   Compatible with standard music players, including Jellyfin, Feishin, MusicBee, and Gramophone.
 
-Text refinement has up to three Gemini requests:
+2. **Bilingual TTML (`.ttml`)**:
+   Emits Apple-style TTML with line timing.
+   Uses the internal Apple namespace `http://music.apple.com/lyric-ttml-internal` for timing and translation metadata.
+   Designed specifically for Gramophone on Android.
+   Gramophone pairs the subtitle translation directly with each active source line during playback.
 
-1. Grounded web identity research first: a plain-text, streamed request with Google Search grounding.
-   It researches participant names in official English styling, roles, and evidence for speaker-label normalization.
-   Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
-2. Direct YouTube analysis second, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
-   It returns participant identities, official names and roles, and timestamped speaker-identification observations.
-   Transient Gemini transport errors and rate limits retry automatically through SDK HTTP retry options.
-3. Structured refinement last: the streamed JSON request with the `RefinementResponse` schema.
-   It receives the grounded research text and the YouTube analysis text as identity context and does not use tools.
+## Pipeline
 
-Text refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
-The previous output stays intact.
-There is no ungrounded fallback.
+The production CLI executes a whole-audio pipeline:
 
-To skip the boundary audio refinement pass:
-```bash
-uv run python gemini_subs.py "your_video.webm" --disable-audio-refine
-```
+1. **Audio normalization**: Extracts the first audio stream to mono Ogg Opus at 48000 Hz and 64 kbps.
+2. **Research**: Identifies the song and artist using Google Search grounding with Gemini Pro.
+3. **Transcription**: Creates a complete source lyric draft from normalized audio with Gemini Flash.
+4. **Refinement**: Applies audio-supported text and timing corrections with Gemini Pro, preserving draft line structure.
+5. **Translation**: Translates refined lines by source ID with Gemini Pro when you set `--target-language`.
 
-To skip the global text refinement pass:
-```bash
-uv run python gemini_subs.py "your_video.webm" --disable-text-refine
-```
+## Working files
 
-To run global text refinement on an existing WebVTT file without video processing:
-```bash
-uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polished_subtitles.vtt"
-```
+Every invocation runs its selected stages from scratch without caching stage results across runs.
+Each run uses a unique directory under `.lyrics-generator-work/` for normalized audio and failure diagnostics.
+Successful runs remove their work directory.
+Failed runs retain their working files and print the directory for inspection.
+Retries start a fresh run.
 
-### Additional options
-
-- `--disable-audio-refine`: Disable the boundary audio refinement pass after generation.
-- `--disable-text-refine`: Disable the global text refinement pass after generation.
-- `--refine-only`: Skip video processing and run global text refinement on an input WebVTT file.
-- `--chunk-dur`: Video chunk duration in seconds (default: `60`).
-- `--workers`: Maximum concurrent API workers (default: `7`).
-- `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
-  Supported levels are `minimal`, `low`, `medium`, and `high`.
-  `minimal` requires a Flash model.
-  The global text refinement pass always uses `high`.
-  The boundary audio refinement pass always uses `high`.
-- `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
-- `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
-- `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.8-flash`).
-- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-3.8-flash`).
-- `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
-- `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
-  Repeat the option to supply several URLs.
-  Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, or `m.youtube.com` with a `/watch` path and nonempty `v` query, or `youtu.be` with exactly one path segment) become direct video inputs for a separate YouTube analysis pass.
-  Other URLs use the URL Context tool.
-  Refinement fails if any other URL is not retrieved successfully.
-  An invalid, private, or unavailable YouTube video fails the analysis request before publication.
-
-## Notes
-
-- The initial split uses stream copy (`-c copy`) and cuts at keyframes, so chunk boundaries follow the source keyframe layout.
-  Supported input codecs are VP9, H.264, and HEVC/H.265.
-  VP9 chunks use WebM format, while H.264 and HEVC chunks use MP4 format.
-- AV1 input is rejected during probing because the processing pipeline supports VP9, H.264, and HEVC/H.265 only.
-- Boundary audio refinement requires an audio stream.
-  Generation fails before splitting when the source has no audio and audio refinement is enabled.
-  Pass `--disable-audio-refine` to generate subtitles for a silent video.
-- Keep inline video and audio requests below 20 MiB.
-  Reduce `--chunk-dur` if chunk uploads fail.
-- When a chunk fails validation or API processing, stitching stops and the work directory is preserved for retry.
-  A malformed segment index or missing chunk file invalidates the split and regenerates it on retry.
-  Valid extracted audio and audio refinement responses are reused on retry.
-  Successful runs clean up the temporary work directory.
-- Output WebVTT files are ignored by Git by default.
-  Move or rename files to track specific subtitle outputs.
+The CLI reports each request's stage and model, elapsed time, received stream chunks, and separate answer and thought character counts.
+It flushes an update on the first chunk, then at most once every five seconds as chunks arrive, and when the stream closes.
+These counts reflect SDK response chunks, including thought-only chunks, rather than raw SSE keepalive messages.
+If no chunks arrive, the counters stop updating.
+The CLI does not print lyrics or reasoning text during streaming.
+When the API provides usage metadata, the closing summary includes answer and thought token counts.
+Failed structured streams retain their partial answer and count/timing diagnostics in the run directory.
 
 ## Development
-
-Production code is organized into modular components under `modules/`.
-`modules/pipeline.py` orchestrates generation and `gemini_subs.py` parses and dispatches CLI requests.
-`AGENTS.md` is the authoritative behavioral specification and `tests/README.md` documents the test contract matrix.
-Tests under `tests/` mirror these module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
 
 Run code quality checks and tests:
 
 ```bash
-# Lint, format, and static analysis
-shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh
 uv run ruff check .
 uv run ruff format --check .
-uv run python -m compileall -q .
-
-# Run targeted module tests or the complete test suite
-uv run pytest tests/modules/core
-uv run pytest tests/modules/io
-uv run pytest tests/modules/media
-uv run pytest tests/modules/gemini
-uv run pytest tests/modules/pipeline
-uv run pytest tests/cli
 uv run pytest
-
-# Verify CLI entry points
-uv run python gemini_subs.py --help
-./scripts/benchmark.py --help
+uv run python gemini_lyrics.py --help
 ```

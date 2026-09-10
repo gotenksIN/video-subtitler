@@ -1,14 +1,13 @@
 [project]
-name = "video-subtitler"
+name = "lyrics-generator"
 version = "0.1.0"
-description = "Gemini-powered CLI for generating VTT subtitles from video."
+description = "Gemini-powered CLI for generating timed lyrics from song audio."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "google-genai>=2.0.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
-    "webvtt-py>=0.5.1",
 ]
 
 [dependency-groups]
