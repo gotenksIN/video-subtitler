@@ -413,6 +413,39 @@ def test_invalid_refinement_changes_rejected_without_mutation(
     assert output.read_text(encoding="utf-8") == "previous"
 
 
+@pytest.mark.parametrize(
+    ("source_text", "replacement"),
+    [
+        ("[Card] Host: Hello", "Host: Hello"),
+        ("[Card] Host: Hello", "[Card] Hello"),
+        ("Hello", "Host: Hello"),
+        ("Host: Hello\nGuest: Yes", "Host: Hello and yes"),
+    ],
+)
+def test_refinement_rejects_structural_edits_before_publication(
+    tmp_path, monkeypatch, source_text, replacement
+):
+    source = write_vtt(
+        tmp_path / "source.vtt", [("00:00:00.000", "00:00:01.000", source_text)]
+    )
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+    client = ScriptedGeminiClient(
+        [
+            research_call(),
+            refinement_call(
+                [json.dumps({"changes": [{"id": 0, "text": replacement}]})]
+            ),
+        ]
+    )
+    use_client(monkeypatch, client)
+
+    with pytest.raises(RuntimeError, match="response failed"):
+        gemini.global_refine_subtitles(source, output, "key", None, "refiner", "high")
+    assert read_captions(source)[0][2] == source_text
+    assert output.read_text(encoding="utf-8") == "previous"
+
+
 def test_refinement_applies_text_changes_without_deleting_cues(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt",

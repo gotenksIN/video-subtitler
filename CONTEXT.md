@@ -453,6 +453,10 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
    6. Forbids retiming, merging, splitting, adding, or deleting cues.
 6. Output: `RefinementResponse` applied atomically to target.
+   Before applying any change, the host verifies balanced brackets, unchanged cue class and outer visual fragment count, and separate nonempty dialogue turns.
+   Labeled turns retain labels at their original positions; unlabeled turns cannot gain labels.
+   Existing label spelling and visual text within brackets may be corrected.
+   Line wraps continue the same turn, and adjacent labeled turns remain separate even when written on one line.
 
 ### Speaker label casing canonicalization
 

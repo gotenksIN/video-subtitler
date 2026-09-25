@@ -13,6 +13,9 @@ SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)")
+REFINEMENT_LABEL_RE = re.compile(
+    r"(?m)^[ \t]*(?i:[A-Z][\w' -]{1,30}):[ \t]*|(?<!\S)[A-Z][\w'-]*:[ \t]*"
+)
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
 REPAIR_WINDOW_SECONDS = 10.0
 
@@ -190,15 +193,65 @@ def validate_captions(captions, chunk_duration):
     return validated
 
 
-def validate_refinement_changes(changes, caption_count):
+def _refinement_dialogue_labels(text, cue_id, source_labels=()):
+    labels = []
+    outside_text, _fragments, _unmatched = _parse_bracketed_text(text)
+    if source_labels:
+        names = "|".join(
+            re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
+        )
+        label_re = re.compile(
+            rf"(?m)^[ \t]*(?i:[A-Z][\w' -]{{1,30}}):[ \t]*|(?<!\S)(?i:{names}):[ \t]*|(?<!\S)[A-Z][\w'-]*:[ \t]*",
+        )
+    else:
+        label_re = REFINEMENT_LABEL_RE
+    previous_end = 0
+    for label in label_re.finditer(outside_text):
+        before = outside_text[previous_end : label.start()]
+        if labels and not re.search(r"\w", before):
+            raise ValueError(f"subtitle ID {cue_id} has empty dialogue")
+        if not labels and re.search(r"\w", before):
+            labels.append(False)
+        labels.append(True)
+        previous_end = label.end()
+    if labels and not re.search(r"\w", outside_text[previous_end:]):
+        raise ValueError(f"subtitle ID {cue_id} has empty dialogue")
+    if not labels and re.search(r"\w", outside_text):
+        labels.append(False)
+    return labels
+
+
+def validate_refinement_changes(changes, source_texts):
+    """Validate all replacements against the structure of their source cues."""
     seen_ids = set()
     for change in changes:
-        if not 0 <= change.id < caption_count:
+        if not 0 <= change.id < len(source_texts):
             raise ValueError(f"subtitle ID {change.id} is out of range")
         if change.id in seen_ids:
             raise ValueError(f"subtitle ID {change.id} is duplicated")
         if not change.text.strip():
             raise ValueError(f"subtitle ID {change.id} has empty text")
+        source = source_texts[change.id]
+        if has_unmatched_brackets(change.text):
+            raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
+        if classify_cue_text(change.text) != classify_cue_text(source):
+            raise ValueError(f"subtitle ID {change.id} changes cue class")
+        if len(visual_fragment_strings(change.text)) != len(
+            visual_fragment_strings(source)
+        ):
+            raise ValueError(f"subtitle ID {change.id} changes visual fragment count")
+
+        source_labels = {
+            match.group(2)
+            for line in source.splitlines()
+            if (match := SPEAKER_LABEL_RE.match(line))
+        }
+        if _refinement_dialogue_labels(
+            change.text, change.id, source_labels
+        ) != _refinement_dialogue_labels(source, change.id, source_labels):
+            raise ValueError(
+                f"subtitle ID {change.id} changes dialogue turns or labels"
+            )
         seen_ids.add(change.id)
 
 

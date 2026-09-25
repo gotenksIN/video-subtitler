@@ -164,7 +164,7 @@ def test_refinement_change_validation_accepts_valid_changes():
         core.RefinedCaption(id=0, text="One"),
         core.RefinedCaption(id=2, text="Two"),
     ]
-    core.validate_refinement_changes(changes, 3)
+    core.validate_refinement_changes(changes, ["Old", "Middle", "Last"])
 
 
 @pytest.mark.parametrize(
@@ -179,7 +179,70 @@ def test_refinement_change_validation_accepts_valid_changes():
 )
 def test_refinement_change_validation_rejects_invalid_changes(changes):
     with pytest.raises(ValueError):
-        core.validate_refinement_changes(changes, 2)
+        core.validate_refinement_changes(changes, ["Old", "Second"])
+
+
+@pytest.mark.parametrize(
+    ("source", "replacement"),
+    [
+        ("[Title] Host: Hello", "Host: Hello"),
+        ("[Title] Host: Hello", "[Title] [Extra] Host: Hello"),
+        ("[Title] Host: Hello", "[Title Host: Hello"),
+        ("Host: Hello\nGuest: Yes", "Host: Hello and yes"),
+        ("Host: Hello", "Hello"),
+        ("Hello", "Host: Hello"),
+        ("Host: Hello", "Host:"),
+        ("Host: Hello\nGuest: Yes", "Host: Hello\nGuest:"),
+        ("Host: Hello\nGuest: Yes", "Host: Hello Guest: Hina:"),
+        ("Host: Hello\nworld", "Host: Hello\nGuest: world"),
+        ("Hello\nHost: Yes", "Host: Hello\nHost: Yes"),
+        ("Host: Hi\nKim Gyeran: Yes", "Host: Kim Gyeran: Yes"),
+    ],
+)
+def test_refinement_rejects_structural_changes(source, replacement):
+    with pytest.raises(ValueError):
+        core.validate_refinement_changes(
+            [core.RefinedCaption(id=0, text=replacement)], [source]
+        )
+
+
+def test_refinement_accepts_label_and_visual_text_corrections():
+    core.validate_refinement_changes(
+        [core.RefinedCaption(id=0, text="[Corrected OCR] Host: Hello\nGuest: Yes")],
+        ["[Bad OCR] host: Helo\nGuest: Yess"],
+    )
+    core.validate_refinement_changes(
+        [core.RefinedCaption(id=0, text="[Corrected OCR]")], ["[Bad\nOCR]"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "replacement"),
+    [
+        (
+            "Hina: What's special is that it's eco-friendly, made with recycled fabric.",
+            "Hina: What's special is that it's eco-friendly,\nmade with 100% recycled fabric.",
+        ),
+        (
+            "Kim Gyeran: First, come on down, MC! Hina: Won't that take too long?",
+            "Kim Gyeran: First, come on down, MC!\nHina: Won't that take too long?",
+        ),
+        ("Host: Hello\nGuest: Yes", "Host: Hello Guest: Yes"),
+        ("Host: Hello\nKim-Gyeran: Yes", "Host: Hello Kim-Gyeran: Yes"),
+        ("Host: The sign says: stop.", "Host: The sign says stop."),
+    ],
+)
+def test_refinement_accepts_wrapped_dialogue_turns(source, replacement):
+    core.validate_refinement_changes(
+        [core.RefinedCaption(id=0, text=replacement)], [source]
+    )
+
+
+def test_refinement_rejects_lowercase_label_insertion():
+    with pytest.raises(ValueError):
+        core.validate_refinement_changes(
+            [core.RefinedCaption(id=0, text="host: Hello")], ["Hello"]
+        )
 
 
 # --- Sparse Audio Refinement Response & Authority ---

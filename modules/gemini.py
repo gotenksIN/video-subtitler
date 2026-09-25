@@ -763,7 +763,7 @@ def global_refine_subtitles(
 
     try:
         refinements = core.RefinementResponse.model_validate_json(full_json_text)
-        core.validate_refinement_changes(refinements.changes, len(vtt))
+        core.validate_refinement_changes(refinements.changes, [cue.text for cue in vtt])
     except ValueError as e:
         raise RuntimeError(
             "Parsing or validating the model refinement response failed: "
