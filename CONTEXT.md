@@ -363,6 +363,8 @@ Publication boundary:
 ## Stitching and pure-editorial boundary merging
 
 Stitching offsets chunk-relative timestamps by each segment's actual `start` from `segments.csv` and sorts by start time.
+It loads each cached chunk through `gemini.load_cached_captions()` and uses its validated, clamped timestamps.
+If a required result cannot load, stitching fails before publishing the VTT.
 
 `merge_visual_boundary_fragments()` merges exact pure-editorial cues split at keyframe cuts:
 - Adjacent owner chunks (`chunk_idx` and `chunk_idx + 1`).

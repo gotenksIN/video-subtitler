@@ -187,17 +187,17 @@ def stitch(chunk_dir, output_vtt):
     entries = []
     for json_name in json_files:
         chunk_idx = int(json_name.removeprefix("subtitle_chunk_").removesuffix(".json"))
-        offset_sec = chunk_by_index[chunk_idx]["start"]
-
-        with open(os.path.join(chunk_dir, json_name), "r", encoding="utf-8") as f:
-            captions = json.load(f)
+        chunk = chunk_by_index[chunk_idx]
+        offset_sec = chunk["start"]
+        captions = gemini.load_cached_captions(
+            os.path.join(chunk_dir, json_name), chunk["duration"]
+        )
+        if captions is None:
+            raise ValueError(f"Invalid subtitle results: cannot load {json_name}")
 
         for cap in captions:
             abs_start = offset_sec + core.parse_time(cap["start"])
             abs_end = offset_sec + core.parse_time(cap["end"])
-            if abs_end <= abs_start:
-                raise ValueError(f"Invalid caption timing in {json_name}: {cap}")
-
             entries.append(
                 {
                     "start": abs_start,

@@ -10,7 +10,11 @@ from tests.support.workdir import write_chunk_layout, write_chunk_subtitles
 def stitch_layout(tmp_path, rows, captions_by_chunk):
     write_chunk_layout(tmp_path, rows)
     for index, captions in captions_by_chunk.items():
-        write_chunk_subtitles(tmp_path, index, captions)
+        write_chunk_subtitles(
+            tmp_path,
+            index,
+            [{"id": cue_id, **caption} for cue_id, caption in enumerate(captions)],
+        )
     return tmp_path / "output.vtt"
 
 
@@ -88,7 +92,7 @@ def test_stitch_keeps_repeated_text_and_overlapping_cues(tmp_path):
     result = webvtt.read(output)
     assert [caption.text for caption in result] == ["Again", "Again"]
     assert [(caption.start, caption.end) for caption in result] == [
-        ("00:00:01.000", "00:00:05.500"),
+        ("00:00:01.000", "00:00:05.000"),
         ("00:00:05.000", "00:00:06.000"),
     ]
 
@@ -136,10 +140,45 @@ def test_stitch_keeps_ineligible_boundary_cues_separate(tmp_path, earlier, later
 
 def test_stitch_works_without_a_manifest_file(tmp_path):
     (tmp_path / "segments.csv").write_text("chunk_000.mp4,0,5\n", encoding="utf-8")
-    write_chunk_subtitles(tmp_path, 0, [{"start": "1", "end": "2", "text": "Only"}])
+    write_chunk_subtitles(
+        tmp_path, 0, [{"id": 0, "start": "1", "end": "2", "text": "Only"}]
+    )
     output = tmp_path / "output.vtt"
 
     result = pipeline.stitch(tmp_path, output)
 
     assert result == output
     assert [caption.text for caption in webvtt.read(output)] == ["Only"]
+
+
+def test_stitch_rejects_invalid_cached_result_without_publishing(tmp_path):
+    output = stitch_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 5)],
+        {0: [{"start": "2", "end": "1", "text": "Invalid"}]},
+    )
+    output.write_text("previous", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot load"):
+        pipeline.stitch(tmp_path, output)
+
+    assert output.read_text(encoding="utf-8") == "previous"
+
+
+def test_stitch_clamps_overrunning_cached_caption_to_chunk_duration(tmp_path):
+    output = stitch_layout(
+        tmp_path,
+        [("chunk_000.mp4", 0, 2), ("chunk_001.mp4", 2, 4)],
+        {
+            0: [{"start": "0.5", "end": "2.4", "text": "First"}],
+            1: [{"start": "0.2", "end": "1.0", "text": "Second"}],
+        },
+    )
+
+    pipeline.stitch(tmp_path, output)
+
+    result = webvtt.read(output)
+    assert [(c.start, c.end, c.text) for c in result] == [
+        ("00:00:00.500", "00:00:02.000", "First"),
+        ("00:00:02.200", "00:00:03.000", "Second"),
+    ]
