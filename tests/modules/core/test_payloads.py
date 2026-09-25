@@ -258,7 +258,9 @@ def test_sparse_audio_refinement_applies_edits_and_preserves_omitted_cues():
         ],
         deleted=[2],
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [10.0, 20.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [10.0, 20.0], source_duration=35.0
+    )
 
     texts = [c["text"] for c in cues]
     assert "Host: Welcome." in texts  # Omitted cue 0 preserved identically
@@ -288,7 +290,7 @@ def test_audio_refinement_accepts_unchanged_nested_visual_fragments():
     ]
 
     cues = core.validate_audio_refinement_response(
-        patch_response(), sources, 2.0, [1.0]
+        patch_response(), sources, 2.0, [1.0], source_duration=2.0
     )
 
     assert [cue["text"] for cue in cues] == [source["text"] for source in sources]
@@ -316,7 +318,9 @@ def test_audio_refinement_rejects_changed_nested_visual_fragment():
     )
 
     with pytest.raises(ValueError, match="Bracketed fragments of mixed cue"):
-        core.validate_audio_refinement_response(patch, sources, 2.0, [1.0])
+        core.validate_audio_refinement_response(
+            patch, sources, 2.0, [1.0], source_duration=2.0
+        )
 
 
 @pytest.mark.parametrize("text", ["Missing [close", "Missing open]"])
@@ -325,7 +329,9 @@ def test_audio_refinement_rejects_unbalanced_source_brackets(text):
     sources[0]["text"] = text
 
     with pytest.raises(ValueError, match="source cue contains unmatched brackets"):
-        core.validate_audio_refinement_response(patch_response(), sources, 35.0, [10.0])
+        core.validate_audio_refinement_response(
+            patch_response(), sources, 35.0, [10.0], source_duration=35.0
+        )
 
 
 def test_audio_refinement_accepts_unchanged_cue_included_in_patch():
@@ -335,10 +341,71 @@ def test_audio_refinement_accepts_unchanged_cue_included_in_patch():
     patch = patch_response(
         cues=[patch_cue([0], "00:00:00.000", "00:00:05.000", "Host: Welcome.")]
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [10.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [10.0], source_duration=35.0
+    )
     assert [(c["start"], c["end"], c["text"]) for c in cues] == [
         (source["start"], source["end"], source["text"]) for source in sources
     ]
+
+
+@pytest.mark.parametrize("echoed", [False, True], ids=["omitted", "echoed"])
+@pytest.mark.parametrize("text", ["[End card]", "Host: Goodbye. [End card]"])
+def test_unchanged_visual_cue_survives_short_audio(echoed, text):
+    source = {
+        "id": 0,
+        "start": "00:00:09.000",
+        "end": "00:00:10.000",
+        "text": text,
+        "classification": core.classify_cue_text(text),
+    }
+    patch = patch_response(
+        cues=[patch_cue([0], source["start"], source["end"], text)] if echoed else []
+    )
+
+    cues = core.validate_audio_refinement_response(
+        patch, [source], 8.0, [5.0], source_duration=10.0
+    )
+
+    assert [(cue["start"], cue["end"], cue["text"]) for cue in cues] == [
+        (source["start"], source["end"], text)
+    ]
+
+
+def test_unchanged_visual_cue_past_video_end_is_rejected():
+    source = {
+        "id": 0,
+        "start": "00:00:09.000",
+        "end": "00:00:10.100",
+        "text": "[End card]",
+        "classification": "editorial",
+    }
+    with pytest.raises(ValueError, match="source video duration"):
+        core.validate_audio_refinement_response(
+            patch_response(), [source], 8.0, [5.0], source_duration=10.0
+        )
+
+
+@pytest.mark.parametrize(
+    ("lineage", "text"),
+    [([], "Host: Recovered."), ([0], "Host: Changed. [End card]")],
+    ids=["recovered dialogue", "changed mixed cue"],
+)
+def test_changed_or_recovered_cues_cannot_extend_to_video_end(lineage, text):
+    source = {
+        "id": 0,
+        "start": "00:00:06.000",
+        "end": "00:00:07.000",
+        "text": "Host: Original. [End card]",
+        "classification": "mixed",
+    }
+    patch = patch_response(
+        cues=[patch_cue(lineage, "00:00:08.500", "00:00:09.000", text)]
+    )
+    with pytest.raises(ValueError, match="complete audio duration"):
+        core.validate_audio_refinement_response(
+            patch, [source], 8.0, [5.0], source_duration=10.0
+        )
 
 
 def test_audio_refinement_discards_edits_outside_repair_regions():
@@ -350,7 +417,9 @@ def test_audio_refinement_discards_edits_outside_repair_regions():
         cues=[patch_cue([0], "00:00:00.000", "00:00:04.000", "Host: Altered.")],
         deleted=[1],
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [21.0], source_duration=35.0
+    )
     assert [(c["start"], c["end"], c["text"]) for c in cues] == [
         (source["start"], source["end"], source["text"]) for source in sources
     ]
@@ -364,7 +433,9 @@ def test_audio_refinement_discards_merge_referencing_outside_sources():
     patch = patch_response(
         cues=[patch_cue([1, 2], "00:00:05.000", "00:00:15.000", "Host: Merged talk.")]
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [21.0], source_duration=35.0
+    )
     assert [(c["start"], c["end"], c["text"]) for c in cues] == [
         (source["start"], source["end"], source["text"]) for source in sources
     ]
@@ -377,7 +448,9 @@ def test_audio_refinement_discards_recovered_cues_outside_repair_regions():
     patch = patch_response(
         cues=[patch_cue([], "00:00:33.000", "00:00:35.000", "Host: Recovered.")]
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [21.0], source_duration=35.0
+    )
     assert [(c["start"], c["end"], c["text"]) for c in cues] == [
         (source["start"], source["end"], source["text"]) for source in sources
     ]
@@ -399,7 +472,9 @@ def test_audio_refinement_discards_recovered_cues_outside_repair_regions():
 def test_audio_refinement_rejects_unknown_source_ids_after_filtering(patch, match):
     sources = source_entries()
     with pytest.raises(ValueError, match=match):
-        core.validate_audio_refinement_response(patch, sources, 35.0, [21.0])
+        core.validate_audio_refinement_response(
+            patch, sources, 35.0, [21.0], source_duration=35.0
+        )
 
 
 def test_audio_refinement_accepts_retimed_cue_within_window_tolerance():
@@ -410,7 +485,9 @@ def test_audio_refinement_accepts_retimed_cue_within_window_tolerance():
     patch = patch_response(
         cues=[patch_cue([2], "00:00:31.000", "00:00:33.000", "Guest: Hello.")]
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 35.0, [20.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 35.0, [20.0], source_duration=35.0
+    )
     assert [(c["start"], c["end"], c["text"]) for c in cues] == [
         ("00:00:00.000", "00:00:05.000", "Host: Welcome."),
         ("00:00:05.000", "00:00:10.000", "Host: First topic."),
@@ -447,7 +524,9 @@ def test_audio_refinement_accepts_merge_skipping_intermediate_editorial_cue():
     patch = patch_response(
         cues=[patch_cue([0, 2], "00:00:00.000", "00:00:04.000", "Host: Part 1 and 2.")]
     )
-    cues = core.validate_audio_refinement_response(patch, sources, 10.0, [2.0])
+    cues = core.validate_audio_refinement_response(
+        patch, sources, 10.0, [2.0], source_duration=10.0
+    )
     assert any(c["text"] == "Host: Part 1 and 2." for c in cues)
     assert any(c["text"] == "[On-screen Card]" for c in cues)
 
@@ -459,7 +538,9 @@ def test_audio_refinement_rejects_merge_skipping_intermediate_dialogue_cue():
         cues=[patch_cue([0, 2], "00:00:00.000", "00:00:15.000", "Host: Merged.")]
     )
     with pytest.raises(ValueError, match="merges source IDs that are not contiguous"):
-        core.validate_audio_refinement_response(patch, sources, 35.0, [10.0])
+        core.validate_audio_refinement_response(
+            patch, sources, 35.0, [10.0], source_duration=35.0
+        )
 
 
 def test_audio_refinement_rejects_retimed_cue_beyond_window_tolerance():
@@ -470,7 +551,9 @@ def test_audio_refinement_rejects_retimed_cue_beyond_window_tolerance():
         cues=[patch_cue([2], "00:00:41.000", "00:00:43.000", "Guest: Hello.")]
     )
     with pytest.raises(ValueError, match="Changed cues must stay inside"):
-        core.validate_audio_refinement_response(patch, sources, 60.0, [20.0])
+        core.validate_audio_refinement_response(
+            patch, sources, 60.0, [20.0], source_duration=60.0
+        )
 
 
 def test_audio_refinement_enforces_visual_preservation():
@@ -480,7 +563,9 @@ def test_audio_refinement_enforces_visual_preservation():
         cues=[patch_cue([3], "00:00:19.500", "00:00:20.500", "[Altered Card]")],
     )
     with pytest.raises(ValueError, match="Pure editorial cue 3 must be preserved"):
-        core.validate_audio_refinement_response(patch_editorial, sources, 35.0, [20.0])
+        core.validate_audio_refinement_response(
+            patch_editorial, sources, 35.0, [20.0], source_duration=35.0
+        )
 
     # Cannot drop bracketed fragments from mixed cue
     patch_mixed = patch_response(
@@ -491,7 +576,9 @@ def test_audio_refinement_enforces_visual_preservation():
     with pytest.raises(
         ValueError, match="Bracketed fragments of mixed cue 4 must be preserved"
     ):
-        core.validate_audio_refinement_response(patch_mixed, sources, 35.0, [20.0])
+        core.validate_audio_refinement_response(
+            patch_mixed, sources, 35.0, [20.0], source_duration=35.0
+        )
 
 
 @pytest.mark.parametrize(
@@ -543,7 +630,9 @@ def test_audio_refinement_enforces_visual_preservation():
 def test_audio_refinement_rejects_invalid_lineage_and_text(patch, match):
     sources = source_entries()
     with pytest.raises(ValueError, match=match):
-        core.validate_audio_refinement_response(patch, sources, 35.0, [10.0, 20.0])
+        core.validate_audio_refinement_response(
+            patch, sources, 35.0, [10.0, 20.0], source_duration=35.0
+        )
 
 
 # --- Pure-Editorial Boundary Merging ---

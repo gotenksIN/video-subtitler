@@ -188,6 +188,8 @@ ffmpeg -y -i <video_file> -map 0:a:0 -vn -sn -c:a libopus -b:a 64k -ac 1 -ar 480
 The temporary file is published atomically with `os.replace()`.
 A cached `extracted_audio.ogg` is reused only when FFprobe reports one mono Opus stream at 48 kHz, a positive finite duration, and a duration within 2.0 seconds of the source media duration.
 Corrupt or inconsistent audio is regenerated.
+Extraction returns both audio and source-video durations to the pipeline and benchmark runner.
+The audio refinement validator uses both durations without probing the media again.
 
 ## Chunking and segmentation
 
@@ -409,6 +411,10 @@ Request configuration:
 3. Host validates envelope containment, visual fragment multiset equality, and timestamp validity.
    Changed cues may exceed their strict envelope by up to the repair window on each side.
    Recovered cues may exceed a repair region by up to the repair window on each side.
+   An unchanged singleton editorial or mixed cue keeps its exact source timing through the source-video end, even if the audio ends earlier.
+   This applies to omitted cues reconstructed by the host and identical cues echoed by the model.
+   Visual cues past the source-video end fail validation; recovered and changed cues still obey the audio end with the existing 0.5-second clamp.
+   Cached patches are revalidated with the supplied source-video duration without changing cache identity or contract version.
 4. Host publishes through `io.atomic_save_vtt()`, which reads back the temporary file and verifies cue equality before `os.replace()`.
 
 ## Global text refinement

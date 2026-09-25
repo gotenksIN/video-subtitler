@@ -71,7 +71,8 @@ def run_boundary_refine(monkeypatch, tmp_path, calls=(), model_name="audio-model
         output,
         "key",
         None,
-        model_name,
+        model_name=model_name,
+        source_duration=AUDIO_DURATION,
         source_title="Show Title",
     )
     return output, client
@@ -106,6 +107,52 @@ def test_boundary_refinement_publishes_candidate_and_reuses_cache(
     output2, client2 = run_boundary_refine(monkeypatch, tmp_path)
     assert client2.requests == []
     assert read_captions(output2) == refined_captions()
+
+
+def test_trailing_visual_survives_fresh_and_cached_audio_refinement(
+    tmp_path, monkeypatch
+):
+    stitched = write_vtt(
+        tmp_path / "stitched.vtt",
+        [
+            ("00:00:01.000", "00:00:03.000", "Host: Hello."),
+            ("00:00:09.000", "00:00:10.000", "[End card]"),
+        ],
+    )
+    audio = tmp_path / "extracted_audio.ogg"
+    audio.write_bytes(b"ogg audio bytes")
+    output = tmp_path / "output.vtt"
+    expected = [
+        ("00:00:01.000", "00:00:03.000", "Host: Hello."),
+        ("00:00:09.000", "00:00:10.000", "[End card]"),
+    ]
+
+    for calls, expected_requests in (
+        (
+            [
+                audio_call(
+                    [json.dumps({"contractVersion": "sparse-patch-v1", "cues": []})]
+                )
+            ],
+            1,
+        ),
+        ([], 0),
+    ):
+        client = ScriptedGeminiClient(calls)
+        use_client(monkeypatch, client)
+        gemini.boundary_audio_refine_subtitles(
+            stitched,
+            audio,
+            8.0,
+            [5.0],
+            tmp_path,
+            output,
+            "key",
+            None,
+            source_duration=10.0,
+        )
+        assert len(client.requests) == expected_requests
+        assert read_captions(output) == expected
 
 
 def test_cached_audio_refinement_regenerates_on_mismatch_or_corruption(

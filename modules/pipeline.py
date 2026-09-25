@@ -274,7 +274,7 @@ def run_generation(config: GenerationConfig) -> None:
                     "Failed to extract complete audio. "
                     "The source may not contain an audio stream."
                 )
-            audio_path, audio_duration, _source_duration, _cached = (
+            audio_path, audio_duration, source_duration, _cached = (
                 media.extract_complete_audio(config.video_path, chunk_dir)
             )
 
@@ -329,6 +329,7 @@ def run_generation(config: GenerationConfig) -> None:
                 stitched_vtt=stitched_vtt,
                 audio_path=audio_path,
                 audio_duration=audio_duration,
+                source_duration=source_duration,
                 boundaries=[chunk["start"] for chunk in chunks[1:]],
                 work_dir=chunk_dir,
                 output_vtt=audio_refined_vtt,

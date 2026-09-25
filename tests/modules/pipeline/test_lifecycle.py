@@ -1,11 +1,21 @@
 """Complete generation lifecycle and recovery outcomes."""
 
+import json
+import shutil
+import subprocess
 from dataclasses import replace
 
 import pytest
 import webvtt
 
 from modules import core, gemini, media, pipeline
+from tests.support.gemini_fakes import (
+    ScriptedGeminiClient,
+    audio_call,
+    chunk_call,
+    read_captions,
+    use_client,
+)
 from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 
 
@@ -79,6 +89,81 @@ def install_refiners(monkeypatch):
 
 def active_work_directory(tmp_path):
     return next(iter((tmp_path / "work_root").iterdir()))
+
+
+def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypatch):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not shutil.which("ffprobe"):
+        pytest.fail("this test requires ffmpeg and ffprobe in PATH")
+    video = tmp_path / "source.mp4"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x64:rate=25:duration=2.4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1.4",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            str(video),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
+    install_preflight(monkeypatch)
+    client = ScriptedGeminiClient(
+        [
+            chunk_call(
+                [
+                    json.dumps(
+                        {
+                            "captions": [
+                                {
+                                    "id": 0,
+                                    "start": "1.8",
+                                    "end": "2.3",
+                                    "text": "[End card]",
+                                }
+                            ]
+                        }
+                    )
+                ]
+            ),
+            audio_call(
+                [json.dumps({"contractVersion": "sparse-patch-v1", "cues": []})]
+            ),
+        ]
+    )
+    use_client(monkeypatch, client)
+    config = pipeline.GenerationConfig(
+        video_path=video,
+        output_path=tmp_path / "output.vtt",
+        model="model",
+        api_key="key",
+        chunk_dur=60,
+        workers=1,
+        thinking_level="high",
+        audio_refine=True,
+        refine_text=False,
+    )
+
+    pipeline.run_generation(config)
+
+    assert read_captions(config.output_path) == [
+        ("00:00:01.800", "00:00:02.300", "[End card]")
+    ]
+    assert len(client.requests) == 2
 
 
 @pytest.mark.parametrize(

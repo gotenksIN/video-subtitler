@@ -1021,7 +1021,7 @@ def discard_audio_refinement_cache(work_dir):
 
 
 def validated_cached_audio_refinement(
-    work_dir, identity, source_entries, audio_duration, boundaries
+    work_dir, identity, source_entries, audio_duration, boundaries, *, source_duration
 ):
     """Return output for a valid cache, or discard an invalid cache."""
     cached = load_cached_audio_refinement(work_dir, identity)
@@ -1029,7 +1029,11 @@ def validated_cached_audio_refinement(
         return None
     try:
         validated = core.validate_audio_refinement_response(
-            cached, source_entries, audio_duration, boundaries
+            cached,
+            source_entries,
+            audio_duration,
+            boundaries,
+            source_duration=source_duration,
         )
     except ValueError as error:
         print(
@@ -1050,6 +1054,8 @@ def boundary_audio_refine_subtitles(
     output_vtt,
     api_key,
     base_url,
+    *,
+    source_duration,
     model_name=DEFAULT_AUDIO_REFINE_MODEL,
     source_title=None,
 ):
@@ -1059,7 +1065,12 @@ def boundary_audio_refine_subtitles(
         stitched_vtt, audio_path, audio_duration, boundaries, model_name
     )
     validated = validated_cached_audio_refinement(
-        work_dir, identity, source_entries, audio_duration, boundaries
+        work_dir,
+        identity,
+        source_entries,
+        audio_duration,
+        boundaries,
+        source_duration=source_duration,
     )
     response_to_cache = None
     raw_json = None
@@ -1086,6 +1097,7 @@ def boundary_audio_refine_subtitles(
                     source_entries,
                     audio_duration,
                     boundaries,
+                    source_duration=source_duration,
                 )
             except ValueError as error:
                 raise RuntimeError(

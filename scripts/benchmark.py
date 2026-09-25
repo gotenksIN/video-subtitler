@@ -204,6 +204,7 @@ def run_audio_refinement(
     output_vtt,
     audio_path,
     audio_duration,
+    source_duration,
     boundaries,
     work_dir,
     source_title,
@@ -214,6 +215,7 @@ def run_audio_refinement(
         stitched_vtt=str(stitched_vtt),
         audio_path=str(audio_path),
         audio_duration=audio_duration,
+        source_duration=source_duration,
         boundaries=boundaries,
         work_dir=str(work_dir),
         output_vtt=str(output_vtt),
@@ -329,14 +331,15 @@ def _run_full_matrix(args, output_dir):
     # 2. Extract complete audio when audio refinement is required.
     audio_path = None
     audio_duration = 0.0
+    source_duration = 0.0
     needs_audio = any(audio_model is not None for _, audio_model, _ in cases)
     if needs_audio:
         if not media.has_audio_stream(str(args.video_file)):
             raise RuntimeError(
                 "Source video does not contain an audio stream for audio refinement."
             )
-        audio_path, audio_duration, _source_dur, _reused = media.extract_complete_audio(
-            str(args.video_file), str(work_dir)
+        audio_path, audio_duration, source_duration, _reused = (
+            media.extract_complete_audio(str(args.video_file), str(work_dir))
         )
 
     # 3. Chunk generation per unique generation model.
@@ -404,6 +407,7 @@ def _run_full_matrix(args, output_dir):
             audio_output,
             audio_path,
             audio_duration,
+            source_duration,
             boundaries,
             audio_work,
             source_title,

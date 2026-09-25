@@ -568,7 +568,7 @@ def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
 
 
 def validate_audio_refinement_response(
-    response, source_entries, audio_duration, boundaries
+    response, source_entries, audio_duration, boundaries, *, source_duration
 ):
     """Reconstruct and validate the complete candidate before writing files.
 
@@ -588,6 +588,7 @@ def validate_audio_refinement_response(
     )
     regions = build_repair_regions(boundaries)
     audio_duration_ms = round(audio_duration * 1000)
+    source_duration_ms = round(source_duration * 1000)
 
     deleted = list(response.deleted_source_ids)
     if len(set(deleted)) != len(deleted):
@@ -621,7 +622,26 @@ def validate_audio_refinement_response(
         end_ms = round(parse_time(end) * 1000)
         if start_ms < 0:
             raise ValueError(f"Audio refinement cue has a negative start: {start}")
-        if end_ms > audio_duration_ms:
+        cue_text = "\n".join(
+            line.rstrip() for line in cue.text.strip().splitlines() if line.strip()
+        )
+        candidate = {
+            "source_ids": cue_ids,
+            "start": start,
+            "end": end,
+            "text": cue_text,
+        }
+        unchanged_visual = (
+            len(cue_ids) == 1
+            and cue_ids[0] in source_by_id
+            and source_by_id[cue_ids[0]]["classification"] in {"editorial", "mixed"}
+            and is_identical_copy(candidate, source_by_id)
+        )
+        if unchanged_visual and end_ms > source_duration_ms:
+            raise ValueError(
+                f"Unchanged visual cue {start} --> {end} exceeds the source video duration"
+            )
+        if end_ms > audio_duration_ms and not unchanged_visual:
             if end_ms - audio_duration_ms > 500:
                 raise ValueError(
                     f"Audio refinement cue {start} --> {end} exceeds the "
@@ -634,9 +654,6 @@ def validate_audio_refinement_response(
                 f"Audio refinement cue {start} --> {end} rounds to a "
                 "non-positive interval"
             )
-        cue_text = "\n".join(
-            line.rstrip() for line in cue.text.strip().splitlines() if line.strip()
-        )
         response_cues.append(
             {
                 "source_ids": cue_ids,
