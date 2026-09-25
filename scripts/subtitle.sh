@@ -2,10 +2,10 @@
 set -euo pipefail
 
 usage() {
-    printf 'Usage: %s VIDEO\n' "${0##*/}" >&2
+    printf 'Usage: %s VIDEO [CONTEXT_URL]\n' "${0##*/}" >&2
 }
 
-if [ "$#" -ne 1 ]; then
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
     usage
     exit 2
 fi
@@ -17,7 +17,9 @@ VIDEO="$1"
 OUTPUT="${VIDEO}.vtt"
 
 CONTEXT_ARGS=()
-if [ -t 0 ]; then
+if [ "$#" -eq 2 ]; then
+    CONTEXT_ARGS+=(--context-url "$2")
+elif [ -t 0 ]; then
     printf 'Optional context URL for grounded refinement (blank to skip): ' >&2
     read -r CONTEXT_URL || true
     if [[ "${CONTEXT_URL:-}" =~ [^[:space:]] ]]; then

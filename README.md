@@ -94,9 +94,19 @@ Generate subtitles for a local video:
 ```
 
 The subtitle helper writes output to `your_video.webm.vtt`.
-When standard input is a terminal, it prompts once for an optional context URL for grounded refinement.
+If you omit the context URL argument, the helper checks standard input.
+It prompts once for an optional context URL only when standard input is a terminal.
 Press Enter with a blank answer to skip it.
-Noninteractive usage never prompts.
+
+For noninteractive execution with grounded context, supply the URL as the second argument:
+```bash
+./scripts/subtitle.sh "your_video.webm" "https://youtube.com/watch?v=..."
+```
+
+Noninteractive execution without a context URL never prompts:
+```bash
+./scripts/subtitle.sh "your_video.webm" </dev/null
+```
 
 Benchmark subtitle generation and refinement models across full video runs:
 ```bash
@@ -115,6 +125,13 @@ The benchmark saves generated subtitles and `benchmark-results.json` to the outp
 Generate English subtitles from a video:
 ```bash
 uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
+```
+
+Supply context URLs noninteractively for character name research and terminology grounding:
+```bash
+uv run python gemini_subs.py "your_video.webm" \
+  --context-url "https://youtube.com/watch?v=..." \
+  --output "generated_subtitles.vtt"
 ```
 
 ### Audio-first processing and refinement
