@@ -91,10 +91,7 @@ def parse_args():
         "--thinking-level",
         choices=gemini.THINKING_LEVELS,
         default=None,
-        help=(
-            "Gemini thinking level for chunk video requests (minimal, low, medium, high). "
-            "minimal requires a Flash model."
-        ),
+        help=("Gemini 3+ thinking level for chunk video requests (low, medium, high)."),
     )
     return parser.parse_args()
 
@@ -292,8 +289,6 @@ def _run_full_matrix(args, output_dir):
         dict.fromkeys([gen for gen, _, _ in cases] + (args.model or []))
     )
     thinking_level = args.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
-    for model in generation_models:
-        gemini.validate_thinking_level_for_model(model, thinking_level)
     args.thinking_level = thinking_level
 
     source_title = core.derive_source_title(args.video_file)

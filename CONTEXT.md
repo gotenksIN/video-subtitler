@@ -120,9 +120,8 @@ CLI arguments take precedence over environment variables.
 | `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-3.8-flash` | Boundary audio refinement model. |
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-3.1-pro-preview` | Full-script refinement model. |
 
-The chunk thinking level accepts `minimal`, `low`, `medium`, and `high`.
+The chunk thinking level accepts `low`, `medium`, and `high` for Gemini 3+ models.
 It defaults to `high`.
-`minimal` is valid only when the model name contains `flash` (case-insensitive).
 The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
 Every request configured with a thinking level sets `include_thoughts=True`.

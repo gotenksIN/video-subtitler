@@ -24,8 +24,8 @@ def make_config(tmp_path, **overrides):
         ({"chunk_dur": 0}, "chunk-dur must be greater than 0"),
         ({"workers": 0}, "workers must be greater than 0"),
         (
-            {"model": "gemini-pro", "thinking_level": "minimal"},
-            "only supported by Flash",
+            {"model": "gemini-flash", "thinking_level": "minimal"},
+            "thinking-level must be low, medium, or high",
         ),
     ],
 )

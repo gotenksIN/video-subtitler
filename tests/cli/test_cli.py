@@ -75,7 +75,7 @@ def test_unknown_option_is_a_usage_error(tmp_path):
 
 def test_invalid_thinking_level_choice_is_a_usage_error(tmp_path):
     video = make_video(tmp_path)
-    process = run_cli(str(video), "--thinking-level", "extreme", cwd=tmp_path)
+    process = run_cli(str(video), "--thinking-level", "minimal", cwd=tmp_path)
 
     assert process.returncode == 2
     assert "invalid choice" in output(process)
@@ -102,15 +102,10 @@ def test_non_integer_chunk_duration_is_a_usage_error(tmp_path):
             ("--api-key", "key", "--workers", "0"),
             "workers must be greater than 0",
         ),
-        (
-            "source.mp4",
-            ("--api-key", "key", "--model", "pro", "--thinking-level", "minimal"),
-            "only supported by Flash",
-        ),
         ("missing.mp4", ("--api-key", "key"), "Video file not found"),
         ("source.mp4", (), "API key not configured"),
     ],
-    ids=["chunk duration", "workers", "thinking level", "missing video", "missing key"],
+    ids=["chunk duration", "workers", "missing video", "missing key"],
 )
 def test_generation_validation_failures_exit_one_with_stable_diagnostics(
     tmp_path, input_name, arguments, message
@@ -132,44 +127,6 @@ def test_api_key_environment_variable_is_accepted(tmp_path):
     assert "Failed to probe video format" in text
     assert "API key not configured" not in text
     assert not (tmp_path / "temp_video_chunks").exists()
-
-
-def test_environment_model_allows_minimal_thinking_for_flash(tmp_path):
-    video = make_video(tmp_path)
-    process = run_cli(
-        str(video),
-        "--api-key",
-        "key",
-        "--thinking-level",
-        "minimal",
-        cwd=tmp_path,
-        extra_env={"GEMINI_MODEL": "gemini-flash"},
-    )
-
-    assert process.returncode == 1
-    text = output(process)
-    assert "Failed to probe video format" in text
-    assert "only supported by Flash" not in text
-
-
-def test_cli_model_overrides_environment_model(tmp_path):
-    video = make_video(tmp_path)
-    process = run_cli(
-        str(video),
-        "--api-key",
-        "key",
-        "--model",
-        "cli-flash",
-        "--thinking-level",
-        "minimal",
-        cwd=tmp_path,
-        extra_env={"GEMINI_MODEL": "environment-pro"},
-    )
-
-    assert process.returncode == 1
-    text = output(process)
-    assert "Failed to probe video format" in text
-    assert "only supported by Flash" not in text
 
 
 def test_generation_rejects_output_resolving_to_the_source(tmp_path):

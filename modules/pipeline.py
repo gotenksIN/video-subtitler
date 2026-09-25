@@ -237,7 +237,8 @@ def validate_generation_config(config: GenerationConfig) -> list[str]:
     if config.workers <= 0:
         raise ValueError("--workers must be greater than 0")
 
-    gemini.validate_thinking_level_for_model(config.model, config.chunk_thinking_level)
+    if config.chunk_thinking_level not in gemini.THINKING_LEVELS:
+        raise ValueError("--thinking-level must be low, medium, or high")
 
     if not config.video_path.exists():
         raise RuntimeError(f"Video file not found: {config.video_path}")

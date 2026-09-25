@@ -84,10 +84,7 @@ def main():
         "--thinking-level",
         choices=gemini.THINKING_LEVELS,
         default=None,
-        help=(
-            "Gemini thinking level for chunk video requests (minimal, low, medium, high). "
-            "minimal requires a Flash model."
-        ),
+        help=("Gemini 3+ thinking level for chunk video requests (low, medium, high)."),
     )
     parser.add_argument(
         "--context-url",

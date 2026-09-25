@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from modules import core, io, media
 
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
-THINKING_LEVELS = ("minimal", "low", "medium", "high")
+THINKING_LEVELS = ("low", "medium", "high")
 DEFAULT_CHUNK_MODEL = "gemini-3.8-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
@@ -25,14 +25,6 @@ AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
 AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
 PREFLIGHT_CONTEXT_FILENAME = "preflight_context.json"
 STREAM_REQUEST_ATTEMPTS = 3
-
-
-def validate_thinking_level_for_model(model_name, thinking_level):
-    """Validate thinking level against model capabilities."""
-    if thinking_level == "minimal" and "flash" not in model_name.lower():
-        raise ValueError(
-            "--thinking-level minimal is only supported by Flash models. Use low, medium, or high for this model."
-        )
 
 
 def create_client(api_key, base_url):

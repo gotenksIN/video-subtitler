@@ -28,8 +28,9 @@ def valid_captions_call(text="Hi"):
     )
 
 
+@pytest.mark.parametrize("thinking_level", ["low", "medium", "high"])
 def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, thinking_level
 ):
     chunk = {"idx": 3, "name": "chunk_003.mp4", "duration": 2.0}
     (tmp_path / chunk["name"]).write_bytes(b"video bytes")
@@ -44,7 +45,7 @@ def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
         tmp_path,
         "chunk-model",
         "video/mp4",
-        "high",
+        thinking_level,
         "Show Title",
     )
 
@@ -57,7 +58,9 @@ def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
     assert request.config.response_schema is core.SubtitleResponse
     assert request.config.automatic_function_calling.disable is True
     assert request.config.tools is None
-    assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
+    assert request.config.thinking_config.thinking_level == getattr(
+        types.ThinkingLevel, thinking_level.upper()
+    )
     assert request.config.thinking_config.include_thoughts is True
     assert request.config.temperature == 0.0
 

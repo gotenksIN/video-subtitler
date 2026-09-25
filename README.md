@@ -176,8 +176,7 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`).
 - `--workers`: Maximum concurrent API workers (default: `7`).
 - `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
-  Supported levels are `minimal`, `low`, `medium`, and `high`.
-  `minimal` requires a Flash model.
+  Supported levels are `low`, `medium`, and `high` for Gemini 3+ models.
   The global text refinement pass always uses `high`.
   The boundary audio refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
