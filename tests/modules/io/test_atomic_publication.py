@@ -34,7 +34,7 @@ def test_vtt_publication_writes_a_readable_webvtt_file(tmp_path):
     value = webvtt.WebVTT()
     value.captions.extend(
         [
-            webvtt.Caption("00:00:00.000", "00:00:01.000", "One"),
+            webvtt.Caption("00:00:00.000", "00:00:01.000", "One\nTwo"),
             webvtt.Caption("00:00:01.000", "00:00:02.000", "Two"),
         ]
     )
@@ -43,9 +43,38 @@ def test_vtt_publication_writes_a_readable_webvtt_file(tmp_path):
 
     result = webvtt.read(output)
     assert [(c.start, c.end, c.text) for c in result] == [
-        ("00:00:00.000", "00:00:01.000", "One"),
+        ("00:00:00.000", "00:00:01.000", "One\nTwo"),
         ("00:00:01.000", "00:00:02.000", "Two"),
     ]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["output.vtt"]
+
+
+def test_empty_vtt_publication(tmp_path):
+    output = tmp_path / "output.vtt"
+    io.atomic_save_vtt(webvtt.WebVTT(), output)
+    assert list(webvtt.read(output)) == []
+
+
+def test_serialization_loss_preserves_previous_output(tmp_path):
+    output = tmp_path / "output.vtt"
+    output.write_text("previous", encoding="utf-8")
+
+    class LossyVtt:
+        def __init__(self):
+            self.captions = [
+                webvtt.Caption("00:00:00.000", "00:00:01.000", "Keep\nBoth")
+            ]
+
+        def save(self, path):
+            value = webvtt.WebVTT()
+            value.captions.append(
+                webvtt.Caption("00:00:00.000", "00:00:01.000", "Keep")
+            )
+            value.save(path)
+
+    with pytest.raises(ValueError, match="Serialized VTT"):
+        io.atomic_save_vtt(LossyVtt(), output)
+    assert output.read_text(encoding="utf-8") == "previous"
     assert sorted(path.name for path in tmp_path.iterdir()) == ["output.vtt"]
 
 
@@ -54,6 +83,9 @@ def test_failed_vtt_save_preserves_the_target_and_cleans_up(tmp_path):
     output.write_text("previous", encoding="utf-8")
 
     class FailingVtt:
+        def __init__(self):
+            self.captions = []
+
         def save(self, _path):
             raise OSError("save failed")
 

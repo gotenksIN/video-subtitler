@@ -1041,31 +1041,6 @@ def validated_cached_audio_refinement(
     return validated
 
 
-def revalidate_candidate(candidate_path, output_entries):
-    """Verify that VTT serialization preserved every validated cue exactly."""
-    vtt = webvtt.read(str(candidate_path))
-    actual = [(caption.start, caption.end, caption.text) for caption in vtt]
-    expected = [
-        (entry["start"], entry["end"], entry["text"]) for entry in output_entries
-    ]
-    if actual != expected:
-        diff_preview = ""
-        for i, (a, e) in enumerate(zip(actual, expected)):
-            if a != e:
-                diff_preview = (
-                    f" (first mismatch at index {i}: actual={a!r}, expected={e!r})"
-                )
-                break
-        if not diff_preview and len(actual) != len(expected):
-            diff_preview = (
-                f" (length mismatch: actual={len(actual)}, expected={len(expected)})"
-            )
-        raise ValueError(
-            "Serialized candidate does not match the validated audio "
-            f"refinement response{diff_preview}"
-        )
-
-
 def boundary_audio_refine_subtitles(
     stitched_vtt,
     audio_path,
@@ -1124,7 +1099,6 @@ def boundary_audio_refine_subtitles(
                 webvtt.Caption(entry["start"], entry["end"], entry["text"])
             )
         io.atomic_save_vtt(candidate_vtt, candidate_tmp)
-        revalidate_candidate(candidate_tmp, output_entries)
         os.replace(candidate_tmp, candidate_path)
         if response_to_cache is not None:
             store_audio_refinement_cache(work_dir, identity, response_to_cache)

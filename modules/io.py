@@ -5,6 +5,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import webvtt
+
 MANIFEST_NAME = "manifest.json"
 
 
@@ -18,6 +20,7 @@ def atomic_write_json(path, data):
 
 def atomic_save_vtt(vtt, path):
     """Save WebVTT content to a destination atomically."""
+    expected = [(cue.start, cue.end, cue.text) for cue in vtt.captions]
     path = Path(path)
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp.vtt", dir=path.parent
@@ -26,6 +29,11 @@ def atomic_save_vtt(vtt, path):
     tmp_path = Path(tmp_name)
     try:
         vtt.save(str(tmp_path))
+        persisted = [
+            (cue.start, cue.end, cue.text) for cue in webvtt.read(str(tmp_path))
+        ]
+        if persisted != expected:
+            raise ValueError("Serialized VTT does not match the intended captions")
         os.replace(tmp_path, path)
     finally:
         tmp_path.unlink(missing_ok=True)

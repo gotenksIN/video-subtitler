@@ -407,7 +407,7 @@ Request configuration:
 3. Host validates envelope containment, visual fragment multiset equality, and timestamp validity.
    Changed cues may exceed their strict envelope by up to the repair window on each side.
    Recovered cues may exceed a repair region by up to the repair window on each side.
-4. Host serializes to `audio_refined.vtt.tmp`, reads back to verify cue equality, and publishes with `os.replace()`.
+4. Host publishes through `io.atomic_save_vtt()`, which reads back the temporary file and verifies cue equality before `os.replace()`.
 
 ## Global text refinement
 
@@ -483,7 +483,7 @@ Atomic writes:
 - Chunk JSON uses `.tmp` sibling + `os.replace()`.
 - Preflight context uses `io.atomic_write_json()` with a `.tmp` sibling + `os.replace()`.
 - Extracted audio uses `.tmp` sibling + `os.replace()`.
-- VTT publication uses `io.atomic_save_vtt()` (`.{name}.<random>.tmp.vtt` + `os.replace()`).
+- VTT publication uses `io.atomic_save_vtt()` (`.{name}.<random>.tmp.vtt` + read-back cue verification + `os.replace()`).
 
 Recovery on retry:
 - Valid `segments.csv` and chunk files skip splitting.
