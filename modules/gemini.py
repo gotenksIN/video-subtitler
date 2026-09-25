@@ -19,6 +19,7 @@ DEFAULT_CHUNK_MODEL = "gemini-3.8-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "high"
+REFINEMENT_MAX_OUTPUT_TOKENS = 65536
 DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.8-flash"
 AUDIO_REFINE_THINKING_LEVEL = "high"
 AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
@@ -514,6 +515,7 @@ def build_refinement_config(thinking_level):
     """Build structured config for script refinement without tools."""
     kwargs = {
         "temperature": 0.0,
+        "max_output_tokens": REFINEMENT_MAX_OUTPUT_TOKENS,
         "response_mime_type": "application/json",
         "response_schema": core.RefinementResponse,
     }

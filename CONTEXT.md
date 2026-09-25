@@ -448,7 +448,7 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 
 ### Structured refinement (Pass 3)
 
-1. Model: `gemini-3.1-pro-preview` (thinking level `high`, temp `0.0`).
+1. Model: `gemini-3.1-pro-preview` (thinking level `high`, temp `0.0`, `max_output_tokens: 65536`).
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
