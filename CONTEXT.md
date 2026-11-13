@@ -129,7 +129,7 @@ CLI errors go to standard error.
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-4-hydrogen` | Full-script refinement model. |
 
 For programmatic generation, an omitted `GenerationConfig.audio_refine_model` or `GenerationConfig.refine_model` uses `config.model`.
-The CLI supplies the separate refinement defaults shown above.
+The CLI supplies the separate refinement defaults shown above, except `--refine-only` falls back to `--model` when `--refine-model` and `GEMINI_REFINE_MODEL` are omitted.
 
 The chunk thinking level accepts `low`, `medium`, `high`, and `xhigh`.
 It defaults to `high`.
@@ -253,7 +253,7 @@ Continuation is separate from automatic function calling, which stays disabled.
 All five request types use one host stream reader.
 Transport failures, malformed SSE JSON, rate limits, and 5xx errors during stream consumption restart the request within a limit of 3 host attempts.
 Each restart discards partial answer text and grounding metadata and waits 1 second, then 2 seconds.
-All streams reject `MAX_TOKENS` and other failure finish reasons before parsing or publication.
+All streams reject `MAX_TOKENS`, prompt-level blocks (`prompt_feedback.block_reason`), zero-candidate streams, and other failure finish reasons before parsing or publication.
 Chunk workers reuse one client across their retry attempts and close only their own client.
 Each chunk worker makes up to 3 attempts per chunk to recover from transient host-side response validation failures.
 Examples are malformed JSON, a schema violation, inverted timestamps, and a collapsed interval.
@@ -392,7 +392,7 @@ Periods in titles and initials, such as `Mr. Kim:`, `Dr. Lee:`, and `J.Y. Park:`
 `canonicalize_speaker_casing(vtt, grounded_names=None)` rewrites each speaker label to one canonical spelling per case-insensitive label group.
 It accepts a `webvtt.WebVTT` object or a list of `webvtt.Caption` objects, and it modifies the object in place.
 
-The algorithm runs two passes over non-editorial cues:
+The algorithm runs two passes over non-editorial cues, skipping lines that begin inside multiline `[...]` bracketed fragments:
 
 1. Collection: every line matching `SPEAKER_LABEL_RE` adds one occurrence to its casefolded label group.
 2. Rewrite: every matched label becomes its group's canonical spelling.
@@ -492,6 +492,7 @@ It stores the result as `preflight_context.json` in the work directory.
 A valid cached file is reused on retry, so no research request repeats.
 The cache must match the source title, validated context URLs, generation model, and thinking level.
 Missing or mismatched identity fields cause a cache miss and remove the stale file.
+When a cached preflight file has a mismatched `context_urls` value, the host also removes cached `subtitle_chunk_NNN.json` files so chunk generation reruns with the updated candidate roster.
 Changing `--context-url` or `--model` on retry repeats Pass 0.
 A successful run removes the file during work-directory cleanup.
 The pass uses the generation model (`config.model`) with thinking level `high`.
@@ -514,7 +515,8 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Attached video Parts for public YouTube URLs.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
 3. **Context assembly:**
-   - Section splitting: The host splits the research text into identity and terminology sections at the section headers. Header matching is case-insensitive with an optional trailing colon, and text before the first header stays in the identity section, so research output without headers keeps working as identity context.
+   - Section splitting: The host splits the research text into identity and terminology sections at the section headers.
+     Header matching strips surrounding Markdown heading or emphasis markers (`#`, `*`), ignores case and an optional trailing colon, and keeps text before the first header in the identity section so research output without headers keeps working as identity context.
    - `grounded_names` collects the canonical name entries (leading `Name:` lines) from the identity section.
      Extraction excludes placeholder and summary labels, catch-all prefixes, and plural speaker or participant groups.
      Dotted titles and initials, such as `Mr. Kim` and `J.Y. Park`, and concrete roles, such as `Host` and `Shop Owner`, remain valid.
@@ -542,7 +544,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
       When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to at most two lines of no more than 42 characters each.
       Mixed cues and multi-speaker cues retain their visual content and separate turns within the two-line cue limit; the wrapping exception never permits a third line.
 6. Output: `RefinementResponse` applied atomically to target.
-   Before applying any change, the host verifies balanced brackets, unchanged cue class and outer visual fragment count, and separate nonempty dialogue turns.
+   Before applying any change, the host verifies nonempty lines without internal blank lines or carriage returns, balanced brackets, unchanged cue class and outer visual fragment count, and separate nonempty dialogue turns.
    Labeled turns retain labels at their original positions; unlabeled turns cannot gain labels.
    Existing label spelling and visual text within brackets may be corrected.
    Line wraps continue the same turn, and adjacent labeled turns remain separate even when written on one line.
@@ -597,13 +599,15 @@ Runs matrix benchmarking with per-generation-model preflight research and three 
 - `--reference-vtt`: Optional reference subtitles for comparison.
 - Outputs `benchmark_results/benchmark-results.json` and stage VTTs.
 
-The runner caches one preflight context per generation model in that model's generation work directory.
+The runner caches one preflight context per generation model and validated context URL set in that model's generation work directory.
 Each generation model runs Pass 0 with thinking level `high`, including chunk-only runs.
 Chunk prompts receive that model's grounded names as candidate identities.
 Text refinement reuses the context for its case's generation model.
 Chunk-only and audio-refined artifacts canonicalize speaker casing without grounded names.
 Single-chunk cases skip audio extraction and Pass 2.
 Manifest hashing and generation input validation reuse pipeline helpers.
+Output filenames truncate sanitized model stems before their hash suffix so combined multi-model names stay within filesystem limits.
+Benchmark JSON records preflight, generation, audio, and text stage timings (summing them into `total_seconds`) alongside `preflight_cached`, `generation_cached`, and `audio_refine_cached` flags.
 
 ### Comparison metrics
 - Text normalization: strip `SPEAKER_LABEL_RE` labels from every line, strip punctuation, and lowercase words.
