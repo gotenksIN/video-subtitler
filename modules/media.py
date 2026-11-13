@@ -211,7 +211,7 @@ def _clean_incomplete_split(chunk_dir):
             or re.fullmatch(r"subtitle_chunk_\d+\.json(\.tmp)?", name)
             or name == "segments.csv"
         ):
-            os.remove(os.path.join(chunk_dir, name))
+            Path(chunk_dir, name).unlink(missing_ok=True)
 
 
 def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):

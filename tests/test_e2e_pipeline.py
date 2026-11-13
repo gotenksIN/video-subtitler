@@ -370,8 +370,46 @@ def test_text_failure_retains_preflight_chunk_and_audio_caches_for_resume(
     assert (work / "audio_refinement.json").is_file()
     assert (work / "preflight_context.json").is_file()
     assert config.output_path.read_text() == "previous"
-    resumed = run(monkeypatch, config, [text_call()])
-    assert [r.kind for r in resumed.requests] == ["text"]
+    (work / "segments.csv").write_text("damaged split index\n", encoding="ascii")
+    first_cleanup, second_cleanup = Event(), Event()
+    real_unlink = Path.unlink
+
+    def overlapping_cleanup(path, *args, **kwargs):
+        if path == work / "subtitle_chunk_000.json":
+            if not first_cleanup.is_set():
+                first_cleanup.set()
+                assert second_cleanup.wait(5)
+            else:
+                result = real_unlink(path, *args, **kwargs)
+                second_cleanup.set()
+                return result
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", overlapping_cleanup)
+    url = "https://example.com/updated"
+    resumed = run(
+        monkeypatch,
+        replace(config, context_urls=(url,)),
+        [
+            research_call(urls=[(url, "URL_RETRIEVAL_STATUS_SUCCESS")]),
+            chunk_call("Host: Updated."),
+            chunk_call("Host: Updated."),
+            audio_call(),
+            text_call(),
+        ],
+    )
+    assert [r.kind for r in resumed.requests] == [
+        "research",
+        "chunk",
+        "chunk",
+        "audio",
+        "text",
+    ]
+    assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
+        "Host: Updated.",
+        "Host: Updated.",
+    ]
+    assert second_cleanup.is_set()
     assert [p.name for p in work.iterdir()] == [pipeline.LOCK_NAME]
 
 
@@ -598,3 +636,22 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
     use_client(monkeypatch, resumed)
     benchmark.run_full_matrix(benchmark.parse_args())
     assert [r.kind for r in resumed.requests] == ["text"]
+    url = "https://example.com/updated"
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--context-url", url])
+    updated = ScriptedGeminiClient(
+        [
+            *(
+                research_call(urls=[(url, "URL_RETRIEVAL_STATUS_SUCCESS")])
+                for _ in range(2)
+            ),
+            *(chunk_call("HOST: Updated.") for _ in range(4)),
+            audio_call(),
+            text_call(),
+        ]
+    )
+    use_client(monkeypatch, updated)
+    benchmark.run_full_matrix(benchmark.parse_args())
+    assert not updated.pending
+    assert [r.kind for r in updated.requests].count("chunk") == 4
+    for path in output.glob("*.generated.vtt"):
+        assert {cue.raw_text for cue in io.read_plain_vtt(path)} == {"HOST: Updated."}

@@ -380,6 +380,7 @@ def _run_full_matrix(args, output_dir):
         generation_identity = {
             "model": gen_model,
             "thinking_level": thinking_level,
+            "context_urls": context_urls,
             "split": split_identity,
         }
         generation_key = pipeline.manifest_digest(generation_identity)

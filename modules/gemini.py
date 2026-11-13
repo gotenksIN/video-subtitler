@@ -835,9 +835,21 @@ def _load_cached_preflight_context(
         return None
     try:
         payload = json.loads(path.read_bytes())
-        identity = _preflight_cache_identity(
-            source_title, context_urls, model_name, thinking_level
-        )
+    except (ValueError, OSError) as error:
+        print(f"Ignoring invalid cached preflight context {path}: {error}")
+        path.unlink(missing_ok=True)
+        return None
+    identity = _preflight_cache_identity(
+        source_title, context_urls, model_name, thinking_level
+    )
+    if (
+        isinstance(payload, dict)
+        and "context_urls" in payload
+        and payload["context_urls"] != identity["context_urls"]
+    ):
+        for chunk_cache in Path(chunk_dir).glob("subtitle_chunk_*.json"):
+            chunk_cache.unlink(missing_ok=True)
+    try:
         if any(
             key not in payload or payload[key] != value
             for key, value in identity.items()
