@@ -374,8 +374,7 @@ def run_generation(config: GenerationConfig) -> None:
                 output_vtt=audio_refined_vtt,
                 api_key=config.api_key,
                 base_url=config.base_url,
-                model_name=config.audio_refine_model
-                or gemini.DEFAULT_AUDIO_REFINE_MODEL,
+                model_name=config.audio_refine_model or config.model,
                 source_title=source_title,
             )
             current_vtt = audio_refined_vtt

@@ -43,14 +43,13 @@ def main():
     )
     parser.add_argument(
         "--refine-model",
-        default=os.environ.get("GEMINI_REFINE_MODEL", gemini.DEFAULT_REFINE_MODEL),
+        default=os.environ.get("GEMINI_REFINE_MODEL") or gemini.DEFAULT_REFINE_MODEL,
         help="Gemini model for the global text refinement pass.",
     )
     parser.add_argument(
         "--audio-refine-model",
-        default=os.environ.get(
-            "GEMINI_AUDIO_REFINE_MODEL", gemini.DEFAULT_AUDIO_REFINE_MODEL
-        ),
+        default=os.environ.get("GEMINI_AUDIO_REFINE_MODEL")
+        or gemini.DEFAULT_AUDIO_REFINE_MODEL,
         help="Gemini model for the boundary audio refinement pass.",
     )
     parser.add_argument(

@@ -115,6 +115,8 @@ Install headless GPL static binaries via `./scripts/ffmpeg.sh`.
 The shell environment and CLI arguments can also provide these values.
 CLI arguments take precedence over environment variables.
 An empty `GEMINI_MODEL` uses the default chunk model.
+An empty `GEMINI_AUDIO_REFINE_MODEL` uses the default audio refinement model.
+An empty `GEMINI_REFINE_MODEL` uses the default text refinement model.
 Both CLI modes reject an output path whose parent is missing or is not a directory before media or API work.
 CLI errors go to standard error.
 
@@ -125,6 +127,9 @@ CLI errors go to standard error.
 | `GEMINI_MODEL` | `--model` | `gemini-4-hydrogen` | Chunk video model. |
 | `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-4-hydrogen` | Boundary audio refinement model. |
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-4-hydrogen` | Full-script refinement model. |
+
+For programmatic generation, an omitted `GenerationConfig.audio_refine_model` or `GenerationConfig.refine_model` uses `config.model`.
+The CLI supplies the separate refinement defaults shown above.
 
 The chunk thinking level accepts `low`, `medium`, `high`, and `xhigh`.
 It defaults to `high`.
@@ -425,6 +430,7 @@ Repairs boundary faults by listening to `extracted_audio.ogg`.
 
 Request configuration:
 - `DEFAULT_AUDIO_REFINE_MODEL = "gemini-4-hydrogen"`
+- An omitted `GenerationConfig.audio_refine_model` uses `config.model`.
 - Fixed thinking level: `HIGH`
 - Thought streaming enabled through `include_thoughts=True`
 - Max output tokens: `65536`
