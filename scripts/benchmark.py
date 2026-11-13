@@ -391,18 +391,12 @@ def _run_full_matrix(args, output_dir):
             "model_name": gen_model,
             "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
         }
-        preflight_context = gemini.load_cached_preflight_context(
-            gen_work, **preflight_identity
+        preflight_context = gemini.load_or_run_preflight_context(
+            gen_work,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            **preflight_identity,
         )
-        if preflight_context is None:
-            preflight_context = gemini.run_preflight_context(
-                api_key=args.api_key,
-                base_url=args.base_url,
-                **preflight_identity,
-            )
-            gemini.store_preflight_context(
-                gen_work, preflight_context, **preflight_identity
-            )
         preflight_contexts[gen_model] = preflight_context
         for chunk in chunks:
             src = work_dir / chunk["name"]

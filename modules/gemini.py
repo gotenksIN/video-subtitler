@@ -845,6 +845,30 @@ def store_preflight_context(
     )
 
 
+def load_or_run_preflight_context(
+    chunk_dir,
+    *,
+    api_key,
+    base_url,
+    source_title,
+    context_urls,
+    model_name,
+    thinking_level,
+) -> core.PreflightContext:
+    """Reuse matching preflight context or run and cache Pass 0."""
+    identity = {
+        "source_title": source_title,
+        "context_urls": context_urls,
+        "model_name": model_name,
+        "thinking_level": thinking_level,
+    }
+    context = load_cached_preflight_context(chunk_dir, **identity)
+    if context is None:
+        context = run_preflight_context(api_key=api_key, base_url=base_url, **identity)
+        store_preflight_context(chunk_dir, context, **identity)
+    return context
+
+
 def global_refine_subtitles(
     input_vtt,
     output_vtt,

@@ -303,22 +303,15 @@ def run_generation(config: GenerationConfig) -> None:
             "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
         }
 
-        def preflight():
-            context = gemini.load_cached_preflight_context(
-                chunk_dir, **preflight_identity
-            )
-            if context is None:
-                context = gemini.run_preflight_context(
-                    api_key=config.api_key,
-                    base_url=config.base_url,
-                    **preflight_identity,
-                )
-                gemini.store_preflight_context(chunk_dir, context, **preflight_identity)
-            return context
-
         # Settle preflight workers before the outer finally releases the lock.
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            preflight_future = executor.submit(preflight)
+            preflight_future = executor.submit(
+                gemini.load_or_run_preflight_context,
+                chunk_dir,
+                api_key=config.api_key,
+                base_url=config.base_url,
+                **preflight_identity,
+            )
             media.split_video(
                 str(config.video_path), chunk_dir, config.chunk_dur, manifest
             )
