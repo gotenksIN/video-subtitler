@@ -98,10 +98,10 @@ The project requires Python 3.14 or newer.
 Use `uv` for dependency installation and tool execution.
 
 Runtime dependencies:
-- `google-genai>=2.0.0` for Gemini API access.
-- `pydantic>=2.13.4` for response schemas and validation.
+- `google-genai>=3.3.0` for Gemini API access.
+- `pydantic>=2.14.0` for response schemas and validation.
 - `python-dotenv>=1.2.2` for `.env` loading.
-- `webvtt-py>=0.5.1` for VTT reading and writing.
+- `webvtt-py>=0.8.0` for strict VTT reading and writing.
 
 The CLI requires `ffmpeg` and `ffprobe` in `PATH`.
 Install headless GPL static binaries via `./scripts/ffmpeg.sh`.

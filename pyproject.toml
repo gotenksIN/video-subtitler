@@ -5,10 +5,10 @@ description = "Gemini-powered CLI for generating VTT subtitles from video."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "google-genai>=2.0.0",
-    "pydantic>=2.13.4",
+    "google-genai>=3.3.0",
+    "pydantic>=2.14.0",
     "python-dotenv>=1.2.2",
-    "webvtt-py>=0.5.1",
+    "webvtt-py>=0.8.0",
 ]
 
 [dependency-groups]
@@ -20,3 +20,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+extend-select = ["BLE001", "SIM115"]
