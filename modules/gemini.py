@@ -365,7 +365,7 @@ def _split_research_sections(research_text):
     terminology_lines = []
     target = identity_lines
     for line in research_text.splitlines():
-        header = line.strip().upper().removesuffix(":")
+        header = line.strip().strip("#* \t").upper().removesuffix(":").strip("* \t")
         if header == _IDENTITY_RESEARCH_SECTION:
             target = identity_lines
         elif header == _TERMINOLOGY_RESEARCH_SECTION:

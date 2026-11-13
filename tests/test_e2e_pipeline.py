@@ -291,9 +291,28 @@ def test_refinement_toggle_matrix_and_programmatic_model_fallback(config, monkey
 
 
 def test_single_chunk_skips_audio_request_but_runs_text_refinement(config, monkeypatch):
-    client = run(monkeypatch, replace(config, chunk_dur=60), calls(chunks=1))
+    client = run(
+        monkeypatch,
+        replace(config, chunk_dur=60),
+        [
+            StreamCall(
+                "research",
+                [
+                    stream_chunk(
+                        "**PARTICIPANTS AND SPEAKERS:**\nHost: Presenter\n"
+                        "## TOPIC TERMINOLOGY AND PROPER NOUNS:\nOpus: Audio codec",
+                        grounding=True,
+                    )
+                ],
+            ),
+            chunk_call("HOST: Hello.\nOPUS: Codec."),
+            text_call(),
+        ],
+    )
     assert [r.kind for r in client.requests] == ["research", "chunk", "text"]
-    assert len(io.read_plain_vtt(config.output_path)) == 1
+    assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
+        "Host: Hello.\nOPUS: Codec."
+    ]
 
 
 def test_silent_video_fails_before_api_when_audio_refinement_is_enabled(
