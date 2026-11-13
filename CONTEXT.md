@@ -313,6 +313,9 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - Rejects duplicate IDs and non-positive intervals (`end <= start` or `start < 0`).
 - Clamps end overruns up to 0.5s beyond chunk duration.
 - Rejects cues that collapse to non-positive intervals after rounding.
+- Rejects empty text, blank lines, reserved `-->` separators, and unmatched square brackets.
+- Removes one trailing newline and rejects additional trailing blank lines.
+- Preserves valid multiline cue text.
 - Sorts captions by start time and ID.
 - Overlapping cues keep their canonical timing.
 
@@ -338,8 +341,9 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - Reject any source or candidate audio-refinement cue with an unmatched opening or closing bracket.
 
 ### Speaker label pattern
-`SPEAKER_LABEL_RE` matches `^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)` from the start of a cue line.
+`SPEAKER_LABEL_RE` matches `^([ \t]*)([A-Z][\w'. -]{1,30})(:[ \t]*)` from the start of a cue line.
 The pattern captures leading indentation, the label, and the colon with its trailing spacing.
+Periods in titles and initials, such as `Mr. Kim:`, `Dr. Lee:`, and `J.Y. Park:`, remain part of the label.
 
 ### Speaker label casing canonicalization
 

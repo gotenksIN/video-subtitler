@@ -12,9 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
-SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w' -]{1,30})(:[ \t]*)")
+SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w'. -]{1,30})(:[ \t]*)")
 REFINEMENT_LABEL_RE = re.compile(
-    r"(?m)^[ \t]*(?i:[A-Z][\w' -]{1,30}):[ \t]*|(?<!\S)[A-Z][\w'-]*:[ \t]*"
+    r"(?m)^[ \t]*(?i:[A-Z][\w'. -]{1,30}):[ \t]*|(?<!\S)[A-Z][\w'.-]*:[ \t]*"
 )
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
 REPAIR_WINDOW_SECONDS = 10.0
@@ -136,6 +136,18 @@ def format_time(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
+def validate_caption_text(text):
+    """Return cue text that survives WebVTT serialization without cue loss."""
+    text = text.removesuffix("\n")
+    if not text.strip() or any(not line.strip() for line in text.split("\n")):
+        raise ValueError("Caption text must contain nonempty lines")
+    if "-->" in text or "\r" in text:
+        raise ValueError("Caption text contains a reserved WebVTT separator")
+    if has_unmatched_brackets(text):
+        raise ValueError("Caption text contains unmatched brackets")
+    return text
+
+
 def validate_captions(captions, chunk_duration):
     validated = []
 
@@ -182,7 +194,7 @@ def validate_captions(captions, chunk_duration):
                 "id": cap.id,
                 "start": canonical_start,
                 "end": canonical_end,
-                "text": cap.text,
+                "text": validate_caption_text(cap.text),
             }
         )
 
@@ -201,7 +213,7 @@ def _refinement_dialogue_labels(text, cue_id, source_labels=()):
             re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
         )
         label_re = re.compile(
-            rf"(?m)^[ \t]*(?i:[A-Z][\w' -]{{1,30}}):[ \t]*|(?<!\S)(?i:{names}):[ \t]*|(?<!\S)[A-Z][\w'-]*:[ \t]*",
+            rf"(?m)^[ \t]*(?i:[A-Z][\w'. -]{{1,30}}):[ \t]*|(?<!\S)(?i:{names}):[ \t]*|(?<!\S)[A-Z][\w'.-]*:[ \t]*",
         )
     else:
         label_re = REFINEMENT_LABEL_RE
