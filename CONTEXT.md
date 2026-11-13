@@ -36,7 +36,7 @@ The normal generation path runs these stages:
 
 ```mermaid
 flowchart TD
-    A[Source video] --> B[Probe primary video stream]
+    A[Source video] --> B[Inspect source duration and streams once]
     B --> C[Build manifest and lock work directory]
     C --> D[Probe first audio stream and extract mono Opus when enabled]
     D --> E[Run preflight research and store preflight_context.json]
@@ -158,10 +158,10 @@ Generation publishes one artifact based on the refinement toggles:
 
 ## Video support
 
-`probe_video_format()` asks FFprobe for the primary video codec:
+`inspect_media()` asks FFprobe for the container duration and stream metadata in one query:
 
 ```bash
-ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 <path>
+ffprobe -v error -show_entries format=duration:stream=codec_type,codec_name,sample_rate,channels -of json <path>
 ```
 
 Supported codecs:
@@ -173,13 +173,15 @@ Supported codecs:
 | HEVC/H.265 | `.mp4` | `video/mp4` |
 
 Unsupported codecs like AV1 fail with `RuntimeError`.
+The primary video codec is the first video stream's codec.
+The pipeline and benchmark runner reuse the inspection for format selection, audio presence, source duration, and complete audio extraction.
 Audio is mapped with `-map 0:a?` when present.
 Subtitle streams are excluded from generated chunks with `-sn`.
 
 ## Complete audio extraction
 
 Audio refinement always selects the first audio stream, `0:a:0`.
-When audio refinement is enabled, the pipeline probes for `a:0` while holding the work lock.
+When audio refinement is enabled, the pipeline validates the inspected audio streams and duration while holding the work lock.
 The run fails before splitting or API calls when the source has no audio stream.
 
 Extraction command:
@@ -209,6 +211,7 @@ Stream copy cuts at keyframes.
 `segments.csv` is the source of truth for chunk start and end times.
 Each row contains `chunk_NNN.<ext>,start,end`.
 When any nonblank row is malformed or has invalid timestamps, the split is regenerated.
+Blank rows do not consume chunk indices, and chunk starts must increase strictly.
 A reusable index must match stored `chunk_NNN` files exactly.
 
 ### Chunk generation context
@@ -224,6 +227,11 @@ When simultaneous speech and meaningful editorial text cannot be sequenced witho
 
 HTTP transport errors, 429 rate limits, and 5xx server errors are handled natively by the Gemini SDK.
 Every client sets `http_options.retry_options` to `types.HttpRetryOptions()`, so the SDK makes up to 5 attempts with exponential backoff and jitter.
+Requests retain the SDK default `automatic_continuation=True`.
+When a response ends with `CONTINUATION`, the SDK sends the same request with its continuation token until generation finishes and exposes the continued stream to the host.
+Timeouts, SDK retries, and billing apply separately to each continuation hop, not once to the full logical request.
+Each hop retains the request's output-token configuration; `max_output_tokens` is not a host-enforced aggregate budget across continuation hops.
+Continuation is separate from automatic function calling, which stays disabled.
 All five request types use one host stream reader.
 Transport failures, malformed SSE JSON, rate limits, and 5xx errors during stream consumption restart the request within a limit of 3 host attempts.
 Each restart discards partial answer text and grounding metadata and waits 1 second, then 2 seconds.

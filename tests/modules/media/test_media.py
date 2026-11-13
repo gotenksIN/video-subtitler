@@ -251,22 +251,29 @@ def _stream_types(ffprobe, path):
     return _ffprobe_lines(ffprobe, path, "stream=codec_type")
 
 
-def test_probe_video_format_identifies_supported_primary_codec(video_fixture):
-    assert media.probe_video_format(str(video_fixture["path"])) == (
+def test_media_inspection_identifies_supported_primary_codec(video_fixture):
+    inspection = media.inspect_media(video_fixture["path"])
+    assert inspection.video_format == (
         video_fixture["ext"],
         video_fixture["mime"],
         video_fixture["codec"],
     )
+    assert inspection.duration > 0
+    assert len(inspection.audio_streams) == 1
+    assert inspection.audio_streams[0]["sample_rate"] == (
+        "48000" if video_fixture["codec"] == "vp9" else "44100"
+    )
+    assert inspection.audio_streams[0]["channels"] > 0
 
 
-def test_probe_video_format_rejects_unsupported_codec(mpeg4_video):
+def test_media_inspection_rejects_unsupported_video_format(mpeg4_video):
     with pytest.raises(RuntimeError, match="Video format not supported"):
-        media.probe_video_format(str(mpeg4_video))
+        _ = media.inspect_media(mpeg4_video).video_format
 
 
-def test_probe_video_format_reports_missing_input(media_tools, tmp_path):
-    with pytest.raises(RuntimeError, match="Failed to probe video format"):
-        media.probe_video_format(str(tmp_path / "missing.webm"))
+def test_media_inspection_reports_missing_input(media_tools, tmp_path):
+    with pytest.raises(RuntimeError, match="Failed to inspect media"):
+        media.inspect_media(tmp_path / "missing.webm")
 
 
 def test_split_creates_decodable_chunks_and_completion_marker(
@@ -458,15 +465,40 @@ def test_extract_complete_audio_produces_mono_opus_at_48khz(
     assert (work_dir / media.EXTRACTED_AUDIO_NAME).is_file()
     assert duration > 0
     assert abs(duration - source_dur) <= media.AUDIO_DURATION_TOLERANCE_SECONDS
-    assert media.extracted_audio_is_valid(audio_path) is True
+    assert media.extracted_audio_duration(audio_path) == duration
 
 
 def test_extract_complete_audio_fails_when_source_has_no_audio(mpeg4_video, tmp_path):
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    assert media.has_audio_stream(str(mpeg4_video)) is False
+    assert media.inspect_media(mpeg4_video).audio_streams == []
     with pytest.raises(RuntimeError, match="may not contain an audio stream"):
         media.extract_complete_audio(str(mpeg4_video), str(work_dir))
+
+
+def test_source_inspection_is_reused_for_extraction(
+    video_fixture, tmp_path, monkeypatch
+):
+    run = subprocess.run
+    source_probes = []
+
+    def record(command, **kwargs):
+        if command[0] == "ffprobe" and str(command[-1]) == str(video_fixture["path"]):
+            source_probes.append(command)
+        return run(command, **kwargs)
+
+    monkeypatch.setattr(media.subprocess, "run", record)
+    inspection = media.inspect_media(video_fixture["path"])
+    work = tmp_path / "work"
+    work.mkdir()
+    path, duration, source_duration, reused = media.extract_complete_audio(
+        video_fixture["path"], work, source_inspection=inspection
+    )
+    assert len(source_probes) == 1
+    assert duration > 0
+    assert source_duration == inspection.duration
+    assert not reused
+    assert media.extracted_audio_duration(path) == duration
 
 
 def test_extract_complete_audio_reuses_valid_cache_and_regenerates_corrupt(

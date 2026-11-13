@@ -13,11 +13,6 @@ from tests.support.workdir import FakeMediaTools, write_chunk_subtitles
 def make_config(tmp_path, monkeypatch, **overrides):
     video = tmp_path / "source.mp4"
     video.write_bytes(b"video")
-    monkeypatch.setattr(
-        media,
-        "probe_video_format",
-        lambda _path: (".mp4", "video/mp4", "h264"),
-    )
     monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
     values = {
         "video_path": video,

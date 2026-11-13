@@ -298,7 +298,8 @@ def _run_full_matrix(args, output_dir):
     source_title = core.derive_source_title(args.video_file)
 
     # 1. Probe video and split once.
-    ext, mime, video_codec = media.probe_video_format(str(args.video_file))
+    source_inspection = media.inspect_media(args.video_file)
+    ext, mime, video_codec = source_inspection.video_format
     manifest = {
         "video": io.file_fingerprint(args.video_file),
         "chunk_dur": args.chunk_dur,
@@ -336,12 +337,16 @@ def _run_full_matrix(args, output_dir):
     source_duration = 0.0
     needs_audio = any(audio_model is not None for _, audio_model, _ in cases)
     if needs_audio:
-        if not media.has_audio_stream(str(args.video_file)):
+        if not source_inspection.audio_streams:
             raise RuntimeError(
                 "Source video does not contain an audio stream for audio refinement."
             )
         audio_path, audio_duration, source_duration, _reused = (
-            media.extract_complete_audio(str(args.video_file), str(work_dir))
+            media.extract_complete_audio(
+                str(args.video_file),
+                str(work_dir),
+                source_inspection=source_inspection,
+            )
         )
 
     # 3. Chunk generation per unique generation model.

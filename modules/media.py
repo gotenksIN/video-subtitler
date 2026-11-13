@@ -5,6 +5,7 @@ import math
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from modules import io
@@ -15,100 +16,92 @@ AUDIO_DURATION_TOLERANCE_SECONDS = 2.0
 AUDIO_MIME_TYPE = "audio/ogg"
 
 
-def probe_video_format(path):
-    """Probe video codec and return (extension, MIME type, codec name)."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=codec_name",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        path,
-    ]
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        codec = result.stdout.strip().lower()
+@dataclass
+class MediaInspection:
+    """Container duration and stream metadata from one FFprobe query."""
+
+    duration: float
+    streams: list[dict]
+
+    @property
+    def video_format(self):
+        """Return the primary video extension, MIME type, and supported codec."""
+        codec = next(
+            (
+                stream.get("codec_name", "")
+                for stream in self.streams
+                if stream.get("codec_type") == "video"
+            ),
+            "",
+        ).lower()
         if codec == "vp9":
             return ".webm", "video/webm", "vp9"
         if codec == "h264":
             return ".mp4", "video/mp4", "h264"
         if codec in ("hevc", "h265"):
             return ".mp4", "video/mp4", "hevc"
-        raise RuntimeError(f"Video format not supported: {path}")
-    except RuntimeError:
-        raise
-    except Exception as e:  # noqa: BLE001 - Wrap all probe failures consistently.
-        raise RuntimeError(f"Failed to probe video format: {e}")
+        raise RuntimeError(
+            f"Video format not supported: {codec or 'missing video stream'}"
+        )
+
+    @property
+    def audio_streams(self):
+        """Return audio streams in source order."""
+        return [
+            stream for stream in self.streams if stream.get("codec_type") == "audio"
+        ]
 
 
-def ffprobe_format_duration(path: str | Path) -> float:
-    """Return container duration in seconds, or 0.0 on error."""
+def inspect_media(path: str | Path) -> MediaInspection:
+    """Inspect container duration and all stream metadata in one query."""
     cmd = [
         "ffprobe",
         "-v",
         "error",
         "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(path),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            return 0.0
-        parsed = float(result.stdout.strip())
-        return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
-    except OSError, ValueError:
-        return 0.0
-
-
-def ffprobe_audio_streams(path: str | Path) -> list[dict]:
-    """Return audio stream metadata dictionaries from FFprobe."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "a",
-        "-show_entries",
-        "stream=codec_name,sample_rate,channels",
+        "format=duration:stream=codec_type,codec_name,sample_rate,channels",
         "-of",
         "json",
         str(path),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            return []
-        streams = json.loads(result.stdout).get("streams", [])
-    except OSError, ValueError, AttributeError:
-        return []
-    return [stream for stream in streams if isinstance(stream, dict)]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        payload = json.loads(result.stdout)
+        streams = payload.get("streams", [])
+        if not isinstance(streams, list) or any(
+            not isinstance(stream, dict) for stream in streams
+        ):
+            raise ValueError("Invalid stream metadata")
+        try:
+            duration = float(payload.get("format", {}).get("duration", 0))
+        except TypeError, ValueError:
+            duration = 0.0
+        if not math.isfinite(duration) or duration <= 0:
+            duration = 0.0
+        return MediaInspection(duration, streams)
+    except Exception as e:
+        raise RuntimeError(f"Failed to inspect media {path}: {e}") from e
 
 
-def has_audio_stream(video_file: str | Path) -> bool:
-    """Return True when the source contains at least one audio stream."""
-    return bool(ffprobe_audio_streams(video_file))
-
-
-def extracted_audio_is_valid(path: str | Path) -> bool:
-    """Return True when path contains a single 48 kHz mono Opus stream."""
-    if ffprobe_format_duration(path) <= 0:
-        return False
-    streams = ffprobe_audio_streams(path)
+def extracted_audio_duration(path: str | Path) -> float:
+    """Return duration for valid mono 48 kHz Opus audio, or zero."""
+    try:
+        inspection = inspect_media(path)
+    except RuntimeError:
+        return 0.0
+    duration = inspection.duration
+    if duration <= 0:
+        return 0.0
+    streams = inspection.audio_streams
     if len(streams) != 1:
-        return False
+        return 0.0
     stream = streams[0]
-    return (
+    valid = (
         stream.get("codec_name") == "opus"
         and str(stream.get("sample_rate")) == "48000"
         and stream.get("channels") == 1
     )
+    return duration if valid else 0.0
 
 
 def audio_duration_consistent(audio_duration: float, source_duration: float) -> bool:
@@ -123,15 +116,25 @@ def audio_duration_consistent(audio_duration: float, source_duration: float) -> 
 
 
 def extract_complete_audio(
-    video_file: str | Path, work_dir: str | Path
+    video_file: str | Path,
+    work_dir: str | Path,
+    *,
+    source_inspection: MediaInspection | None = None,
 ) -> tuple[str, float, float, bool]:
     """Extract complete mono Opus audio from video_file into work_dir."""
-    source_duration = ffprobe_format_duration(video_file)
+    source_inspection = source_inspection or inspect_media(video_file)
+    source_duration = source_inspection.duration
+    if not source_inspection.audio_streams:
+        raise RuntimeError(
+            "Failed to extract complete audio. The source may not contain an audio stream."
+        )
+    if source_duration <= 0:
+        raise RuntimeError("Source video duration must be positive and finite")
     target = Path(work_dir) / EXTRACTED_AUDIO_NAME
 
     if target.exists():
-        if extracted_audio_is_valid(target):
-            cached_duration = ffprobe_format_duration(target)
+        cached_duration = extracted_audio_duration(target)
+        if cached_duration:
             if audio_duration_consistent(cached_duration, source_duration):
                 print("Complete audio already exists, skipping extraction.")
                 return str(target), cached_duration, source_duration, True
@@ -178,13 +181,13 @@ def extract_complete_audio(
         ) from e
 
     try:
-        if not extracted_audio_is_valid(tmp_path):
+        duration = extracted_audio_duration(tmp_path)
+        if not duration:
             raise RuntimeError(
                 "Extracted audio validation failed: expected one mono Opus audio "
                 "stream at 48 kHz with a positive duration."
             )
 
-        duration = ffprobe_format_duration(tmp_path)
         if not audio_duration_consistent(duration, source_duration):
             raise RuntimeError(
                 f"Extracted audio duration {duration:.3f}s is not consistent with "
@@ -281,7 +284,7 @@ def list_chunks(chunk_dir):
     chunks = []
     seen_names = set()
     with open(csv_path, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
+        for line in f:
             row = line.strip()
             if not row:
                 continue
@@ -303,11 +306,12 @@ def list_chunks(chunk_dir):
                 or not math.isfinite(end)
                 or start < 0
                 or end <= start
+                or (chunks and start <= chunks[-1]["start"])
             ):
                 return []
             chunks.append(
                 {
-                    "idx": i,
+                    "idx": len(chunks),
                     "name": name,
                     "start": start,
                     "end": end,

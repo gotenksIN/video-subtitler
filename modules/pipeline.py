@@ -44,9 +44,9 @@ class GenerationConfig:
         return self.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
 
 
-def build_manifest(config: GenerationConfig):
+def build_manifest(config: GenerationConfig, source_inspection: media.MediaInspection):
     """Build the manifest dictionary and resolved work directory path."""
-    ext, mime, video_codec = media.probe_video_format(str(config.video_path))
+    ext, mime, video_codec = source_inspection.video_format
 
     manifest = {
         "video": io.file_fingerprint(config.video_path),
@@ -267,7 +267,8 @@ def run_generation(config: GenerationConfig) -> None:
     context_urls = validate_generation_config(config)
 
     source_title = core.derive_source_title(config.video_path)
-    manifest, chunk_dir = build_manifest(config)
+    source_inspection = media.inspect_media(config.video_path)
+    manifest, chunk_dir = build_manifest(config, source_inspection)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_file = None
     staging_vtt = None
@@ -278,13 +279,17 @@ def run_generation(config: GenerationConfig) -> None:
         print(f"Using work directory: {chunk_dir}")
 
         if config.audio_refine:
-            if not media.has_audio_stream(config.video_path):
+            if not source_inspection.audio_streams:
                 raise RuntimeError(
                     "Failed to extract complete audio. "
                     "The source may not contain an audio stream."
                 )
             audio_path, audio_duration, source_duration, _cached = (
-                media.extract_complete_audio(config.video_path, chunk_dir)
+                media.extract_complete_audio(
+                    config.video_path,
+                    chunk_dir,
+                    source_inspection=source_inspection,
+                )
             )
 
         # Pass 0: Preflight identity and research context

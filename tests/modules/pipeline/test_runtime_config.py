@@ -67,7 +67,7 @@ def test_generation_rejects_malformed_context_url_before_probing(tmp_path, monke
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("media probing must not run for malformed URLs")
 
-    monkeypatch.setattr(media, "probe_video_format", fail_if_called)
+    monkeypatch.setattr(media, "inspect_media", fail_if_called)
     config = make_config(tmp_path, context_urls=("not-a-url",))
 
     with pytest.raises(ValueError, match="context-url"):

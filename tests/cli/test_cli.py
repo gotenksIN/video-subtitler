@@ -124,7 +124,7 @@ def test_api_key_environment_variable_is_accepted(tmp_path):
 
     assert process.returncode == 1
     text = output(process)
-    assert "Failed to probe video format" in text
+    assert "Failed to inspect media" in text
     assert "API key not configured" not in text
     assert not (tmp_path / "temp_video_chunks").exists()
 

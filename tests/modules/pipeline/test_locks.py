@@ -28,9 +28,6 @@ def test_release_allows_a_new_owner(tmp_path):
 def test_generation_holds_the_work_lock_during_api_work(tmp_path, monkeypatch):
     video = tmp_path / "source.mp4"
     video.write_bytes(b"fake video")
-    monkeypatch.setattr(
-        media, "probe_video_format", lambda _path: (".mp4", "video/mp4", "h264")
-    )
     monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
     monkeypatch.setattr(media.subprocess, "run", FakeMediaTools().run)
     monkeypatch.setattr(

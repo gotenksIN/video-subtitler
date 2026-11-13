@@ -24,11 +24,6 @@ def prepare_generation(
 ):
     video = tmp_path / "source.mp4"
     video.write_bytes(b"fake video")
-    monkeypatch.setattr(
-        media,
-        "probe_video_format",
-        lambda _path: (".mp4", "video/mp4", "h264"),
-    )
     monkeypatch.setattr(pipeline, "CHUNK_ROOT", str(tmp_path / "work_root"))
     install_preflight(monkeypatch)
     tools = FakeMediaTools()

@@ -39,8 +39,7 @@ class FakeMediaTools:
 
     Split commands materialize the configured chunk files and segments.csv.
     Audio extraction commands materialize the complete extracted audio file.
-    FFprobe duration checks answer with a configurable duration and status.
-    FFprobe audio-stream checks answer with configurable stream metadata.
+    FFprobe inspections answer with configurable duration and stream metadata.
     Every invocation is recorded in :attr:`calls` for outcome assertions.
     """
 
@@ -84,10 +83,12 @@ class FakeMediaTools:
         ]
 
     def _probe(self, command):
-        if "-select_streams" in command:
-            stdout = json.dumps({"streams": list(self.audio_streams)})
-        else:
-            stdout = self.probe_duration
+        streams = [{"codec_type": "audio", **stream} for stream in self.audio_streams]
+        if not str(command[-1]).endswith((".ogg", ".ogg.tmp")):
+            streams.insert(0, {"codec_type": "video", "codec_name": "h264"})
+        stdout = json.dumps(
+            {"streams": streams, "format": {"duration": self.probe_duration.strip()}}
+        )
         return subprocess.CompletedProcess(
             command,
             0 if self.probe_ok else 1,
