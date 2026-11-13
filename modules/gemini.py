@@ -279,7 +279,28 @@ def process_chunk(
 
 IDENTITY_RESEARCH_SECTION = "PARTICIPANTS AND SPEAKERS"
 TERMINOLOGY_RESEARCH_SECTION = "TOPIC TERMINOLOGY AND PROPER NOUNS"
-NON_NAME_LABELS = frozenset({"evidence", "role", "aliases", "sources", "notes"})
+NON_NAME_LABELS = frozenset(
+    {
+        "evidence",
+        "role",
+        "aliases",
+        "sources",
+        "notes",
+        "note",
+        "source",
+        "alias",
+        "roles",
+        "summary",
+        "unknown",
+        "unidentified",
+        "unlabeled",
+        "unnamed",
+        "none",
+        "n/a",
+        "other",
+        "others",
+    }
+)
 
 
 def build_identity_research_prompt(source_title=None, context_urls=(), youtube_urls=()):
@@ -322,7 +343,7 @@ Give one canonical spelling per line with the cited source.
 2. Cite the source for each attribution so the evidence can be reviewed.
 3. Rank evidence: reputable grounded web evidence first, the source title last.
 4. Grounded research establishes canonical spelling and verified entities only. It must never infer, invent, or alter spoken dialogue content, meaning, or events.
-5. When a participant's identity cannot be established, state one stable descriptive role such as Host, Resident, Shop Owner, or Producer when the role is clear; otherwise state that the speaker stays unlabeled.
+5. In the identity section, emit colon-prefixed entries only for verified named speakers or a single concrete recurring role such as Host when that role is clear. Omit catch-all or negative summary lines for incidental or unidentified speakers; do not emit entries such as "Other incidental speakers:" or "Unknown:".
 6. Return plain text only, with no markdown formatting.
 """
 
@@ -350,6 +371,31 @@ def split_research_sections(research_text):
     return identity, terminology
 
 
+def is_valid_grounded_name(label):
+    """Exclude placeholders and group summaries from speaker candidates."""
+    normalized = label.strip().casefold()
+    return (
+        bool(normalized)
+        and normalized not in NON_NAME_LABELS
+        and not normalized.startswith(
+            (
+                "other ",
+                "unidentified ",
+                "unknown ",
+                "unnamed ",
+                "unlabeled ",
+                "incidental ",
+                "background ",
+                "additional ",
+                "various ",
+                "multiple ",
+                "no ",
+            )
+        )
+        and not normalized.endswith((" speakers", " participants"))
+    )
+
+
 def extract_grounded_names(identity_section):
     """Collect canonical name entries from the identity research section."""
     names = {}
@@ -358,7 +404,7 @@ def extract_grounded_names(identity_section):
         if not match:
             continue
         label = match.group(2).strip()
-        if label and label.casefold() not in NON_NAME_LABELS:
+        if is_valid_grounded_name(label):
             names.setdefault(label.casefold(), label)
     return list(names.values())
 
@@ -710,6 +756,7 @@ def run_preflight_context(
             queries=queries,
             sources=sources,
             retrieved_urls=retrieved_urls,
+            ordinary_urls=ordinary_urls,
         )
 
         identity_context, terminology_context = split_research_sections(research_text)
@@ -751,7 +798,11 @@ def load_cached_preflight_context(chunk_dir) -> core.PreflightContext | None:
     if not path.exists():
         return None
     try:
-        return core.PreflightContext.model_validate_json(path.read_bytes())
+        context = core.PreflightContext.model_validate_json(path.read_bytes())
+        context.grounded_names = [
+            name for name in context.grounded_names if is_valid_grounded_name(name)
+        ]
+        return context
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         print(f"Ignoring invalid cached preflight context {path}: {e}")
         path.unlink(missing_ok=True)

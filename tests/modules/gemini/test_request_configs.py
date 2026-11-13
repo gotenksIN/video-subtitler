@@ -38,11 +38,3 @@ def test_client_creation_forwards_credentials_and_configures_retries(
     gemini.create_client(api_key, base_url)
 
     assert received == expected
-
-
-def test_refinement_config_requires_structured_json_without_tools():
-    config = gemini.build_refinement_config("high")
-
-    assert config.response_mime_type == "application/json"
-    assert config.tools is None
-    assert config.max_output_tokens == 65536

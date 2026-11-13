@@ -31,6 +31,26 @@ def normalized_stream_metadata(monkeypatch):
     monkeypatch.setattr(gemini, "collect_stream_metadata", collect)
 
 
+@pytest.mark.parametrize(
+    "retrieved,diagnostic",
+    [
+        ({}, "was not retrieved"),
+        (
+            {"https://example.com/notes": "URL_RETRIEVAL_STATUS_ERROR"},
+            "retrieval failed",
+        ),
+    ],
+)
+def test_ordinary_context_requires_successful_retrieval(retrieved, diagnostic):
+    with pytest.raises(RuntimeError, match=diagnostic):
+        gemini.verify_refinement_grounding(
+            queries=["grounded query"],
+            sources=[],
+            retrieved_urls=retrieved,
+            ordinary_urls=["https://example.com/notes"],
+        )
+
+
 def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeypatch):
     source = write_vtt(
         tmp_path / "source.vtt",
@@ -66,6 +86,7 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
         assert f'"{keyword}":' not in serialized_schema
     assert refinement.config.automatic_function_calling.disable is True
     assert refinement.config.tools is None
+    assert refinement.config.max_output_tokens == 65536
     assert (
         refinement.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     )
@@ -581,6 +602,74 @@ def test_preflight_context_cache_round_trips_through_the_work_directory(tmp_path
     gemini.store_preflight_context(tmp_path, preflight)
 
     assert gemini.load_cached_preflight_context(tmp_path) == preflight
+
+
+def test_extract_grounded_names_omits_summaries_and_keeps_names_and_roles():
+    rejected = [
+        "Evidence",
+        "Role",
+        "Aliases",
+        "Sources",
+        "Notes",
+        "Note",
+        "Source",
+        "Alias",
+        "Roles",
+        "Summary",
+        "Unknown",
+        "Unidentified",
+        "Unlabeled",
+        "Unnamed",
+        "None",
+        "N/A",
+        "Other",
+        "Others",
+        "Other incidental speakers",
+        "Unidentified guest",
+        "Unknown visitor",
+        "Unnamed resident",
+        "Unlabeled guest",
+        "Incidental visitor",
+        "Background guest",
+        "Additional guest",
+        "Various people",
+        "Multiple people",
+        "No attribution",
+        "Recurring speakers",
+        "Program participants",
+    ]
+    accepted = ["Mr. Kim", "Dr. Lee", "J.Y. Park", "Host", "Shop Owner"]
+    identity = "\n".join(
+        f"{label}: Research evidence." for label in rejected + accepted
+    )
+
+    assert gemini.extract_grounded_names(identity) == accepted
+
+
+def test_cached_preflight_filters_summary_names_without_discarding_context(tmp_path):
+    accepted = ["Mr. Kim", "J.Y. Park", "Host", "Shop Owner"]
+    preflight = core.PreflightContext(
+        identity_context="Original research stays available.",
+        terminology_context="Program: canonical title.",
+        grounded_names=[
+            "Other incidental speakers",
+            "Unknown",
+            "Summary",
+            "N/A",
+            "Background guest",
+            "Recurring speakers",
+            "Program participants",
+            *accepted,
+        ],
+    )
+    gemini.store_preflight_context(tmp_path, preflight)
+    path = tmp_path / gemini.PREFLIGHT_CONTEXT_FILENAME
+    original_cache = path.read_bytes()
+
+    loaded = gemini.load_cached_preflight_context(tmp_path)
+
+    assert loaded == preflight.model_copy(update={"grounded_names": accepted})
+    assert path.read_bytes() == original_cache
 
 
 def test_missing_preflight_context_cache_returns_none(tmp_path):

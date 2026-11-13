@@ -463,6 +463,8 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
    - Tool: Google Search + optional URL Context.
    - Output: Plain text with two sections:
      - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
+       Emit entries only for verified named speakers or a single concrete recurring role, such as `Host:`.
+       Omit catch-all and negative summaries for incidental or unidentified speakers.
      - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
    - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
    - Grounding verification: The research stream must contain search queries or grounded sources, and every URL Context input must be retrieved successfully.
@@ -472,6 +474,9 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 3. **Context assembly:**
    - Section splitting: The host splits the research text into identity and terminology sections at the section headers. Header matching is case-insensitive with an optional trailing colon, and text before the first header stays in the identity section, so research output without headers keeps working as identity context.
    - `grounded_names` collects the canonical name entries (leading `Name:` lines) from the identity section.
+     Extraction excludes placeholder and summary labels, catch-all prefixes, and plural speaker or participant groups.
+     Dotted titles and initials, such as `Mr. Kim` and `J.Y. Park`, and concrete roles, such as `Host` and `Shop Owner`, remain valid.
+     Cached `grounded_names` use the same filter on load without changing cache format or identity.
    - `youtube_context` keeps the direct analysis text when the response is non-blank.
 
 ### Structured refinement (Pass 3)
