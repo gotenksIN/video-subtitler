@@ -145,14 +145,14 @@ def format_time(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-def validate_caption_text(text):
+def _validate_caption_text(text):
     """Return cue text that survives WebVTT serialization without cue loss."""
     text = text.removesuffix("\n")
     if not text.strip() or any(not line.strip() for line in text.split("\n")):
         raise ValueError("Caption text must contain nonempty lines")
     if "-->" in text or "\r" in text:
         raise ValueError("Caption text contains a reserved WebVTT separator")
-    if has_unmatched_brackets(text):
+    if _has_unmatched_brackets(text):
         raise ValueError("Caption text contains unmatched brackets")
     return text
 
@@ -203,7 +203,7 @@ def validate_captions(captions, chunk_duration):
                 "id": cap.id,
                 "start": canonical_start,
                 "end": canonical_end,
-                "text": validate_caption_text(cap.text),
+                "text": _validate_caption_text(cap.text),
             }
         )
 
@@ -253,12 +253,12 @@ def validate_refinement_changes(changes, source_texts):
         if not change.text.strip():
             raise ValueError(f"subtitle ID {change.id} has empty text")
         source = source_texts[change.id]
-        if has_unmatched_brackets(change.text):
+        if _has_unmatched_brackets(change.text):
             raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
         if classify_cue_text(change.text) != classify_cue_text(source):
             raise ValueError(f"subtitle ID {change.id} changes cue class")
-        if len(visual_fragment_strings(change.text)) != len(
-            visual_fragment_strings(source)
+        if len(_visual_fragment_strings(change.text)) != len(
+            _visual_fragment_strings(source)
         ):
             raise ValueError(f"subtitle ID {change.id} changes visual fragment count")
 
@@ -311,7 +311,7 @@ def url_identity(url):
     )
 
 
-def is_youtube_video_url(url):
+def _is_youtube_video_url(url):
     """Return True for a public YouTube watch or share URL."""
     parsed = urllib.parse.urlsplit(url)
     host = (parsed.hostname or "").lower()
@@ -328,7 +328,7 @@ def classify_context_urls(urls):
     youtube_urls = []
     ordinary_urls = []
     for url in urls:
-        if is_youtube_video_url(url):
+        if _is_youtube_video_url(url):
             youtube_urls.append(url)
         else:
             ordinary_urls.append(url)
@@ -377,13 +377,13 @@ def classify_cue_text(text):
     return "editorial"
 
 
-def visual_fragment_strings(text):
+def _visual_fragment_strings(text):
     """Return exact complete outer bracketed fragment strings."""
     _outside, fragments, _unmatched = _parse_bracketed_text(text)
     return fragments
 
 
-def has_unmatched_brackets(text):
+def _has_unmatched_brackets(text):
     _outside, _fragments, unmatched = _parse_bracketed_text(text)
     return unmatched
 
@@ -448,13 +448,13 @@ def merge_intervals(intervals):
     return merged
 
 
-def build_repair_regions(boundaries, window=REPAIR_WINDOW_SECONDS):
+def _build_repair_regions(boundaries, window=REPAIR_WINDOW_SECONDS):
     return merge_intervals(
         [(boundary - window, boundary + window) for boundary in boundaries]
     )
 
 
-def interval_intersects_any(interval, regions):
+def _interval_intersects_any(interval, regions):
     start, end = interval
     return any(
         start < region_end and end > region_start
@@ -462,7 +462,7 @@ def interval_intersects_any(interval, regions):
     )
 
 
-def interval_contained_in_any(interval, regions):
+def _interval_contained_in_any(interval, regions):
     start, end = interval
     return any(
         region_start <= start and end <= region_end
@@ -470,7 +470,7 @@ def interval_contained_in_any(interval, regions):
     )
 
 
-def canonical_timestamp(value):
+def _canonical_timestamp(value):
     try:
         parsed = parse_time(value)
     except ValueError as error:
@@ -481,7 +481,7 @@ def canonical_timestamp(value):
     return formatted
 
 
-def is_identical_copy(cue, source_by_id):
+def _is_identical_copy(cue, source_by_id):
     if len(cue["source_ids"]) != 1:
         return False
     source = source_by_id[cue["source_ids"][0]]
@@ -492,7 +492,7 @@ def is_identical_copy(cue, source_by_id):
     )
 
 
-def filter_audio_refinement_patch(
+def _filter_audio_refinement_patch(
     response, source_entries, boundaries, window=REPAIR_WINDOW_SECONDS
 ):
     """Drop patch cues and deletions without repair-region authority.
@@ -501,7 +501,7 @@ def filter_audio_refinement_patch(
     every repair region. Discarding those edits keeps each cue outside
     repair regions as an exact copy of its source entry.
     """
-    regions = build_repair_regions(boundaries, window)
+    regions = _build_repair_regions(boundaries, window)
     source_intervals = {
         entry["id"]: (parse_time(entry["start"]), parse_time(entry["end"]))
         for entry in source_entries
@@ -511,7 +511,7 @@ def filter_audio_refinement_patch(
     for cue in response.cues:
         cue_ids = cue.source_ids
         if not cue_ids:
-            keep = interval_intersects_any(
+            keep = _interval_intersects_any(
                 (parse_time(cue.start), parse_time(cue.end)), regions
             )
         elif any(source_id not in source_intervals for source_id in cue_ids):
@@ -519,7 +519,7 @@ def filter_audio_refinement_patch(
             keep = True
         else:
             keep = all(
-                interval_intersects_any(source_intervals[source_id], regions)
+                _interval_intersects_any(source_intervals[source_id], regions)
                 for source_id in cue_ids
             )
         if keep:
@@ -529,7 +529,7 @@ def filter_audio_refinement_patch(
         source_id
         for source_id in response.deleted_source_ids
         if source_id not in source_intervals
-        or interval_intersects_any(source_intervals[source_id], regions)
+        or _interval_intersects_any(source_intervals[source_id], regions)
     ]
 
     return response.model_copy(
@@ -537,7 +537,7 @@ def filter_audio_refinement_patch(
     )
 
 
-def reconstruct_sparse_audio_candidate(response, source_entries):
+def _reconstruct_sparse_audio_candidate(response, source_entries):
     """Expand sparse patches with exact copies of every omitted source cue."""
     referenced = {source_id for cue in response.cues for source_id in cue.source_ids}
     deleted = set(response.deleted_source_ids)
@@ -549,7 +549,7 @@ def reconstruct_sparse_audio_candidate(response, source_entries):
         )
 
     for cue in response.cues:
-        if has_unmatched_brackets(cue.text):
+        if _has_unmatched_brackets(cue.text):
             raise ValueError("Sparse audio refinement cue contains unmatched brackets")
 
     candidate_cues = list(response.cues)
@@ -565,7 +565,7 @@ def reconstruct_sparse_audio_candidate(response, source_entries):
     )
     candidate_cues.sort(
         key=lambda cue: (
-            parse_time(canonical_timestamp(cue.start)),
+            parse_time(_canonical_timestamp(cue.start)),
             cue.source_ids[0] if cue.source_ids else -1,
         )
     )
@@ -581,15 +581,15 @@ def validate_audio_refinement_response(
     repair regions survive as exact host-side copies. Lineage and authority
     checks then run on the complete candidate.
     """
-    if any(has_unmatched_brackets(entry["text"]) for entry in source_entries):
+    if any(_has_unmatched_brackets(entry["text"]) for entry in source_entries):
         raise ValueError("Audio refinement source cue contains unmatched brackets")
     source_by_id = {entry["id"]: entry for entry in source_entries}
     source_ids = set(source_by_id)
     if len(source_ids) != len(source_entries):
         raise ValueError("Audio refinement source IDs are not unique")
-    response = filter_audio_refinement_patch(response, source_entries, boundaries)
-    response = reconstruct_sparse_audio_candidate(response, source_entries)
-    regions = build_repair_regions(boundaries)
+    response = _filter_audio_refinement_patch(response, source_entries, boundaries)
+    response = _reconstruct_sparse_audio_candidate(response, source_entries)
+    regions = _build_repair_regions(boundaries)
     audio_duration_ms = round(audio_duration * 1000)
     source_duration_ms = round(source_duration * 1000)
 
@@ -608,7 +608,7 @@ def validate_audio_refinement_response(
         if not cue.text.strip():
             raise ValueError("Audio refinement output cues must contain text")
         cue_ids = list(cue.source_ids)
-        if not cue_ids and visual_fragment_strings(cue.text):
+        if not cue_ids and _visual_fragment_strings(cue.text):
             raise ValueError("Recovered cues must not contain bracketed text")
         if not cue_ids and not re.search(r"\w", REFINEMENT_LABEL_RE.sub("", cue.text)):
             raise ValueError("Recovered cues must contain spoken dialogue")
@@ -619,8 +619,8 @@ def validate_audio_refinement_response(
             )
         for source_id in cue_ids:
             referenced_counts[source_id] += 1
-        start = canonical_timestamp(cue.start)
-        end = canonical_timestamp(cue.end)
+        start = _canonical_timestamp(cue.start)
+        end = _canonical_timestamp(cue.end)
         start_ms = round(parse_time(start) * 1000)
         end_ms = round(parse_time(end) * 1000)
         if start_ms < 0:
@@ -636,7 +636,7 @@ def validate_audio_refinement_response(
             len(cue_ids) == 1
             and cue_ids[0] in source_by_id
             and source_by_id[cue_ids[0]]["classification"] in {"editorial", "mixed"}
-            and is_identical_copy(candidate, source_by_id)
+            and _is_identical_copy(candidate, source_by_id)
         )
         if unchanged_visual and end_ms > source_duration_ms:
             raise ValueError(
@@ -652,8 +652,8 @@ def validate_audio_refinement_response(
                 len(cue_ids) == 1
                 and cue_ids[0] in source_by_id
                 and source_by_id[cue_ids[0]]["classification"] == "dialogue"
-                and is_identical_copy(candidate, source_by_id)
-                and not interval_intersects_any(
+                and _is_identical_copy(candidate, source_by_id)
+                and not _interval_intersects_any(
                     (parse_time(start), parse_time(end)), regions
                 )
             )
@@ -705,7 +705,7 @@ def validate_audio_refinement_response(
                 len(interposed["source_ids"]) != 1
                 or source_by_id[interposed["source_ids"][0]]["classification"]
                 != "editorial"
-                or not is_identical_copy(interposed, source_by_id)
+                or not _is_identical_copy(interposed, source_by_id)
                 for interposed in response_cues[last_cue_index[source_id] + 1 : index]
             ):
                 raise ValueError(
@@ -755,11 +755,11 @@ def validate_audio_refinement_response(
                 "identical text and timing"
             )
         if entry["classification"] == "mixed":
-            expected = Counter(visual_fragment_strings(entry["text"]))
+            expected = Counter(_visual_fragment_strings(entry["text"]))
             consumed = Counter(
                 fragment
                 for cue in descendants
-                for fragment in visual_fragment_strings(cue["text"])
+                for fragment in _visual_fragment_strings(cue["text"])
             )
             if not all(
                 consumed[fragment] >= count for fragment, count in expected.items()
@@ -778,9 +778,9 @@ def validate_audio_refinement_response(
         allowed = {
             fragment
             for source_id in cue["source_ids"]
-            for fragment in visual_fragment_strings(source_by_id[source_id]["text"])
+            for fragment in _visual_fragment_strings(source_by_id[source_id]["text"])
         }
-        for fragment in visual_fragment_strings(cue["text"]):
+        for fragment in _visual_fragment_strings(cue["text"]):
             if fragment not in allowed:
                 raise ValueError(
                     f"Cue {cue['source_ids']} contains bracketed fragments "
@@ -791,12 +791,12 @@ def validate_audio_refinement_response(
         fragment
         for entry in source_entries
         if entry["classification"] != "dialogue"
-        for fragment in visual_fragment_strings(entry["text"])
+        for fragment in _visual_fragment_strings(entry["text"])
     )
     consumed_fragments = Counter(
         fragment
         for cue in response_cues
-        for fragment in visual_fragment_strings(cue["text"])
+        for fragment in _visual_fragment_strings(cue["text"])
     )
     if consumed_fragments != expected_fragments:
         raise ValueError(
@@ -835,7 +835,7 @@ def validate_audio_refinement_response(
     for entry in source_entries:
         start = parse_time(entry["start"])
         end = parse_time(entry["end"])
-        if interval_intersects_any((start, end), regions):
+        if _interval_intersects_any((start, end), regions):
             continue
         matches = [
             cue
@@ -853,7 +853,7 @@ def validate_audio_refinement_response(
                 "must remain identical"
             )
     for cue in ordered_cues:
-        if is_identical_copy(cue, source_by_id):
+        if _is_identical_copy(cue, source_by_id):
             continue
         start = parse_time(cue["start"])
         end = parse_time(cue["end"])
@@ -870,7 +870,7 @@ def validate_audio_refinement_response(
                 matching = [
                     region
                     for region in regions
-                    if interval_intersects_any(source_interval, [region])
+                    if _interval_intersects_any(source_interval, [region])
                 ]
                 common_regions = (
                     set(matching)
@@ -886,12 +886,12 @@ def validate_audio_refinement_response(
                 )
                 for region in common_regions or []
             ]
-            if not interval_contained_in_any((start, end), envelopes):
+            if not _interval_contained_in_any((start, end), envelopes):
                 raise ValueError(
                     "Changed cues must stay inside one shared repair region "
                     "plus the full extents of its referenced source cues"
                 )
-        elif not interval_contained_in_any(
+        elif not _interval_contained_in_any(
             (start, end),
             [
                 (region[0] - REPAIR_WINDOW_SECONDS, region[1] + REPAIR_WINDOW_SECONDS)

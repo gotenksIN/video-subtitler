@@ -10,9 +10,9 @@ from pathlib import Path
 
 from modules import io
 
-SPLIT_COMPLETE_MARKER = ".split_complete"
-EXTRACTED_AUDIO_NAME = "extracted_audio.ogg"
-AUDIO_DURATION_TOLERANCE_SECONDS = 2.0
+_SPLIT_COMPLETE_MARKER = ".split_complete"
+_EXTRACTED_AUDIO_NAME = "extracted_audio.ogg"
+_AUDIO_DURATION_TOLERANCE_SECONDS = 2.0
 AUDIO_MIME_TYPE = "audio/ogg"
 
 
@@ -83,7 +83,7 @@ def inspect_media(path: str | Path) -> MediaInspection:
         raise RuntimeError(f"Failed to inspect media {path}: {e}") from e
 
 
-def extracted_audio_duration(path: str | Path) -> float:
+def _extracted_audio_duration(path: str | Path) -> float:
     """Return duration for valid mono 48 kHz Opus audio, or zero."""
     try:
         inspection = inspect_media(path)
@@ -104,14 +104,14 @@ def extracted_audio_duration(path: str | Path) -> float:
     return duration if valid else 0.0
 
 
-def audio_duration_consistent(audio_duration: float, source_duration: float) -> bool:
+def _audio_duration_consistent(audio_duration: float, source_duration: float) -> bool:
     """Return True when audio duration is within tolerance of source duration."""
     return (
         math.isfinite(audio_duration)
         and audio_duration > 0
         and math.isfinite(source_duration)
         and source_duration > 0
-        and abs(audio_duration - source_duration) <= AUDIO_DURATION_TOLERANCE_SECONDS
+        and abs(audio_duration - source_duration) <= _AUDIO_DURATION_TOLERANCE_SECONDS
     )
 
 
@@ -130,12 +130,12 @@ def extract_complete_audio(
         )
     if source_duration <= 0:
         raise RuntimeError("Source video duration must be positive and finite")
-    target = Path(work_dir) / EXTRACTED_AUDIO_NAME
+    target = Path(work_dir) / _EXTRACTED_AUDIO_NAME
 
     if target.exists():
-        cached_duration = extracted_audio_duration(target)
+        cached_duration = _extracted_audio_duration(target)
         if cached_duration:
-            if audio_duration_consistent(cached_duration, source_duration):
+            if _audio_duration_consistent(cached_duration, source_duration):
                 print("Complete audio already exists, skipping extraction.")
                 return str(target), cached_duration, source_duration, True
             print(
@@ -181,14 +181,14 @@ def extract_complete_audio(
         ) from e
 
     try:
-        duration = extracted_audio_duration(tmp_path)
+        duration = _extracted_audio_duration(tmp_path)
         if not duration:
             raise RuntimeError(
                 "Extracted audio validation failed: expected one mono Opus audio "
                 "stream at 48 kHz with a positive duration."
             )
 
-        if not audio_duration_consistent(duration, source_duration):
+        if not _audio_duration_consistent(duration, source_duration):
             raise RuntimeError(
                 f"Extracted audio duration {duration:.3f}s is not consistent with "
                 f"the source duration {source_duration:.3f}s."
@@ -203,7 +203,7 @@ def extract_complete_audio(
     return str(target), duration, source_duration, False
 
 
-def clean_incomplete_split(chunk_dir):
+def _clean_incomplete_split(chunk_dir):
     """Remove split chunk files and segment index from chunk_dir."""
     for name in os.listdir(chunk_dir):
         if (
@@ -220,7 +220,7 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
     os.makedirs(chunk_dir, exist_ok=True)
     io.atomic_write_json(os.path.join(chunk_dir, io.MANIFEST_NAME), manifest)
 
-    complete_marker = os.path.join(chunk_dir, SPLIT_COMPLETE_MARKER)
+    complete_marker = os.path.join(chunk_dir, _SPLIT_COMPLETE_MARKER)
     chunks = list_chunks(chunk_dir)
     listed_chunks = {chunk["name"] for chunk in chunks}
     stored_chunks = {
@@ -243,7 +243,7 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
 
     if os.path.exists(complete_marker):
         os.remove(complete_marker)
-    clean_incomplete_split(chunk_dir)
+    _clean_incomplete_split(chunk_dir)
     ext = manifest["chunk_ext"]
 
     cmd = [

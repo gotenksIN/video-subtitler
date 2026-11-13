@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from modules import core, io, media
 
-INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
+_INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
 THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 DEFAULT_CHUNK_MODEL = "gemini-4-hydrogen"
 DEFAULT_REFINE_MODEL = "gemini-4-hydrogen"
@@ -24,11 +24,11 @@ DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "high"
 MAX_OUTPUT_TOKENS = 65536
 DEFAULT_AUDIO_REFINE_MODEL = "gemini-4-hydrogen"
-AUDIO_REFINE_THINKING_LEVEL = "high"
-AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
-PREFLIGHT_CONTEXT_FILENAME = "preflight_context.json"
-STREAM_REQUEST_ATTEMPTS = 3
-CAPTIONS_ADAPTER = TypeAdapter(list[core.Caption])
+_AUDIO_REFINE_THINKING_LEVEL = "high"
+_AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
+_PREFLIGHT_CONTEXT_FILENAME = "preflight_context.json"
+_STREAM_REQUEST_ATTEMPTS = 3
+_CAPTIONS_ADAPTER = TypeAdapter(list[core.Caption])
 
 
 def create_client(api_key, base_url):
@@ -43,18 +43,18 @@ def create_client(api_key, base_url):
     return genai.Client(**kwargs)
 
 
-def build_content_config(*, thinking_level=None, **kwargs):
+def _build_content_config(*, thinking_level=None, **kwargs):
     """Build a config with AFC disabled for direct Models requests."""
     kwargs.setdefault("max_output_tokens", MAX_OUTPUT_TOKENS)
     if thinking_level is not None and "thinking_config" not in kwargs:
-        kwargs["thinking_config"] = build_thinking_config(thinking_level)
+        kwargs["thinking_config"] = _build_thinking_config(thinking_level)
     kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
         disable=True
     )
     return types.GenerateContentConfig(**kwargs)
 
 
-def build_thinking_config(thinking_level):
+def _build_thinking_config(thinking_level):
     """Build a thinking configuration with thought streaming enabled."""
     if thinking_level is None:
         return None
@@ -64,7 +64,7 @@ def build_thinking_config(thinking_level):
     )
 
 
-def sanitize_response_schema(model):
+def _sanitize_response_schema(model):
     """Inline model references and strip keywords unsupported by Gemini."""
     schema = model.model_json_schema()
     definitions = schema.get("$defs", {})
@@ -91,16 +91,16 @@ def sanitize_response_schema(model):
     return remove_additional_properties(schema)
 
 
-def generate_content_config(thinking_level):
+def _generate_content_config(thinking_level):
     """Build the response configuration for chunk video generation."""
-    return build_content_config(
+    return _build_content_config(
         thinking_level=thinking_level,
         response_mime_type="application/json",
-        response_schema=sanitize_response_schema(core.SubtitleResponse),
+        response_schema=_sanitize_response_schema(core.SubtitleResponse),
     )
 
 
-def build_generation_prompt(chunk_duration, source_title=None, candidate_names=None):
+def _build_generation_prompt(chunk_duration, source_title=None, candidate_names=None):
     """Build the prompt for per-chunk video subtitle generation."""
     source_block = ""
     if source_title:
@@ -188,7 +188,7 @@ def load_cached_captions(out_json, chunk_duration):
     if not os.path.exists(out_json):
         return None
     try:
-        captions = CAPTIONS_ADAPTER.validate_json(Path(out_json).read_bytes())
+        captions = _CAPTIONS_ADAPTER.validate_json(Path(out_json).read_bytes())
         return core.validate_captions(captions, chunk_duration)
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         print(f"Ignoring invalid cached output {out_json}: {e}")
@@ -219,12 +219,12 @@ def process_chunk(
         print(f"Skipping {chunk_name} - already processed.")
         return True
 
-    prompt = build_generation_prompt(chunk_duration, source_title, candidate_names)
+    prompt = _build_generation_prompt(chunk_duration, source_title, candidate_names)
 
     try:
         with open(chunk_path, "rb") as f:
             video_data = f.read()
-        if len(video_data) > INLINE_VIDEO_WARNING_BYTES:
+        if len(video_data) > _INLINE_VIDEO_WARNING_BYTES:
             print(
                 f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
                 "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
@@ -233,15 +233,15 @@ def process_chunk(
         print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
-            for attempt in range(STREAM_REQUEST_ATTEMPTS):
-                full_json_text, _, _, _ = read_stream(
+            for attempt in range(_STREAM_REQUEST_ATTEMPTS):
+                full_json_text, _, _, _ = _read_stream(
                     client,
                     model=model_name,
                     contents=[
                         types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
                         prompt,
                     ],
-                    config=generate_content_config(thinking_level),
+                    config=_generate_content_config(thinking_level),
                 )
                 # Only host response validation uses the chunk attempt budget.
                 try:
@@ -252,7 +252,7 @@ def process_chunk(
                         parsed_response.captions, chunk_duration
                     )
                 except ValueError as error:
-                    if attempt == STREAM_REQUEST_ATTEMPTS - 1:
+                    if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
                         print(
                             f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
                             f"{error}"
@@ -279,9 +279,9 @@ def process_chunk(
         return False
 
 
-IDENTITY_RESEARCH_SECTION = "PARTICIPANTS AND SPEAKERS"
-TERMINOLOGY_RESEARCH_SECTION = "TOPIC TERMINOLOGY AND PROPER NOUNS"
-NON_NAME_LABELS = frozenset(
+_IDENTITY_RESEARCH_SECTION = "PARTICIPANTS AND SPEAKERS"
+_TERMINOLOGY_RESEARCH_SECTION = "TOPIC TERMINOLOGY AND PROPER NOUNS"
+_NON_NAME_LABELS = frozenset(
     {
         "evidence",
         "role",
@@ -305,7 +305,9 @@ NON_NAME_LABELS = frozenset(
 )
 
 
-def build_identity_research_prompt(source_title=None, context_urls=(), youtube_urls=()):
+def _build_identity_research_prompt(
+    source_title=None, context_urls=(), youtube_urls=()
+):
     """Build the plain-text prompt for the grounded web research pass."""
     title_block = ""
     if source_title:
@@ -332,13 +334,13 @@ def build_identity_research_prompt(source_title=None, context_urls=(), youtube_u
 
 Use Google Search to research this video and return a concise plain-text summary with exactly two sections, in this order, using these exact section headers.
 
-{IDENTITY_RESEARCH_SECTION}:
+{_IDENTITY_RESEARCH_SECTION}:
 Canonical English public names, aliases, and roles for the people who speak in this video.
 When a speaker performs in character under an established recurring stage or character persona rather than appearing as themselves, use the active persona name as the canonical English speaker name.
 List any performer legal or real name as an alias.
 Begin each entry on its own line with the canonical English public name or the stable role, followed by a colon, then give the aliases, the role, and the cited evidence.
 
-{TERMINOLOGY_RESEARCH_SECTION}:
+{_TERMINOLOGY_RESEARCH_SECTION}:
 Canonical English spelling of the recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or the context URLs.
 Give one canonical spelling per line with the cited source.
 {title_block}{url_block}{youtube_block}REQUIREMENTS
@@ -352,7 +354,7 @@ Give one canonical spelling per line with the cited source.
 """
 
 
-def split_research_sections(research_text):
+def _split_research_sections(research_text):
     """Split research text into identity and terminology section bodies.
 
     Section headers are matched case-insensitively with an optional trailing
@@ -364,9 +366,9 @@ def split_research_sections(research_text):
     target = identity_lines
     for line in research_text.splitlines():
         header = line.strip().upper().removesuffix(":")
-        if header == IDENTITY_RESEARCH_SECTION:
+        if header == _IDENTITY_RESEARCH_SECTION:
             target = identity_lines
-        elif header == TERMINOLOGY_RESEARCH_SECTION:
+        elif header == _TERMINOLOGY_RESEARCH_SECTION:
             target = terminology_lines
         else:
             target.append(line)
@@ -375,12 +377,12 @@ def split_research_sections(research_text):
     return identity, terminology
 
 
-def is_valid_grounded_name(label):
+def _is_valid_grounded_name(label):
     """Exclude placeholders and group summaries from speaker candidates."""
     normalized = label.strip().casefold()
     return (
         bool(normalized)
-        and normalized not in NON_NAME_LABELS
+        and normalized not in _NON_NAME_LABELS
         and not normalized.startswith(
             (
                 "other ",
@@ -400,7 +402,7 @@ def is_valid_grounded_name(label):
     )
 
 
-def extract_grounded_names(identity_section):
+def _extract_grounded_names(identity_section):
     """Collect canonical name entries from the identity research section."""
     names = {}
     for line in identity_section.splitlines():
@@ -408,12 +410,12 @@ def extract_grounded_names(identity_section):
         if not match:
             continue
         label = match.group(2).strip()
-        if is_valid_grounded_name(label):
+        if _is_valid_grounded_name(label):
             names.setdefault(label.casefold(), label)
     return list(names.values())
 
 
-def build_youtube_analysis_prompt(source_title=None):
+def _build_youtube_analysis_prompt(source_title=None):
     """Build the plain-text prompt for the direct YouTube analysis pass."""
     title_block = ""
     if source_title:
@@ -431,7 +433,7 @@ They must never infer or change dialogue content, meaning, or events.
 """
 
 
-def build_refinement_prompt(
+def _build_refinement_prompt(
     full_script,
     source_title=None,
     identity_context=None,
@@ -564,35 +566,35 @@ SCRIPT
 """
 
 
-def build_research_config(thinking_level, ordinary_urls):
+def _build_research_config(thinking_level, ordinary_urls):
     """Build plain-text config with Google Search grounding."""
     tools = [types.Tool(google_search=types.GoogleSearch())]
     if ordinary_urls:
         tools.append(types.Tool(url_context=types.UrlContext()))
-    return build_content_config(thinking_level=thinking_level, tools=tools)
+    return _build_content_config(thinking_level=thinking_level, tools=tools)
 
 
-def build_youtube_analysis_config(thinking_level):
+def _build_youtube_analysis_config(thinking_level):
     """Build plain-text config for direct YouTube analysis without tools."""
-    return build_content_config(thinking_level=thinking_level)
+    return _build_content_config(thinking_level=thinking_level)
 
 
-def build_refinement_config(thinking_level):
+def _build_refinement_config(thinking_level):
     """Build structured config for script refinement without tools."""
-    return build_content_config(
+    return _build_content_config(
         thinking_level=thinking_level,
         response_mime_type="application/json",
-        response_schema=sanitize_response_schema(core.RefinementResponse),
+        response_schema=_sanitize_response_schema(core.RefinementResponse),
     )
 
 
-def read_stream(client, **request):
+def _read_stream(client, **request):
     """Restart interrupted streams with fresh text and grounding buffers."""
-    for attempt in range(STREAM_REQUEST_ATTEMPTS):
+    for attempt in range(_STREAM_REQUEST_ATTEMPTS):
         response_stream = client.models.generate_content_stream(**request)
         try:
             with closing(response_stream):
-                return collect_stream_metadata(response_stream)
+                return _collect_stream_metadata(response_stream)
         except (
             httpx2.TransportError,
             ConnectionError,
@@ -605,14 +607,14 @@ def read_stream(client, **request):
                 error.code == 429 or 500 <= error.code < 600
             ):
                 raise
-            if attempt == STREAM_REQUEST_ATTEMPTS - 1:
+            if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
                 raise
             delay = 2**attempt
             print(f"Interrupted Gemini stream ({error}); retrying in {delay}s...")
             time.sleep(delay)
 
 
-def collect_stream_metadata(response_stream):
+def _collect_stream_metadata(response_stream):
     """Collect response text and grounding metadata in one stream pass."""
     full_text = ""
     search_queries = []
@@ -650,12 +652,12 @@ def collect_stream_metadata(response_stream):
     return full_text, search_queries, grounded_sources, retrieved_urls
 
 
-def retrieval_status_value(status):
+def _retrieval_status_value(status):
     """Return the plain status string for an enum or raw value."""
     return getattr(status, "value", status)
 
 
-def verify_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls):
+def _verify_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls):
     """Fail research before use when grounding requirements are unmet."""
     if not queries and not sources:
         raise RuntimeError(
@@ -674,17 +676,17 @@ def verify_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls)
                 "Failing without publishing output."
             )
         if (
-            str(retrieval_status_value(status)).upper()
+            str(_retrieval_status_value(status)).upper()
             != "URL_RETRIEVAL_STATUS_SUCCESS"
         ):
             raise RuntimeError(
                 f"Context URL {url} retrieval failed with "
-                f"{retrieval_status_value(status)}. "
+                f"{_retrieval_status_value(status)}. "
                 "Failing without publishing output."
             )
 
 
-def print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=()):
+def _print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=()):
     """Print summary of search queries, grounded sources, and URL retrieval."""
     unique_queries = list(dict.fromkeys(queries))
     if unique_queries:
@@ -704,11 +706,11 @@ def print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=(
         }
         for url in ordinary_urls:
             entry = retrieved_by_identity.get(core.url_identity(url))
-            status = retrieval_status_value(entry[1]) if entry else "NOT RETRIEVED"
+            status = _retrieval_status_value(entry[1]) if entry else "NOT RETRIEVED"
             print(f"  - {url}: {status}")
 
 
-def run_preflight_context(
+def _run_preflight_context(
     api_key,
     base_url,
     model_name,
@@ -721,29 +723,29 @@ def run_preflight_context(
     youtube_urls, ordinary_urls = core.classify_context_urls(validated_urls)
 
     def research():
-        research_prompt = build_identity_research_prompt(
+        research_prompt = _build_identity_research_prompt(
             source_title=source_title,
             context_urls=ordinary_urls,
             youtube_urls=youtube_urls,
         )
-        research_config = build_research_config(
+        research_config = _build_research_config(
             thinking_level=thinking_level,
             ordinary_urls=ordinary_urls,
         )
         with create_client(api_key, base_url) as client:
-            research_text, queries, sources, retrieved_urls = read_stream(
+            research_text, queries, sources, retrieved_urls = _read_stream(
                 client,
                 model=model_name,
                 contents=research_prompt,
                 config=research_config,
             )
-        verify_refinement_grounding(
+        _verify_refinement_grounding(
             queries=queries,
             sources=sources,
             retrieved_urls=retrieved_urls,
             ordinary_urls=ordinary_urls,
         )
-        print_refinement_grounding(
+        _print_refinement_grounding(
             queries=queries,
             sources=sources,
             retrieved_urls=retrieved_urls,
@@ -757,14 +759,14 @@ def run_preflight_context(
             "Analyzing YouTube video directly for participants and "
             f"proper-name observations ({len(youtube_urls)} URL(s))..."
         )
-        youtube_prompt = build_youtube_analysis_prompt(source_title)
+        youtube_prompt = _build_youtube_analysis_prompt(source_title)
         youtube_contents = [
             types.Part.from_uri(file_uri=url, mime_type="video/*")
             for url in youtube_urls
         ] + [youtube_prompt]
-        youtube_config = build_youtube_analysis_config(thinking_level)
+        youtube_config = _build_youtube_analysis_config(thinking_level)
         with create_client(api_key, base_url) as client:
-            youtube_text, _, _, _ = read_stream(
+            youtube_text, _, _, _ = _read_stream(
                 client,
                 model=model_name,
                 contents=youtube_contents,
@@ -777,8 +779,8 @@ def run_preflight_context(
         research_text = research()
         youtube_context = youtube_future.result() if youtube_future else None
 
-    identity_context, terminology_context = split_research_sections(research_text)
-    grounded_names = extract_grounded_names(identity_context)
+    identity_context, terminology_context = _split_research_sections(research_text)
+    grounded_names = _extract_grounded_names(identity_context)
 
     return core.PreflightContext(
         identity_context=identity_context,
@@ -788,7 +790,7 @@ def run_preflight_context(
     )
 
 
-def preflight_cache_identity(source_title, context_urls, model_name, thinking_level):
+def _preflight_cache_identity(source_title, context_urls, model_name, thinking_level):
     """Describe the inputs that determine preflight research."""
     return {
         "source_title": source_title,
@@ -798,16 +800,16 @@ def preflight_cache_identity(source_title, context_urls, model_name, thinking_le
     }
 
 
-def load_cached_preflight_context(
+def _load_cached_preflight_context(
     chunk_dir, *, source_title, context_urls, model_name, thinking_level
 ) -> core.PreflightContext | None:
     """Load a cached preflight context, or discard an invalid cache."""
-    path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
+    path = Path(chunk_dir) / _PREFLIGHT_CONTEXT_FILENAME
     if not path.exists():
         return None
     try:
         payload = json.loads(path.read_bytes())
-        identity = preflight_cache_identity(
+        identity = _preflight_cache_identity(
             source_title, context_urls, model_name, thinking_level
         )
         if any(
@@ -817,7 +819,7 @@ def load_cached_preflight_context(
             raise ValueError("Preflight cache identity does not match")
         context = core.PreflightContext.model_validate(payload["context"])
         context.grounded_names = [
-            name for name in context.grounded_names if is_valid_grounded_name(name)
+            name for name in context.grounded_names if _is_valid_grounded_name(name)
         ]
         return context
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
@@ -826,7 +828,7 @@ def load_cached_preflight_context(
         return None
 
 
-def store_preflight_context(
+def _store_preflight_context(
     chunk_dir,
     preflight: core.PreflightContext,
     *,
@@ -836,8 +838,8 @@ def store_preflight_context(
     thinking_level,
 ):
     """Publish one preflight context atomically into the work directory."""
-    path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
-    identity = preflight_cache_identity(
+    path = Path(chunk_dir) / _PREFLIGHT_CONTEXT_FILENAME
+    identity = _preflight_cache_identity(
         source_title, context_urls, model_name, thinking_level
     )
     io.atomic_write_json(
@@ -862,10 +864,10 @@ def load_or_run_preflight_context(
         "model_name": model_name,
         "thinking_level": thinking_level,
     }
-    context = load_cached_preflight_context(chunk_dir, **identity)
+    context = _load_cached_preflight_context(chunk_dir, **identity)
     if context is None:
-        context = run_preflight_context(api_key=api_key, base_url=base_url, **identity)
-        store_preflight_context(chunk_dir, context, **identity)
+        context = _run_preflight_context(api_key=api_key, base_url=base_url, **identity)
+        _store_preflight_context(chunk_dir, context, **identity)
     return context
 
 
@@ -896,13 +898,13 @@ def global_refine_subtitles(
     # 1. Preflight context. Direct runs without one execute Pass 0 here;
     # pipeline runs reuse the cached Pass 0 result.
     if preflight_context is None:
-        preflight_context = run_preflight_context(
+        preflight_context = _run_preflight_context(
             api_key, base_url, model_name, thinking_level, source_title, context_urls
         )
 
     # 2. Structured refinement pass. No tools; the grounded identity and
     # terminology sections supply context.
-    prompt = build_refinement_prompt(
+    prompt = _build_refinement_prompt(
         full_script,
         source_title,
         identity_context=preflight_context.identity_context,
@@ -914,11 +916,11 @@ def global_refine_subtitles(
         print(
             "Sending script to Gemini for global refinement (this may take a minute)..."
         )
-        full_json_text, _, _, _ = read_stream(
+        full_json_text, _, _, _ = _read_stream(
             client,
             model=model_name,
             contents=prompt,
-            config=build_refinement_config(thinking_level),
+            config=_build_refinement_config(thinking_level),
         )
 
     try:
@@ -943,7 +945,7 @@ def global_refine_subtitles(
     print(f"Saved refined subtitles to {output_vtt}")
 
 
-def load_script_entries(vtt_path):
+def _load_script_entries(vtt_path):
     """Read a VTT into script entries with sequential request-only IDs."""
     vtt = io.read_plain_vtt(vtt_path)
     entries = []
@@ -960,7 +962,7 @@ def load_script_entries(vtt_path):
     return entries
 
 
-def build_audio_refinement_prompt(
+def _build_audio_refinement_prompt(
     source_entries, boundaries, audio_duration, source_title=None
 ):
     boundary_lines = "\n".join(
@@ -1025,7 +1027,7 @@ REPAIR RULES
 RESPONSE FORMAT
 
 Return one sparse patch object. Do not return the complete script.
-- "contractVersion": exactly "{AUDIO_REFINE_RESPONSE_CONTRACT}".
+- "contractVersion": exactly "{_AUDIO_REFINE_RESPONSE_CONTRACT}".
 - "cues": only changed, replacement, split, merged, or recovered cues, in script order. Omit every unchanged source cue; the host preserves omitted cues exactly.
 - "deletedSourceIds": IDs of false dialogue cues removed from the script. Omission alone never deletes a source cue.
 - One source ID with changed text or timing is a rewrite or retime.
@@ -1038,16 +1040,16 @@ Return one sparse patch object. Do not return the complete script.
 """
 
 
-def audio_refinement_config():
+def _audio_refinement_config():
     """Build structured config for boundary audio refinement without tools."""
-    return build_content_config(
+    return _build_content_config(
         response_mime_type="application/json",
-        response_schema=sanitize_response_schema(core.AudioRefinementResponse),
-        thinking_level=AUDIO_REFINE_THINKING_LEVEL,
+        response_schema=_sanitize_response_schema(core.AudioRefinementResponse),
+        thinking_level=_AUDIO_REFINE_THINKING_LEVEL,
     )
 
 
-def run_audio_refinement_request(
+def _run_audio_refinement_request(
     api_key,
     base_url,
     model,
@@ -1058,19 +1060,19 @@ def run_audio_refinement_request(
     source_title=None,
 ):
     """Run one streamed audio-refinement request and return (raw_text, response)."""
-    prompt = build_audio_refinement_prompt(
+    prompt = _build_audio_refinement_prompt(
         source_entries, boundaries, audio_duration, source_title
     )
     with open(audio_path, "rb") as handle:
         audio_bytes = handle.read()
-    if len(audio_bytes) > INLINE_VIDEO_WARNING_BYTES:
+    if len(audio_bytes) > _INLINE_VIDEO_WARNING_BYTES:
         print(
             f"Warning: {audio_path} is {len(audio_bytes) / 1024 / 1024:.1f} MB. "
             "Gemini docs recommend inline audio below 20 MB; it will still be sent."
         )
     with create_client(api_key, base_url) as client:
         print("Sending complete audio and script for boundary audio refinement...")
-        full_json_text, _, _, _ = read_stream(
+        full_json_text, _, _, _ = _read_stream(
             client,
             model=model,
             contents=[
@@ -1079,7 +1081,7 @@ def run_audio_refinement_request(
                 ),
                 prompt,
             ],
-            config=audio_refinement_config(),
+            config=_audio_refinement_config(),
         )
     try:
         return full_json_text, core.AudioRefinementResponse.model_validate_json(
@@ -1092,7 +1094,7 @@ def run_audio_refinement_request(
         ) from error
 
 
-def audio_refinement_cache_identity(
+def _audio_refinement_cache_identity(
     script_path, audio_path, audio_duration, boundaries, model
 ):
     """Return cache identity of one audio-refinement response."""
@@ -1102,13 +1104,13 @@ def audio_refinement_cache_identity(
         "audio_duration": audio_duration,
         "boundaries": list(boundaries),
         "model": model,
-        "thinking_level": AUDIO_REFINE_THINKING_LEVEL,
-        "response_contract": AUDIO_REFINE_RESPONSE_CONTRACT,
+        "thinking_level": _AUDIO_REFINE_THINKING_LEVEL,
+        "response_contract": _AUDIO_REFINE_RESPONSE_CONTRACT,
         "mode": "boundary",
     }
 
 
-def audio_cache_paths(work_dir):
+def _audio_cache_paths(work_dir):
     """Return boundary audio-refinement cache artifact paths."""
     return (
         Path(work_dir) / "audio_refinement.json",
@@ -1116,16 +1118,16 @@ def audio_cache_paths(work_dir):
     )
 
 
-def store_audio_refinement_cache(work_dir, identity, response):
+def _store_audio_refinement_cache(work_dir, identity, response):
     """Save validated audio refinement response and metadata to cache."""
-    response_path, meta_path = audio_cache_paths(work_dir)
+    response_path, meta_path = _audio_cache_paths(work_dir)
     io.atomic_write_json(response_path, response.model_dump(by_alias=True))
     io.atomic_write_json(meta_path, {"identity": identity})
 
 
-def load_cached_audio_refinement(work_dir, identity):
+def _load_cached_audio_refinement(work_dir, identity):
     """Load cached audio refinement response matching identity, or return None."""
-    response_path, meta_path = audio_cache_paths(work_dir)
+    response_path, meta_path = _audio_cache_paths(work_dir)
     if not response_path.exists() or not meta_path.exists():
         return None
     try:
@@ -1137,22 +1139,22 @@ def load_cached_audio_refinement(work_dir, identity):
         )
     except (ValueError, OSError) as error:
         print(f"Ignoring invalid audio refinement cache {response_path}: {error}")
-        discard_audio_refinement_cache(work_dir)
+        _discard_audio_refinement_cache(work_dir)
         return None
     return response
 
 
-def discard_audio_refinement_cache(work_dir):
+def _discard_audio_refinement_cache(work_dir):
     """Remove cached audio refinement response and metadata files."""
-    for path in audio_cache_paths(work_dir):
+    for path in _audio_cache_paths(work_dir):
         path.unlink(missing_ok=True)
 
 
-def validated_cached_audio_refinement(
+def _validated_cached_audio_refinement(
     work_dir, identity, source_entries, audio_duration, boundaries, *, source_duration
 ):
     """Return output for a valid cache, or discard an invalid cache."""
-    cached = load_cached_audio_refinement(work_dir, identity)
+    cached = _load_cached_audio_refinement(work_dir, identity)
     if cached is None:
         return None
     try:
@@ -1167,7 +1169,7 @@ def validated_cached_audio_refinement(
         print(
             f"Ignoring semantically invalid cached audio refinement response: {error}"
         )
-        discard_audio_refinement_cache(work_dir)
+        _discard_audio_refinement_cache(work_dir)
         return None
     print("Reusing cached boundary audio refinement response.")
     return validated
@@ -1188,11 +1190,11 @@ def boundary_audio_refine_subtitles(
     source_title=None,
 ):
     """Run or reuse boundary audio refinement and publish atomically."""
-    source_entries = load_script_entries(stitched_vtt)
-    identity = audio_refinement_cache_identity(
+    source_entries = _load_script_entries(stitched_vtt)
+    identity = _audio_refinement_cache_identity(
         stitched_vtt, audio_path, audio_duration, boundaries, model_name
     )
-    validated = validated_cached_audio_refinement(
+    validated = _validated_cached_audio_refinement(
         work_dir,
         identity,
         source_entries,
@@ -1203,7 +1205,7 @@ def boundary_audio_refine_subtitles(
     response_to_cache = None
     raw_json = None
     if validated is None:
-        raw_json, response = run_audio_refinement_request(
+        raw_json, response = _run_audio_refinement_request(
             api_key,
             base_url,
             model_name,
@@ -1237,8 +1239,8 @@ def boundary_audio_refine_subtitles(
             )
         io.atomic_save_vtt(candidate_vtt, output_vtt)
         if response_to_cache is not None:
-            store_audio_refinement_cache(work_dir, identity, response_to_cache)
+            _store_audio_refinement_cache(work_dir, identity, response_to_cache)
     except Exception:
-        discard_audio_refinement_cache(work_dir)
+        _discard_audio_refinement_cache(work_dir)
         raise
     print(f"Saved boundary audio-refined subtitles to {output_vtt}")

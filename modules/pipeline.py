@@ -43,7 +43,7 @@ class GenerationConfig:
         return self.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
 
 
-def build_manifest(config: GenerationConfig, source_inspection: media.MediaInspection):
+def _build_manifest(config: GenerationConfig, source_inspection: media.MediaInspection):
     """Build the manifest dictionary and resolved work directory path."""
     ext, mime, video_codec = source_inspection.video_format
 
@@ -101,7 +101,7 @@ def release_lock(lock_file):
             lock_file.close()
 
 
-def clean_completed_work(chunk_dir):
+def _clean_completed_work(chunk_dir):
     """Remove all work directory contents except the active lock file."""
     for entry in os.scandir(chunk_dir):
         if entry.name == LOCK_NAME:
@@ -112,7 +112,7 @@ def clean_completed_work(chunk_dir):
             os.remove(entry.path)
 
 
-def collect_api_results(futures):
+def _collect_api_results(futures):
     """Collect completed futures and return names of failed chunks."""
     failed = []
     for future in concurrent.futures.as_completed(futures):
@@ -162,7 +162,7 @@ def process_chunks(
             ): chunk["name"]
             for chunk in chunks
         }
-        return collect_api_results(futures)
+        return _collect_api_results(futures)
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
@@ -276,7 +276,7 @@ def run_generation(config: GenerationConfig) -> None:
 
     source_title = core.derive_source_title(config.video_path)
     source_inspection = media.inspect_media(config.video_path)
-    manifest, chunk_dir = build_manifest(config, source_inspection)
+    manifest, chunk_dir = _build_manifest(config, source_inspection)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_file = None
     completed = False
@@ -396,6 +396,6 @@ def run_generation(config: GenerationConfig) -> None:
             # 6. Cleanup.
             if completed and os.path.exists(chunk_dir):
                 print(f"Cleaning up temporary directory: {chunk_dir}")
-                clean_completed_work(chunk_dir)
+                _clean_completed_work(chunk_dir)
         finally:
             release_lock(lock_file)
