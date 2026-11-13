@@ -92,8 +92,8 @@ def main():
         action="append",
         default=None,
         help=(
-            "Absolute HTTP(S) URL used as grounding context for global refinement. "
-            "Repeat the option to supply several URLs."
+            "Absolute HTTP(S) URL used as grounding context for preflight research, "
+            "chunk generation, and text refinement. Repeat the option to supply several URLs."
         ),
     )
 

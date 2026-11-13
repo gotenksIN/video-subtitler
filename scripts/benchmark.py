@@ -62,7 +62,7 @@ def parse_args():
         "--context-url",
         action="append",
         default=None,
-        help="Optional grounding context URL for text refinement. Repeatable.",
+        help="Optional grounding context URL for preflight research, chunk generation, and text refinement. Repeatable.",
     )
     parser.add_argument(
         "--reference-vtt",
