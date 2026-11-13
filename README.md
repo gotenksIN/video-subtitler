@@ -88,7 +88,7 @@ Install or upgrade the BtbN GPL static FFmpeg build in `~/.local/bin`:
 ./scripts/ffmpeg.sh
 ```
 
-Download a YouTube video as VP9 video with audio, falling back to WebM when VP9 is unavailable:
+Download a YouTube video as VP9 with Opus or Vorbis audio in WebM:
 ```bash
 ./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
 ```

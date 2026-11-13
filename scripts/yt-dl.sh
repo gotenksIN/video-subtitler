@@ -15,7 +15,7 @@ OUTPUT="${2:-%(title)s}.webm"
 
 uvx --prerelease allow yt-dlp \
     --no-playlist \
-    --format "bestvideo[vcodec^=vp9]+bestaudio/best[ext=webm]" \
+    --format "bestvideo[vcodec^=vp9]+bestaudio[acodec~='^(opus|vorbis)']/best[ext=webm][vcodec^=vp9][acodec~='^(opus|vorbis)']" \
     --merge-output-format webm \
     --output "$OUTPUT" \
-    "$URL"
+    -- "$URL"

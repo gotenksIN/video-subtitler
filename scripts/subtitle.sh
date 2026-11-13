@@ -27,5 +27,5 @@ elif [ -t 0 ]; then
     fi
 fi
 
-uv run --project "$REPO_ROOT" "${REPO_ROOT}/gemini_subs.py" "$VIDEO" \
-    --output "$OUTPUT" "${CONTEXT_ARGS[@]}"
+uv run --project "$REPO_ROOT" "${REPO_ROOT}/gemini_subs.py" \
+    --output "$OUTPUT" "${CONTEXT_ARGS[@]}" -- "$VIDEO"

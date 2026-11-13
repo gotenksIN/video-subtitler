@@ -31,6 +31,7 @@ case "$(uname -m)" in
 esac
 
 need_cmd tar
+need_cmd xz
 need_cmd mktemp
 
 if command -v curl >/dev/null 2>&1; then
