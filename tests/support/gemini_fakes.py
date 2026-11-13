@@ -6,6 +6,7 @@ on real files, not on internal call sequences or prompt wording.
 """
 
 from dataclasses import dataclass, field
+from threading import Lock
 from types import SimpleNamespace
 
 import webvtt
@@ -28,12 +29,13 @@ class StreamCall:
 
     pieces: list = field(default_factory=list)
     error: Exception | None = None
+    kind: str | None = None
 
 
 class ScriptedGeminiClient:
     """Stateful fake for genai.Client used as a context manager.
 
-    Consumes scripted calls in order. Records each request in `requests`.
+    Consumes calls in order within each request kind. Records each request.
     An unscripted request raises AssertionError, so tests can assert that
     no extra API request was issued.
     """
@@ -41,6 +43,7 @@ class ScriptedGeminiClient:
     def __init__(self, calls=()):
         self._pending = list(calls)
         self.requests = []
+        self._lock = Lock()
 
     def __enter__(self):
         return self
@@ -53,16 +56,34 @@ class ScriptedGeminiClient:
         return self
 
     def generate_content_stream(self, **kwargs):
-        if not self._pending:
-            raise AssertionError("the pipeline issued an unexpected Gemini request")
-        call = self._pending.pop(0)
-        self.requests.append(
-            RecordedRequest(
-                model=kwargs["model"],
-                contents=kwargs["contents"],
-                config=kwargs["config"],
+        contents = kwargs["contents"]
+        kind = None
+        if kwargs["config"].tools:
+            kind = "research"
+        elif isinstance(contents, list) and any(
+            getattr(part, "file_data", None) and part.file_data.mime_type == "video/*"
+            for part in contents
+        ):
+            kind = "youtube"
+        with self._lock:
+            index = next(
+                (
+                    i
+                    for i, call in enumerate(self._pending)
+                    if call.kind in (None, kind)
+                ),
+                None,
             )
-        )
+            if index is None:
+                raise AssertionError("the pipeline issued an unexpected Gemini request")
+            call = self._pending.pop(index)
+            self.requests.append(
+                RecordedRequest(
+                    model=kwargs["model"],
+                    contents=contents,
+                    config=kwargs["config"],
+                )
+            )
         if call.error is not None:
             raise call.error
         return self._stream(call)
@@ -91,12 +112,12 @@ def chunk_call(pieces, error=None):
 
 def research_call(pieces=("Research text",), error=None):
     """One scripted grounded identity research response."""
-    return StreamCall(pieces=list(pieces), error=error)
+    return StreamCall(pieces=list(pieces), error=error, kind="research")
 
 
 def youtube_call(pieces=("YouTube analysis",), error=None):
     """One scripted direct YouTube analysis response."""
-    return StreamCall(pieces=list(pieces), error=error)
+    return StreamCall(pieces=list(pieces), error=error, kind="youtube")
 
 
 def refinement_call(pieces, error=None):

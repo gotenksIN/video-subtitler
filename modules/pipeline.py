@@ -284,13 +284,9 @@ def run_generation(config: GenerationConfig) -> None:
                     "Failed to extract complete audio. "
                     "The source may not contain an audio stream."
                 )
-            audio_path, audio_duration, source_duration, _cached = (
-                media.extract_complete_audio(
-                    config.video_path,
-                    chunk_dir,
-                    source_inspection=source_inspection,
-                )
-            )
+            source_duration = source_inspection.duration
+            if source_duration <= 0:
+                raise RuntimeError("Source video duration must be positive and finite")
 
         # Pass 0: Preflight identity and research context
         preflight_identity = {
@@ -299,28 +295,40 @@ def run_generation(config: GenerationConfig) -> None:
             "model_name": config.model,
             "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
         }
-        preflight_context = gemini.load_cached_preflight_context(
-            chunk_dir, **preflight_identity
-        )
-        if preflight_context is None:
-            preflight_context = gemini.run_preflight_context(
-                api_key=config.api_key,
-                base_url=config.base_url,
-                model_name=config.model,
-                thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
-                source_title=source_title,
-                context_urls=context_urls,
+
+        def preflight():
+            context = gemini.load_cached_preflight_context(
+                chunk_dir, **preflight_identity
             )
-            gemini.store_preflight_context(
-                chunk_dir, preflight_context, **preflight_identity
+            if context is None:
+                context = gemini.run_preflight_context(
+                    api_key=config.api_key,
+                    base_url=config.base_url,
+                    **preflight_identity,
+                )
+                gemini.store_preflight_context(chunk_dir, context, **preflight_identity)
+            return context
+
+        # Settle preflight workers before the outer finally releases the lock.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            preflight_future = executor.submit(preflight)
+            media.split_video(
+                str(config.video_path), chunk_dir, config.chunk_dur, manifest
             )
 
-        # 1. Split video.
-        media.split_video(str(config.video_path), chunk_dir, config.chunk_dur, manifest)
-
-        chunks = media.list_chunks(chunk_dir)
-        if not chunks:
-            raise RuntimeError("No video chunks were created")
+            chunks = media.list_chunks(chunk_dir)
+            if not chunks:
+                raise RuntimeError("No video chunks were created")
+            boundaries = [chunk["start"] for chunk in chunks[1:]]
+            if config.audio_refine and boundaries:
+                audio_path, audio_duration, source_duration, _cached = (
+                    media.extract_complete_audio(
+                        config.video_path,
+                        chunk_dir,
+                        source_inspection=source_inspection,
+                    )
+                )
+            preflight_context = preflight_future.result()
 
         # 2. Process chunks concurrently through one API worker pool.
         failed = process_chunks(
@@ -347,14 +355,14 @@ def run_generation(config: GenerationConfig) -> None:
         current_vtt = stitched_vtt
 
         # 4. Boundary-limited audio refinement over the complete audio.
-        if config.audio_refine:
+        if config.audio_refine and boundaries:
             audio_refined_vtt = Path(chunk_dir) / "audio_refined.vtt"
             gemini.boundary_audio_refine_subtitles(
                 stitched_vtt=stitched_vtt,
                 audio_path=audio_path,
                 audio_duration=audio_duration,
                 source_duration=source_duration,
-                boundaries=[chunk["start"] for chunk in chunks[1:]],
+                boundaries=boundaries,
                 work_dir=chunk_dir,
                 output_vtt=audio_refined_vtt,
                 api_key=config.api_key,

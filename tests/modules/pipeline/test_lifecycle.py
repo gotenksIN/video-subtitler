@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from dataclasses import replace
+from threading import Event
 
 import pytest
 import webvtt
@@ -108,6 +109,8 @@ def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypa
             "sine=frequency=440:duration=1.4",
             "-c:v",
             "libx264",
+            "-force_key_frames",
+            "1",
             "-c:a",
             "aac",
             str(video),
@@ -119,6 +122,7 @@ def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypa
     install_preflight(monkeypatch)
     client = ScriptedGeminiClient(
         [
+            chunk_call([json.dumps({"captions": []})]),
             chunk_call(
                 [
                     json.dumps(
@@ -126,8 +130,8 @@ def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypa
                             "captions": [
                                 {
                                     "id": 0,
-                                    "start": "1.8",
-                                    "end": "2.3",
+                                    "start": "0.8",
+                                    "end": "1.3",
                                     "text": "[End card]",
                                 }
                             ]
@@ -141,12 +145,13 @@ def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypa
         ]
     )
     use_client(monkeypatch, client)
+    monkeypatch.setattr(pipeline, "clean_completed_work", lambda _directory: None)
     config = pipeline.GenerationConfig(
         video_path=video,
         output_path=tmp_path / "output.vtt",
         model="model",
         api_key="key",
-        chunk_dur=60,
+        chunk_dur=1,
         workers=1,
         thinking_level="high",
         audio_refine=True,
@@ -155,10 +160,33 @@ def test_real_media_trailing_visual_survives_audio_refinement(tmp_path, monkeypa
 
     pipeline.run_generation(config)
 
+    chunks = media.list_chunks(active_work_directory(tmp_path))
+    assert len(chunks) == 2
+    offset = chunks[1]["start"]
     assert read_captions(config.output_path) == [
-        ("00:00:01.800", "00:00:02.300", "[End card]")
+        (core.format_time(offset + 0.8), core.format_time(offset + 1.3), "[End card]")
     ]
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
+
+
+def test_single_chunk_skips_audio_extraction_and_boundary_refinement(
+    tmp_path, monkeypatch
+):
+    config, tools = prepare_generation(tmp_path, monkeypatch, audio_refine=True)
+    tools.chunk_rows = ((0, 4),)
+    write_two_chunk_subtitles(monkeypatch)
+
+    def unexpected_refine(**_kwargs):
+        raise AssertionError("Pass 2 must not run without boundaries")
+
+    monkeypatch.setattr(gemini, "boundary_audio_refine_subtitles", unexpected_refine)
+
+    pipeline.run_generation(config)
+
+    assert read_captions(config.output_path) == [
+        ("00:00:00.500", "00:00:01.500", "Cue 0")
+    ]
+    assert tools.audio_extraction_calls() == []
 
 
 @pytest.mark.parametrize(
@@ -270,6 +298,64 @@ def test_missing_audio_stream_fails_before_splitting(tmp_path, monkeypatch):
 
     assert tools.split_calls() == []
     assert not config.output_path.exists()
+
+
+def test_preflight_overlaps_splitting_and_audio_extraction(tmp_path, monkeypatch):
+    config, _tools = prepare_generation(tmp_path, monkeypatch, audio_refine=True)
+    preflight_started = Event()
+    audio_started = Event()
+    split = media.split_video
+    extract = media.extract_complete_audio
+
+    def preflight(**_kwargs):
+        preflight_started.set()
+        assert audio_started.wait(5), "audio extraction must not wait for preflight"
+        return core.PreflightContext()
+
+    def splitting(*args):
+        assert preflight_started.wait(5), "splitting must overlap preflight"
+        return split(*args)
+
+    def extraction(*args, **kwargs):
+        audio_started.set()
+        return extract(*args, **kwargs)
+
+    monkeypatch.setattr(gemini, "run_preflight_context", preflight)
+    monkeypatch.setattr(media, "split_video", splitting)
+    monkeypatch.setattr(media, "extract_complete_audio", extraction)
+    write_two_chunk_subtitles(monkeypatch)
+    install_refiners(monkeypatch)
+    pipeline.run_generation(config)
+    assert config.output_path.exists()
+
+
+@pytest.mark.parametrize("stage", ["split_video", "extract_complete_audio"])
+def test_media_failure_settles_preflight_before_releasing_lock(
+    tmp_path, monkeypatch, stage
+):
+    config, _tools = prepare_generation(tmp_path, monkeypatch, audio_refine=True)
+    media_failed = Event()
+    settled = []
+
+    def preflight(**_kwargs):
+        assert media_failed.wait(5)
+        work = active_work_directory(tmp_path)
+        with pytest.raises(RuntimeError, match="already using"):
+            pipeline.acquire_lock(work)
+        settled.append(True)
+        return core.PreflightContext()
+
+    def failure(*_args, **_kwargs):
+        media_failed.set()
+        raise RuntimeError("media failed")
+
+    monkeypatch.setattr(gemini, "run_preflight_context", preflight)
+    monkeypatch.setattr(media, stage, failure)
+    with pytest.raises(RuntimeError, match="media failed"):
+        pipeline.run_generation(config)
+    assert settled == [True]
+    lock = pipeline.acquire_lock(active_work_directory(tmp_path))
+    pipeline.release_lock(lock)
 
 
 def test_retry_resumes_failed_work_without_resplitting_and_publishes(

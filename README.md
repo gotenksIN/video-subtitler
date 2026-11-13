@@ -11,24 +11,29 @@ It uses a 4-pass pipeline:
 
 ```mermaid
 flowchart TD
-    Video[Source video & URLs] --> Research[0. Grounded web & YouTube preflight research]
-    Video --> Audio[Extract complete audio]
-
+    Video[Source video & URLs] --> Validate[Probe source video and validate audio when enabled]
+    Validate --> Research[0. Parallel grounded web & YouTube preflight research]
     Research --> Context[preflight_context.json]
-    Video --> Split[1. Stream-copy split]
-
-    Split --> Chunks[Concurrent video chunks]
+    Validate --> Split[1. Stream-copy split]
+    Split --> Audio[Extract complete audio when enabled and boundaries exist]
+    Audio --> Chunks[Concurrent video chunks]
     Context --> FlashGen
     Chunks --> FlashGen[Gemini 4 Hydrogen: Subtitle generation with candidate roster]
     FlashGen --> Stitch[Stitch & merge visual fragments]
 
-    Stitch --> AudioPass[2. Boundary audio refinement]
+    Stitch --> Boundary{Audio enabled and boundaries exist?}
+    Boundary -->|Yes| AudioPass[2. Boundary audio refinement]
     Audio --> AudioPass
 
     AudioPass --> ProRefine[3. Gemini 4 Hydrogen: Structured text polish with preflight context]
+    Boundary -->|No| ProRefine
     Context --> ProRefine
     ProRefine --> Output[Final English WebVTT subtitles]
 ```
+
+Preflight runs concurrently with splitting and subsequent audio extraction.
+Chunk generation waits for both media preparation and preflight context.
+The work-directory lock stays held until all preflight work settles, including on failure.
 
 ## Features
 
@@ -139,6 +144,8 @@ uv run python gemini_subs.py "your_video.webm" \
 By default, the pipeline uses `gemini-4-hydrogen` for chunk video generation, boundary audio refinement, and global text refinement.
 Chunk processing limits context to 60 seconds per stream-copy chunk.
 The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
+Single-chunk runs skip audio extraction and boundary refinement because no repair boundary exists.
+They use the stitched VTT as the input to text refinement or direct publication.
 The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
 
 Generation publishes one artifact based on the two refinement toggles:
@@ -150,21 +157,26 @@ Generation publishes one artifact based on the two refinement toggles:
 | `--disable-audio-refine` | Enabled | Text-refined `stitched.vtt` |
 | `--disable-audio-refine` | `--disable-text-refine` | `stitched.vtt` |
 
+For a single-chunk run, use the audio-disabled rows regardless of the audio toggle.
+
 Boundary audio refinement sends the complete audio plus the stitched script to Gemini in one streamed JSON request.
 The model returns a sparse patch of only changed cues.
 The host discards patch edits outside ten-second repair windows around chunk boundaries.
 Validation rejects patches that delete visual on-screen text or alter bracketed on-screen fragments.
 
-Text refinement has up to three Gemini requests:
+Preflight has up to two Gemini requests and runs before chunk generation.
+Grounded web research and direct YouTube analysis run concurrently when you supply YouTube URLs.
 
-1. Grounded web identity research first: a plain-text, streamed request with Google Search grounding.
+1. Grounded web identity research: a plain-text, streamed request with Google Search grounding.
    It researches participant names in official English styling, roles, and evidence for speaker-label normalization.
    Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
-2. Direct YouTube analysis second, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
+2. Direct YouTube analysis, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
    It returns participant identities, official names and roles, and timestamped speaker-identification observations.
    Transient Gemini transport errors and rate limits retry automatically through SDK HTTP retry options.
-3. Structured refinement last: the streamed JSON request with the `RefinementResponse` schema.
-   It receives the grounded research text and the YouTube analysis text as identity context and does not use tools.
+
+After audio refinement, text refinement sends one streamed JSON request with the `RefinementResponse` schema.
+It reuses the preflight context and does not use tools.
+In `--refine-only` mode, preflight runs before this request.
 
 Text refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
 The previous output stays intact.

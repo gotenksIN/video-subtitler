@@ -38,13 +38,15 @@ The normal generation path runs these stages:
 flowchart TD
     A[Source video] --> B[Inspect source duration and streams once]
     B --> C[Build manifest and lock work directory]
-    C --> D[Probe first audio stream and extract mono Opus when enabled]
-    D --> E[Run preflight research and store preflight_context.json]
-    E --> F[Stream-copy contiguous video chunks]
-    F --> G[Generate chunk subtitles concurrently]
+    C --> D[Validate first audio stream and source duration when enabled]
+    D --> E[Parallel web research and YouTube analysis: store preflight_context.json]
+    D --> F[Stream-copy contiguous video chunks]
+    F --> Q[Extract mono Opus when audio refinement has boundaries]
+    Q --> G[Generate chunk subtitles concurrently]
+    E --> G
     G --> H[Stitch at actual segment offsets]
-    H --> I[Merge exact pure-editorial boundary fragments]
-    I --> J{Audio refinement enabled?}
+    H --> I[Merge case-insensitive pure-editorial boundary fragments]
+    I --> J{Audio refinement enabled and boundaries exist?}
     J -->|Yes| K[Boundary-limited audio refinement]
     J -->|No| L[Use stitched VTT]
     K --> M{Text refinement enabled?}
@@ -57,6 +59,7 @@ flowchart TD
 
 The command holds one process lock for the complete work-directory lifecycle.
 The lock covers splitting, audio extraction, API calls, output publication, and success cleanup.
+All preflight workers settle before the lock is released, including on failure.
 
 ## Repository layout
 
@@ -156,6 +159,8 @@ Generation publishes one artifact based on the refinement toggles:
 | Disabled (`--disable-audio-refine`) | Enabled | Text-refined `stitched.vtt` |
 | Disabled (`--disable-audio-refine`) | Disabled (`--disable-text-refine`) | `stitched.vtt` |
 
+Single-chunk runs use the audio-disabled rows because they have no repair boundaries.
+
 ## Video support
 
 `inspect_media()` asks FFprobe for the container duration and stream metadata in one query:
@@ -183,6 +188,9 @@ Subtitle streams are excluded from generated chunks with `-sn`.
 Audio refinement always selects the first audio stream, `0:a:0`.
 When audio refinement is enabled, the pipeline validates the inspected audio streams and duration while holding the work lock.
 The run fails before splitting or API calls when the source has no audio stream.
+It also rejects an invalid source duration before API calls.
+After splitting, a single-chunk run skips audio extraction and Pass 2 because it has no repair boundaries.
+It publishes stitched subtitles or passes them to text refinement.
 
 Extraction command:
 
@@ -461,7 +469,9 @@ Refines the full script using grounded identity and terminology research.
 ### Preflight context (Pass 0)
 
 `gemini.run_preflight_context()` produces one `PreflightContext` before chunk generation.
-`pipeline.run_generation()` runs it after audio extraction and before splitting.
+`pipeline.run_generation()` runs it after source validation, concurrently with splitting.
+As soon as splitting finishes, audio extraction runs alongside any remaining preflight work when audio refinement is enabled and boundaries exist.
+Chunk generation waits for both media preparation and preflight context.
 It stores the result as `preflight_context.json` in the work directory.
 A valid cached file is reused on retry, so no research request repeats.
 The cache must match the source title, validated context URLs, generation model, and thinking level.
@@ -480,6 +490,8 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
    - Grounding verification: The research stream must contain search queries or grounded sources, and every URL Context input must be retrieved successfully.
 2. **Direct YouTube video request:**
+   - Runs concurrently with grounded web research when YouTube URLs are present.
+   - Each request creates, uses, and closes its own client on its calling thread.
    - Attached video Parts for public YouTube URLs.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
 3. **Context assembly:**

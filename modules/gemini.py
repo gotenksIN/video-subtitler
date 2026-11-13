@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -729,8 +730,7 @@ def run_preflight_context(
     validated_urls = core.validate_context_urls(context_urls)
     youtube_urls, ordinary_urls = core.classify_context_urls(validated_urls)
 
-    with create_client(api_key, base_url) as client:
-        # Step 1: Grounded web research
+    def research():
         research_prompt = build_identity_research_prompt(
             source_title=source_title,
             context_urls=ordinary_urls,
@@ -740,12 +740,13 @@ def run_preflight_context(
             thinking_level=thinking_level,
             ordinary_urls=ordinary_urls,
         )
-        research_text, queries, sources, retrieved_urls = read_stream(
-            client,
-            model=model_name,
-            contents=research_prompt,
-            config=research_config,
-        )
+        with create_client(api_key, base_url) as client:
+            research_text, queries, sources, retrieved_urls = read_stream(
+                client,
+                model=model_name,
+                contents=research_prompt,
+                config=research_config,
+            )
         verify_refinement_grounding(
             queries=queries,
             sources=sources,
@@ -759,30 +760,35 @@ def run_preflight_context(
             ordinary_urls=ordinary_urls,
         )
 
-        identity_context, terminology_context = split_research_sections(research_text)
-        grounded_names = extract_grounded_names(identity_context)
+        return research_text
 
-        # Step 2: Direct YouTube analysis
-        youtube_context = None
-        if youtube_urls:
-            print(
-                "Analyzing YouTube video directly for participants and "
-                f"proper-name observations ({len(youtube_urls)} URL(s))..."
-            )
-            youtube_prompt = build_youtube_analysis_prompt(source_title)
-            youtube_contents = [
-                types.Part.from_uri(file_uri=url, mime_type="video/*")
-                for url in youtube_urls
-            ] + [youtube_prompt]
-            youtube_config = build_youtube_analysis_config(thinking_level)
+    def analyze_youtube():
+        print(
+            "Analyzing YouTube video directly for participants and "
+            f"proper-name observations ({len(youtube_urls)} URL(s))..."
+        )
+        youtube_prompt = build_youtube_analysis_prompt(source_title)
+        youtube_contents = [
+            types.Part.from_uri(file_uri=url, mime_type="video/*")
+            for url in youtube_urls
+        ] + [youtube_prompt]
+        youtube_config = build_youtube_analysis_config(thinking_level)
+        with create_client(api_key, base_url) as client:
             youtube_text, _, _, _ = read_stream(
                 client,
                 model=model_name,
                 contents=youtube_contents,
                 config=youtube_config,
             )
-            if youtube_text.strip():
-                youtube_context = youtube_text.strip()
+        return youtube_text.strip() or None
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        youtube_future = executor.submit(analyze_youtube) if youtube_urls else None
+        research_text = research()
+        youtube_context = youtube_future.result() if youtube_future else None
+
+    identity_context, terminology_context = split_research_sections(research_text)
+    grounded_names = extract_grounded_names(identity_context)
 
     return core.PreflightContext(
         identity_context=identity_context,

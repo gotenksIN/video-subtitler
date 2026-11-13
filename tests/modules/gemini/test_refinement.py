@@ -1,6 +1,7 @@
 """Global refinement through the Gemini adapter."""
 
 import json
+from threading import Event
 
 import pytest
 from google.genai import errors, types
@@ -167,7 +168,7 @@ def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypat
 
     gemini.global_refine_subtitles(source, output, "key", None, "refiner", "medium")
 
-    research = client.requests[0]
+    research = next(request for request in client.requests if request.config.tools)
     assert research.model == "refiner"
     assert isinstance(research.contents, str)
     assert research.config.response_mime_type is None
@@ -208,11 +209,19 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
         context_urls=[youtube_url],
     )
 
-    research = client.requests[0]
+    research = next(request for request in client.requests if request.config.tools)
     assert isinstance(research.contents, str)
     assert all(tool.url_context is None for tool in research.config.tools)
 
-    analysis = client.requests[1]
+    analysis = next(
+        request
+        for request in client.requests
+        if isinstance(request.contents, list)
+        and any(
+            getattr(part, "file_data", None) and part.file_data.mime_type == "video/*"
+            for part in request.contents
+        )
+    )
     video_parts = [part for part in analysis.contents if not isinstance(part, str)]
     assert [part.file_data.file_uri for part in video_parts] == [youtube_url]
     assert all(part.file_data.mime_type == "video/*" for part in video_parts)
@@ -259,11 +268,17 @@ def test_ordinary_and_youtube_context_use_their_separate_retrieval_paths(
         context_urls=[ordinary_url, youtube_url],
     )
 
-    research_tools = client.requests[0].config.tools
+    research_tools = next(
+        request.config.tools for request in client.requests if request.config.tools
+    )
     assert any(tool.google_search is not None for tool in research_tools)
     assert any(tool.url_context is not None for tool in research_tools)
     video_parts = [
-        part for part in client.requests[1].contents if not isinstance(part, str)
+        part
+        for request in client.requests
+        if isinstance(request.contents, list)
+        for part in request.contents
+        if getattr(part, "file_data", None) and part.file_data.mime_type == "video/*"
     ]
     assert [part.file_data.file_uri for part in video_parts] == [youtube_url]
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Only")]
@@ -511,6 +526,25 @@ def test_refinement_applies_text_changes_without_deleting_cues(tmp_path, monkeyp
 # --- Preflight context (Pass 0) ---
 
 
+def test_preflight_research_and_youtube_analysis_overlap(monkeypatch):
+    started = {"research": Event(), "youtube": Event()}
+
+    class ConcurrentClient(ScriptedGeminiClient):
+        def _stream(self, call):
+            started[call.kind].set()
+            other = "youtube" if call.kind == "research" else "research"
+            assert started[other].wait(5), "preflight requests must overlap"
+            yield from super()._stream(call)
+
+    client = ConcurrentClient([research_call(), youtube_call()])
+    use_client(monkeypatch, client)
+    context = gemini.run_preflight_context(
+        "key", None, "refiner", "high", context_urls=["https://youtu.be/VIDEO_ID"]
+    )
+    assert context.identity_context == "Research text"
+    assert context.youtube_context == "YouTube analysis"
+
+
 def test_run_preflight_context_splits_sections_and_collects_grounded_names(
     monkeypatch,
 ):
@@ -546,7 +580,15 @@ def test_run_preflight_context_analyzes_youtube_urls_directly(monkeypatch):
     )
 
     assert context.youtube_context == "Direct video identities"
-    analysis = client.requests[1]
+    analysis = next(
+        request
+        for request in client.requests
+        if isinstance(request.contents, list)
+        and any(
+            getattr(part, "file_data", None) and part.file_data.mime_type == "video/*"
+            for part in request.contents
+        )
+    )
     video_parts = [part for part in analysis.contents if not isinstance(part, str)]
     assert [part.file_data.file_uri for part in video_parts] == [youtube_url]
     assert all(part.file_data.mime_type == "video/*" for part in video_parts)
