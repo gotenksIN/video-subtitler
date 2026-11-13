@@ -430,4 +430,3 @@ def test_stage_failures_preserve_previous_output_and_resume_state(
     assert output.read_text(encoding="utf-8") == "previous"
     work = active_work_directory(tmp_path)
     assert media.SPLIT_COMPLETE_MARKER in [p.name for p in work.iterdir()]
-    assert not list(tmp_path.glob("*.staging.vtt"))

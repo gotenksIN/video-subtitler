@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -280,7 +279,6 @@ def run_generation(config: GenerationConfig) -> None:
     manifest, chunk_dir = build_manifest(config, source_inspection)
     os.makedirs(chunk_dir, exist_ok=True)
     lock_file = None
-    staging_vtt = None
     completed = False
 
     try:
@@ -384,17 +382,9 @@ def run_generation(config: GenerationConfig) -> None:
 
         # 5. Global text refinement or direct atomic publication.
         if config.refine_text:
-            output_path = config.output_path
-            fd, staging_name = tempfile.mkstemp(
-                prefix=f".{output_path.name}.",
-                suffix=".staging.vtt",
-                dir=output_path.parent,
-            )
-            staging_vtt = Path(staging_name)
-            os.close(fd)
             gemini.global_refine_subtitles(
                 input_vtt=str(current_vtt),
-                output_vtt=str(staging_vtt),
+                output_vtt=str(config.output_path),
                 api_key=config.api_key,
                 base_url=config.base_url,
                 model_name=config.refine_model or config.model,
@@ -403,7 +393,6 @@ def run_generation(config: GenerationConfig) -> None:
                 context_urls=context_urls,
                 preflight_context=preflight_context,
             )
-            os.replace(staging_vtt, config.output_path)
         else:
             published = core.canonicalize_speaker_casing(io.read_plain_vtt(current_vtt))
             io.atomic_save_vtt(published, config.output_path)
@@ -412,9 +401,6 @@ def run_generation(config: GenerationConfig) -> None:
 
     finally:
         try:
-            if staging_vtt is not None:
-                staging_vtt.unlink(missing_ok=True)
-
             # 6. Cleanup.
             if completed and os.path.exists(chunk_dir):
                 print(f"Cleaning up temporary directory: {chunk_dir}")
