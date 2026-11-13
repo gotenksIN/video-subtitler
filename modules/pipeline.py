@@ -288,17 +288,27 @@ def run_generation(config: GenerationConfig) -> None:
             )
 
         # Pass 0: Preflight identity and research context
-        preflight_context = gemini.load_cached_preflight_context(chunk_dir)
+        preflight_identity = {
+            "source_title": source_title,
+            "context_urls": context_urls,
+            "model_name": config.model,
+            "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
+        }
+        preflight_context = gemini.load_cached_preflight_context(
+            chunk_dir, **preflight_identity
+        )
         if preflight_context is None:
             preflight_context = gemini.run_preflight_context(
                 api_key=config.api_key,
                 base_url=config.base_url,
-                model_name=config.refine_model or config.model,
+                model_name=config.model,
                 thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
                 source_title=source_title,
                 context_urls=context_urls,
             )
-            gemini.store_preflight_context(chunk_dir, preflight_context)
+            gemini.store_preflight_context(
+                chunk_dir, preflight_context, **preflight_identity
+            )
 
         # 1. Split video.
         media.split_video(str(config.video_path), chunk_dir, config.chunk_dur, manifest)

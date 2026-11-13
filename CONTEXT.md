@@ -314,7 +314,8 @@ class PreflightContext(BaseModel):
 
 Wire fields use camelCase (`contractVersion`).
 Host-side validation keeps `extra="forbid"`.
-The cache file stores field names through `model_dump(mode="json")`.
+The cache file stores the context under `context` using field names through `model_dump(mode="json")`.
+The same file stores `source_title`, `context_urls`, `model_name`, and `thinking_level` alongside the context.
 `populate_by_name=True` accepts field names and aliases on load.
 
 ## Timestamp rules
@@ -455,9 +456,11 @@ Refines the full script using grounded identity and terminology research.
 `pipeline.run_generation()` runs it after audio extraction and before splitting.
 It stores the result as `preflight_context.json` in the work directory.
 A valid cached file is reused on retry, so no research request repeats.
-The cache carries no identity fields, so a retry reuses it as stored.
+The cache must match the source title, validated context URLs, generation model, and thinking level.
+Missing or mismatched identity fields cause a cache miss and remove the stale file.
+Changing `--context-url` or `--model` on retry repeats Pass 0.
 A successful run removes the file during work-directory cleanup.
-The pass uses the refinement model (`config.refine_model` or `config.model`) with thinking level `high`.
+The pass uses the generation model (`config.model`) with thinking level `high`.
 
 1. **Grounded web research request:**
    - Tool: Google Search + optional URL Context.
@@ -485,7 +488,8 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
-   `--refine-only` works this way.
+    `--refine-only` works this way.
+    These runs use the supplied text-refinement model for Pass 0.
 5. Tasks:
    1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.

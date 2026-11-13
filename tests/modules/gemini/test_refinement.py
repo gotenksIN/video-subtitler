@@ -591,7 +591,19 @@ def test_run_preflight_context_fails_without_search_grounding(monkeypatch):
         gemini.run_preflight_context("key", None, "refiner", "medium")
 
 
-def test_preflight_context_cache_round_trips_through_the_work_directory(tmp_path):
+@pytest.fixture
+def preflight_identity():
+    return {
+        "source_title": "Episode",
+        "context_urls": ["https://example.com/notes"],
+        "model_name": "refiner",
+        "thinking_level": "high",
+    }
+
+
+def test_preflight_context_cache_round_trips_through_the_work_directory(
+    tmp_path, preflight_identity
+):
     preflight = core.PreflightContext(
         identity_context="Jane Doe: Host.",
         terminology_context="Season Premiere: program title.",
@@ -599,9 +611,12 @@ def test_preflight_context_cache_round_trips_through_the_work_directory(tmp_path
         grounded_names=["Jane Doe"],
     )
 
-    gemini.store_preflight_context(tmp_path, preflight)
+    gemini.store_preflight_context(tmp_path, preflight, **preflight_identity)
 
-    assert gemini.load_cached_preflight_context(tmp_path) == preflight
+    assert (
+        gemini.load_cached_preflight_context(tmp_path, **preflight_identity)
+        == preflight
+    )
 
 
 def test_extract_grounded_names_omits_summaries_and_keeps_names_and_roles():
@@ -646,7 +661,9 @@ def test_extract_grounded_names_omits_summaries_and_keeps_names_and_roles():
     assert gemini.extract_grounded_names(identity) == accepted
 
 
-def test_cached_preflight_filters_summary_names_without_discarding_context(tmp_path):
+def test_cached_preflight_filters_summary_names_without_discarding_context(
+    tmp_path, preflight_identity
+):
     accepted = ["Mr. Kim", "J.Y. Park", "Host", "Shop Owner"]
     preflight = core.PreflightContext(
         identity_context="Original research stays available.",
@@ -662,18 +679,18 @@ def test_cached_preflight_filters_summary_names_without_discarding_context(tmp_p
             *accepted,
         ],
     )
-    gemini.store_preflight_context(tmp_path, preflight)
+    gemini.store_preflight_context(tmp_path, preflight, **preflight_identity)
     path = tmp_path / gemini.PREFLIGHT_CONTEXT_FILENAME
     original_cache = path.read_bytes()
 
-    loaded = gemini.load_cached_preflight_context(tmp_path)
+    loaded = gemini.load_cached_preflight_context(tmp_path, **preflight_identity)
 
     assert loaded == preflight.model_copy(update={"grounded_names": accepted})
     assert path.read_bytes() == original_cache
 
 
-def test_missing_preflight_context_cache_returns_none(tmp_path):
-    assert gemini.load_cached_preflight_context(tmp_path) is None
+def test_missing_preflight_context_cache_returns_none(tmp_path, preflight_identity):
+    assert gemini.load_cached_preflight_context(tmp_path, **preflight_identity) is None
 
 
 @pytest.mark.parametrize(
@@ -681,12 +698,47 @@ def test_missing_preflight_context_cache_returns_none(tmp_path):
     ["{invalid json", '{"contractVersion": "preflight-v2"}'],
     ids=["invalid json", "wrong contract version"],
 )
-def test_invalid_preflight_context_cache_is_discarded(tmp_path, payload):
+def test_invalid_preflight_context_cache_is_discarded(
+    tmp_path, payload, preflight_identity
+):
     path = tmp_path / gemini.PREFLIGHT_CONTEXT_FILENAME
     path.write_text(payload, encoding="utf-8")
 
-    assert gemini.load_cached_preflight_context(tmp_path) is None
+    assert gemini.load_cached_preflight_context(tmp_path, **preflight_identity) is None
     assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_title", "Other"),
+        ("context_urls", ["https://example.com/other"]),
+        ("model_name", "other-model"),
+        ("thinking_level", "low"),
+    ],
+)
+def test_preflight_cache_invalidates_changed_inputs(
+    tmp_path, preflight_identity, field, value
+):
+    gemini.store_preflight_context(
+        tmp_path, core.PreflightContext(), **preflight_identity
+    )
+    preflight_identity[field] = value
+    assert gemini.load_cached_preflight_context(tmp_path, **preflight_identity) is None
+
+
+@pytest.mark.parametrize(
+    "field", ["source_title", "context_urls", "model_name", "thinking_level"]
+)
+def test_preflight_cache_rejects_missing_identity(tmp_path, preflight_identity, field):
+    gemini.store_preflight_context(
+        tmp_path, core.PreflightContext(), **preflight_identity
+    )
+    path = tmp_path / gemini.PREFLIGHT_CONTEXT_FILENAME
+    payload = json.loads(path.read_text())
+    del payload[field]
+    path.write_text(json.dumps(payload))
+    assert gemini.load_cached_preflight_context(tmp_path, **preflight_identity) is None
 
 
 def test_supplied_preflight_context_skips_research_requests(tmp_path, monkeypatch):

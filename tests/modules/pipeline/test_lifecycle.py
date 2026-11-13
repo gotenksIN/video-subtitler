@@ -231,12 +231,12 @@ def test_preflight_grounded_names_reach_chunk_workers_and_text_refinement(
 
 
 @pytest.mark.parametrize(
-    ("refine_model", "expected_model"),
-    [(None, "model"), ("refine-model", "refine-model")],
-    ids=["chunk-model-fallback", "refine-model"],
+    "refine_model",
+    [None, "refine-model"],
+    ids=["default-refinement", "different-refinement-model"],
 )
-def test_preflight_uses_the_refinement_model_and_run_context(
-    tmp_path, monkeypatch, refine_model, expected_model
+def test_preflight_uses_the_generation_model_and_run_context(
+    tmp_path, monkeypatch, refine_model
 ):
     config, _tools = prepare_generation(tmp_path, monkeypatch)
     config = replace(
@@ -255,7 +255,7 @@ def test_preflight_uses_the_refinement_model_and_run_context(
 
     pipeline.run_generation(config)
 
-    assert received["model_name"] == expected_model
+    assert received["model_name"] == config.model
     assert received["thinking_level"] == gemini.REFINEMENT_THINKING_LEVEL
     assert received["source_title"] == "source"
     assert received["context_urls"] == ["https://example.com/notes"]

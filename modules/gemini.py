@@ -792,13 +792,34 @@ def run_preflight_context(
     )
 
 
-def load_cached_preflight_context(chunk_dir) -> core.PreflightContext | None:
+def preflight_cache_identity(source_title, context_urls, model_name, thinking_level):
+    """Describe the inputs that determine preflight research."""
+    return {
+        "source_title": source_title,
+        "context_urls": core.validate_context_urls(context_urls),
+        "model_name": model_name,
+        "thinking_level": thinking_level,
+    }
+
+
+def load_cached_preflight_context(
+    chunk_dir, *, source_title, context_urls, model_name, thinking_level
+) -> core.PreflightContext | None:
     """Load a cached preflight context, or discard an invalid cache."""
     path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
     if not path.exists():
         return None
     try:
-        context = core.PreflightContext.model_validate_json(path.read_bytes())
+        payload = json.loads(path.read_bytes())
+        identity = preflight_cache_identity(
+            source_title, context_urls, model_name, thinking_level
+        )
+        if any(
+            key not in payload or payload[key] != value
+            for key, value in identity.items()
+        ):
+            raise ValueError("Preflight cache identity does not match")
+        context = core.PreflightContext.model_validate(payload["context"])
         context.grounded_names = [
             name for name in context.grounded_names if is_valid_grounded_name(name)
         ]
@@ -809,10 +830,23 @@ def load_cached_preflight_context(chunk_dir) -> core.PreflightContext | None:
         return None
 
 
-def store_preflight_context(chunk_dir, preflight: core.PreflightContext):
+def store_preflight_context(
+    chunk_dir,
+    preflight: core.PreflightContext,
+    *,
+    source_title,
+    context_urls,
+    model_name,
+    thinking_level,
+):
     """Publish one preflight context atomically into the work directory."""
     path = Path(chunk_dir) / PREFLIGHT_CONTEXT_FILENAME
-    io.atomic_write_json(path, preflight.model_dump(mode="json"))
+    identity = preflight_cache_identity(
+        source_title, context_urls, model_name, thinking_level
+    )
+    io.atomic_write_json(
+        path, {**identity, "context": preflight.model_dump(mode="json")}
+    )
 
 
 def global_refine_subtitles(
