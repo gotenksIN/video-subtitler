@@ -38,12 +38,12 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL") or gemini.DEFAULT_CHUNK_MODEL,
+        default=None,
         help="Gemini model for chunk video subtitle generation.",
     )
     parser.add_argument(
         "--refine-model",
-        default=os.environ.get("GEMINI_REFINE_MODEL") or gemini.DEFAULT_REFINE_MODEL,
+        default=None,
         help="Gemini model for the global text refinement pass.",
     )
     parser.add_argument(
@@ -100,6 +100,12 @@ def main():
     args = parser.parse_args()
 
     if args.refine_only:
+        refine_only_model = (
+            args.refine_model
+            or os.environ.get("GEMINI_REFINE_MODEL")
+            or args.model
+            or gemini.DEFAULT_REFINE_MODEL
+        )
         try:
             context_urls = core.validate_context_urls(args.context_url)
         except ValueError as e:
@@ -129,7 +135,7 @@ def main():
                 args.output,
                 args.api_key,
                 args.base_url,
-                args.refine_model or args.model,
+                refine_only_model,
                 gemini.REFINEMENT_THINKING_LEVEL,
                 source_title=core.derive_source_title(Path(args.video_file_or_vtt)),
                 context_urls=context_urls,
@@ -139,13 +145,19 @@ def main():
             sys.exit(1)
         sys.exit(0)
 
+    model = args.model or os.environ.get("GEMINI_MODEL") or gemini.DEFAULT_CHUNK_MODEL
+    refine_model = (
+        args.refine_model
+        or os.environ.get("GEMINI_REFINE_MODEL")
+        or gemini.DEFAULT_REFINE_MODEL
+    )
     config = pipeline.GenerationConfig(
         video_path=Path(args.video_file_or_vtt),
         output_path=Path(args.output),
-        model=args.model,
+        model=model,
         api_key=args.api_key,
         base_url=args.base_url,
-        refine_model=args.refine_model,
+        refine_model=refine_model,
         audio_refine_model=args.audio_refine_model,
         chunk_dur=args.chunk_dur,
         workers=args.workers,

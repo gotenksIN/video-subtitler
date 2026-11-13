@@ -18,14 +18,14 @@ OUTPUT="${VIDEO}.vtt"
 
 CONTEXT_ARGS=()
 if [ "$#" -eq 2 ]; then
-    CONTEXT_ARGS+=(--context-url "$2")
+    CONTEXT_ARGS+=(--context-url="$2")
 elif [ -t 0 ]; then
     printf 'Optional context URL for grounded refinement (blank to skip): ' >&2
     read -r CONTEXT_URL || true
     if [[ "${CONTEXT_URL:-}" =~ [^[:space:]] ]]; then
-        CONTEXT_ARGS+=(--context-url "$CONTEXT_URL")
+        CONTEXT_ARGS+=(--context-url="$CONTEXT_URL")
     fi
 fi
 
 uv run --project "$REPO_ROOT" "${REPO_ROOT}/gemini_subs.py" \
-    --output "$OUTPUT" "${CONTEXT_ARGS[@]}" -- "$VIDEO"
+    --output="$OUTPUT" "${CONTEXT_ARGS[@]}" -- "$VIDEO"

@@ -171,13 +171,18 @@ def extract_complete_audio(
     ]
     try:
         subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
+        detail = (getattr(e, "stderr", None) or str(e)).strip()[-500:]
         raise RuntimeError(
             "Failed to extract complete audio. "
-            "The source may not contain an audio stream."
+            f"The source may not contain an audio stream.\n{detail}"
         ) from e
 
     try:
@@ -209,6 +214,7 @@ def _clean_incomplete_split(chunk_dir):
         if (
             re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
             or re.fullmatch(r"subtitle_chunk_\d+\.json(\.tmp)?", name)
+            or re.fullmatch(r"\.subtitle_chunk_\d+\.json\..+\.tmp", name)
             or name == "segments.csv"
         ):
             Path(chunk_dir, name).unlink(missing_ok=True)

@@ -93,6 +93,16 @@ def test_complete_opus_audio_is_reused_and_corruption_is_regenerated(
     Path(path).write_bytes(b"corrupt")
     assert not media.extract_complete_audio(source, tmp_path)[-1]
     assert media.inspect_media(path).duration > 0
+    Path(path).unlink()
+    with pytest.raises(RuntimeError, match="No such file or directory") as failure:
+        media.extract_complete_audio(
+            tmp_path / "missing.mp4",
+            tmp_path,
+            source_inspection=media.inspect_media(source),
+        )
+    assert "missing.mp4" in str(failure.value)
+    assert not Path(path).exists()
+    assert not Path(f"{path}.tmp").exists()
 
 
 @pytest.mark.parametrize(
@@ -123,12 +133,15 @@ def test_failed_split_removes_stale_chunks_and_preserves_unrelated_work(
     (tmp_path / "segments.csv").write_text("bad\n", encoding="ascii")
     note = tmp_path / "notes.txt"
     note.write_text("keep", encoding="ascii")
+    stale_json = tmp_path / ".subtitle_chunk_000.json.interrupted.tmp"
+    stale_json.write_text("partial", encoding="ascii")
     with pytest.raises(subprocess.CalledProcessError):
         media.split_video(
             str(tmp_path / "missing.mp4"), tmp_path, 1, {"chunk_ext": ".mp4"}
         )
     assert not list(tmp_path.glob("chunk_*"))
     assert media.list_chunks(tmp_path) == []
+    assert not stale_json.exists()
     assert note.read_text() == "keep"
 
 

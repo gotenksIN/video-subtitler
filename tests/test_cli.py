@@ -235,23 +235,41 @@ def test_refine_only_success_uses_grounded_context_without_media_work(tmp_path):
         "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHOST: A &amp; B\n",
         encoding="ascii",
     )
-    result = run_cli(
-        tmp_path,
-        source,
-        "--refine-only",
-        "--api-key",
-        "test",
-        fake=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert (
-        io.read_plain_vtt(tmp_path / "output_subtitles.vtt")[0].raw_text
-        == "Host: A & B"
-    )
-    assert not (tmp_path / "temp_video_chunks").exists()
-    assert [
-        kind
-        for kind, _model in json.loads((tmp_path / "requests.json").read_text())[
-            "requests"
-        ]
-    ] == ["research", "text"]
+    for env, options, model in (
+        ({}, [], "gemini-4-hydrogen"),
+        ({"GEMINI_MODEL": "ignored-generation"}, [], "gemini-4-hydrogen"),
+        ({}, ["--model", "cli-fallback"], "cli-fallback"),
+        (
+            {"GEMINI_REFINE_MODEL": ""},
+            ["--model", "cli-fallback"],
+            "cli-fallback",
+        ),
+        (
+            {"GEMINI_REFINE_MODEL": "env-text"},
+            ["--model", "cli-fallback"],
+            "env-text",
+        ),
+        (
+            {"GEMINI_REFINE_MODEL": "env-text"},
+            ["--model", "cli-fallback", "--refine-model", "cli-text"],
+            "cli-text",
+        ),
+    ):
+        result = run_cli(
+            tmp_path,
+            source,
+            "--refine-only",
+            "--api-key",
+            "test",
+            *options,
+            env=env,
+            fake=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (
+            io.read_plain_vtt(tmp_path / "output_subtitles.vtt")[0].raw_text
+            == "Host: A & B"
+        )
+        assert not (tmp_path / "temp_video_chunks").exists()
+        recorded = json.loads((tmp_path / "requests.json").read_text())["requests"]
+        assert recorded == [["research", model], ["text", model]]
