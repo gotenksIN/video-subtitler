@@ -396,9 +396,9 @@ def canonicalize_speaker_casing(vtt, grounded_names=None):
 
     spelling_counts = {}
     for caption in captions:
-        if classify_cue_text(caption.text) == "editorial":
+        if classify_cue_text(caption.raw_text) == "editorial":
             continue
-        for line in caption.text.splitlines():
+        for line in caption.raw_text.splitlines():
             match = SPEAKER_LABEL_RE.match(line)
             if not match:
                 continue
@@ -414,9 +414,9 @@ def canonicalize_speaker_casing(vtt, grounded_names=None):
             targets[group_key] = max(counts, key=counts.get)
 
     for caption in captions:
-        if classify_cue_text(caption.text) == "editorial":
+        if classify_cue_text(caption.raw_text) == "editorial":
             continue
-        lines = caption.text.splitlines()
+        lines = caption.raw_text.splitlines()
         rewritten = []
         for line in lines:
             match = SPEAKER_LABEL_RE.match(line)

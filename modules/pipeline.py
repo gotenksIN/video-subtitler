@@ -364,7 +364,7 @@ def run_generation(config: GenerationConfig) -> None:
             )
             os.replace(staging_vtt, config.output_path)
         else:
-            published = core.canonicalize_speaker_casing(webvtt.read(str(current_vtt)))
+            published = core.canonicalize_speaker_casing(io.read_plain_vtt(current_vtt))
             io.atomic_save_vtt(published, config.output_path)
 
         completed = True

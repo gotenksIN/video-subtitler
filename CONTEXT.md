@@ -494,9 +494,14 @@ Locking:
 
 Atomic writes:
 - Chunk JSON uses `.tmp` sibling + `os.replace()`.
-- Preflight context uses `io.atomic_write_json()` with a `.tmp` sibling + `os.replace()`.
+- JSON publication uses `io.atomic_write_json()` with a unique temporary sibling, failure cleanup, and `os.replace()`.
 - Extracted audio uses `.tmp` sibling + `os.replace()`.
 - VTT publication uses `io.atomic_save_vtt()` (`.{name}.<random>.tmp.vtt` + read-back cue verification + `os.replace()`).
+
+Pipeline captions contain semantic plain text, not WebVTT markup.
+VTT publication escapes ampersands and angle brackets once and compares raw serialized cue text on read-back.
+Script reads use strict WebVTT parsing and decode entities once.
+External tagged VTT input is unsupported and fails before refinement instead of losing annotations.
 
 Recovery on retry:
 - Valid `segments.csv` and chunk files skip splitting.

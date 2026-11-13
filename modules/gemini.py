@@ -721,11 +721,13 @@ def global_refine_subtitles(
     """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
     print(f"Loading {input_vtt} for global refinement...")
-    vtt = webvtt.read(input_vtt)
+    vtt = io.read_plain_vtt(input_vtt)
 
     script_lines = []
     for i, caption in enumerate(vtt):
-        script_lines.append(f"[{i}] {caption.start} --> {caption.end}: {caption.text}")
+        script_lines.append(
+            f"[{i}] {caption.start} --> {caption.end}: {caption.raw_text}"
+        )
 
     full_script = "\n".join(script_lines)
 
@@ -762,7 +764,9 @@ def global_refine_subtitles(
 
     try:
         refinements = core.RefinementResponse.model_validate_json(full_json_text)
-        core.validate_refinement_changes(refinements.changes, [cue.text for cue in vtt])
+        core.validate_refinement_changes(
+            refinements.changes, [cue.raw_text for cue in vtt]
+        )
     except ValueError as e:
         raise RuntimeError(
             "Parsing or validating the model refinement response failed: "
@@ -787,7 +791,7 @@ def global_refine_subtitles(
 
 def load_script_entries(vtt_path):
     """Read a VTT into script entries with sequential request-only IDs."""
-    vtt = webvtt.read(str(vtt_path))
+    vtt = io.read_plain_vtt(vtt_path)
     entries = []
     for index, caption in enumerate(vtt):
         entries.append(
@@ -795,8 +799,8 @@ def load_script_entries(vtt_path):
                 "id": index,
                 "start": core.format_time(core.parse_time(caption.start)),
                 "end": core.format_time(core.parse_time(caption.end)),
-                "text": caption.text,
-                "classification": core.classify_cue_text(caption.text),
+                "text": caption.raw_text,
+                "classification": core.classify_cue_text(caption.raw_text),
             }
         )
     return entries
