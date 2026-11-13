@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from modules import core, io, media
 
 INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
-THINKING_LEVELS = ("low", "medium", "high")
+THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 DEFAULT_CHUNK_MODEL = "gemini-3.8-flash"
 DEFAULT_REFINE_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
@@ -61,7 +61,6 @@ def build_thinking_config(thinking_level):
 def generate_content_config(thinking_level):
     """Build the response configuration for chunk video generation."""
     kwargs = {
-        "temperature": 0.0,
         "response_mime_type": "application/json",
         "response_schema": core.SubtitleResponse,
     }
@@ -493,7 +492,6 @@ def build_research_config(thinking_level, ordinary_urls):
     if ordinary_urls:
         tools.append(types.Tool(url_context=types.UrlContext()))
     kwargs = {
-        "temperature": 0.0,
         "tools": tools,
     }
     thinking_config = build_thinking_config(thinking_level)
@@ -504,7 +502,7 @@ def build_research_config(thinking_level, ordinary_urls):
 
 def build_youtube_analysis_config(thinking_level):
     """Build plain-text config for direct YouTube analysis without tools."""
-    kwargs = {"temperature": 0.0}
+    kwargs = {}
     thinking_config = build_thinking_config(thinking_level)
     if thinking_config is not None:
         kwargs["thinking_config"] = thinking_config
@@ -514,7 +512,6 @@ def build_youtube_analysis_config(thinking_level):
 def build_refinement_config(thinking_level):
     """Build structured config for script refinement without tools."""
     kwargs = {
-        "temperature": 0.0,
         "max_output_tokens": REFINEMENT_MAX_OUTPUT_TOKENS,
         "response_mime_type": "application/json",
         "response_schema": core.RefinementResponse,
@@ -900,7 +897,6 @@ def audio_refinement_config():
         return value
 
     return build_content_config(
-        temperature=0.0,
         response_mime_type="application/json",
         # The Gemini endpoint rejects Pydantic's additionalProperties keyword.
         # Host-side parsing still enforces extra="forbid" on both models.

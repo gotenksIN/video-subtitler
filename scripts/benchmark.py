@@ -91,7 +91,9 @@ def parse_args():
         "--thinking-level",
         choices=gemini.THINKING_LEVELS,
         default=None,
-        help=("Gemini 3+ thinking level for chunk video requests (low, medium, high)."),
+        help=(
+            "Gemini thinking level for chunk video requests (low, medium, high, xhigh)."
+        ),
     )
     return parser.parse_args()
 

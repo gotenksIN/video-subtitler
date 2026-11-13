@@ -28,7 +28,7 @@ def valid_captions_call(text="Hi"):
     )
 
 
-@pytest.mark.parametrize("thinking_level", ["low", "medium", "high"])
+@pytest.mark.parametrize("thinking_level", ["low", "medium", "high", "xhigh"])
 def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
     tmp_path, monkeypatch, thinking_level
 ):
@@ -62,7 +62,7 @@ def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
         types.ThinkingLevel, thinking_level.upper()
     )
     assert request.config.thinking_config.include_thoughts is True
-    assert request.config.temperature == 0.0
+    assert request.config.temperature is None
 
     saved = json.loads(
         (tmp_path / "subtitle_chunk_003.json").read_text(encoding="utf-8")

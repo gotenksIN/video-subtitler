@@ -62,7 +62,7 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
         refinement.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     )
     assert refinement.config.thinking_config.include_thoughts is True
-    assert refinement.config.temperature == 0.0
+    assert refinement.config.temperature is None
     assert read_captions(output) == [
         ("00:00:00.000", "00:00:01.000", "Old line"),
         ("00:00:02.000", "00:00:03.000", "Rewritten"),
@@ -146,7 +146,7 @@ def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypat
     assert research.config.automatic_function_calling.disable is True
     assert research.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     assert research.config.thinking_config.include_thoughts is True
-    assert research.config.temperature == 0.0
+    assert research.config.temperature is None
     assert any(tool.google_search is not None for tool in research.config.tools)
     assert all(tool.url_context is None for tool in research.config.tools)
 
@@ -193,7 +193,7 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
     assert analysis.config.automatic_function_calling.disable is True
     assert analysis.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
     assert analysis.config.thinking_config.include_thoughts is True
-    assert analysis.config.temperature == 0.0
+    assert analysis.config.temperature is None
 
     refinement = client.requests[2]
     assert refinement.config.response_mime_type == "application/json"
@@ -624,5 +624,5 @@ def test_supplied_preflight_context_skips_research_requests(tmp_path, monkeypatc
         refinement.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     )
     assert refinement.config.thinking_config.include_thoughts is True
-    assert refinement.config.temperature == 0.0
+    assert refinement.config.temperature is None
     assert read_captions(output) == [("00:00:00.000", "00:00:01.000", "Jane Doe: Only")]

@@ -25,7 +25,7 @@ def make_config(tmp_path, **overrides):
         ({"workers": 0}, "workers must be greater than 0"),
         (
             {"model": "gemini-flash", "thinking_level": "minimal"},
-            "thinking-level must be low, medium, or high",
+            "thinking-level must be low, medium, high, or xhigh",
         ),
     ],
 )

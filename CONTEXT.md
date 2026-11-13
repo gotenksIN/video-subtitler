@@ -120,8 +120,9 @@ CLI arguments take precedence over environment variables.
 | `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-3.8-flash` | Boundary audio refinement model. |
 | `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-3.1-pro-preview` | Full-script refinement model. |
 
-The chunk thinking level accepts `low`, `medium`, and `high` for Gemini 3+ models.
+The chunk thinking level accepts `low`, `medium`, `high`, and `xhigh`.
 It defaults to `high`.
+The `xhigh` level applies to `gemini-4-hydrogen` and is not supported on `gemini-4-carbon` or `gemini-4-argon`.
 The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
 Every request configured with a thinking level sets `include_thoughts=True`.
@@ -448,7 +449,7 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 
 ### Structured refinement (Pass 3)
 
-1. Model: `gemini-3.1-pro-preview` (thinking level `high`, temp `0.0`, `max_output_tokens: 65536`).
+1. Model: `gemini-3.1-pro-preview` (thinking level `high`, `max_output_tokens: 65536`).
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
