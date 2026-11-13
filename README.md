@@ -213,7 +213,7 @@ Single-chunk runs follow the audio-disabled rows regardless of `--disable-audio-
 Production modules live under `modules/`, orchestrated by `modules/pipeline.py` and dispatched by `gemini_subs.py`.
 `CONTEXT.md` is the authoritative architectural and domain specification.
 `AGENTS.md` defines agent workflow and coding instructions, and `tests/README.md` documents the test contract matrix.
-Tests under `tests/` mirror module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
+Tests under `tests/` cover end-to-end pipeline flows and capability contracts (`tests/test_e2e_pipeline.py`, `tests/test_cli.py`, `tests/test_media_io.py`, `tests/test_audio_patch.py`, and `tests/test_text_contracts.py`).
 
 Run code quality checks and tests:
 
@@ -224,13 +224,12 @@ uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall -q .
 
-# Targeted module tests or complete suite
-uv run pytest tests/modules/core
-uv run pytest tests/modules/io
-uv run pytest tests/modules/media
-uv run pytest tests/modules/gemini
-uv run pytest tests/modules/pipeline
-uv run pytest tests/cli
+# Targeted capability tests or complete suite
+uv run pytest tests/test_e2e_pipeline.py
+uv run pytest tests/test_cli.py
+uv run pytest tests/test_media_io.py
+uv run pytest tests/test_audio_patch.py
+uv run pytest tests/test_text_contracts.py
 uv run pytest
 
 # CLI entry points

@@ -77,7 +77,7 @@ Every tracked file in this repository has a defined responsibility.
 | `scripts/subtitle.sh` | Wrapper script that runs generation with terminal context URL prompting. |
 | `scripts/yt-dl.sh` | YouTube downloader that fetches VP9/WebM video via `yt-dlp`. |
 | `scripts/ffmpeg.sh` | Headless GPL static FFmpeg and FFprobe installer for Linux hosts. |
-| `tests/` | Behavioral test suite organized by module owner. |
+| `tests/` | End-to-end pipeline and capability contract test suite. |
 | `AGENTS.md` | Authoritative behavioral and development instructions for agents. |
 | `CONTEXT.md` | Complete architectural specification and domain glossary. |
 | `README.md` | User-facing installation, usage, and development guide. |
@@ -136,7 +136,7 @@ It defaults to `high`.
 The `xhigh` level applies to `gemini-4-hydrogen` and is not supported on `gemini-4-carbon` or `gemini-4-argon`.
 The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
-All five Gemini request types use `MAX_OUTPUT_TOKENS = 65536` through `build_content_config()`.
+All five Gemini request types use `MAX_OUTPUT_TOKENS = 65536` through `_build_content_config()`.
 This shared output-token limit applies to chunk generation, Pass 0 web research and YouTube analysis, audio refinement, and text refinement.
 Every request configured with a thinking level sets `include_thoughts=True`.
 Thought tokens stream in real time across the transport boundary.
@@ -435,7 +435,7 @@ Request configuration:
 - Thought streaming enabled through `include_thoughts=True`
 - Max output tokens: `65536`
 - Response MIME: `application/json` with `AudioRefinementResponse` schema.
-- Automatic function calling disabled explicitly via `build_content_config()`.
+- Automatic function calling disabled explicitly via `_build_content_config()`.
 
 ### Prompt structure
 - Header with audio duration and segment boundaries.
@@ -484,7 +484,7 @@ Refines the full script using grounded identity and terminology research.
 
 ### Preflight context (Pass 0)
 
-`gemini.run_preflight_context()` produces one `PreflightContext` before chunk generation.
+`gemini.load_or_run_preflight_context()` produces and caches one `PreflightContext` before chunk generation.
 `pipeline.run_generation()` runs it after source validation, concurrently with splitting.
 As soon as splitting finishes, audio extraction runs alongside any remaining preflight work when audio refinement is enabled and boundaries exist.
 Chunk generation waits for both media preparation and preflight context.

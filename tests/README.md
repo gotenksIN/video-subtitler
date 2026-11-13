@@ -1,62 +1,54 @@
 # Test contracts
 
-The test suite is organized around the production module boundaries in `modules/`.
-Each test imports behavior from its owning module.
-`gemini_subs.py` keeps no compatibility re-exports.
+The test suite verifies pipeline behavior end-to-end first and isolates pure domain validators only where combinatorial rules make end-to-end setup impractical.
+Keep the suite compact (45 to 70 collected items) so `uv run pytest` finishes quickly.
 
 ## Test layout
 
-| Path | Intended owner | Scope |
-| --- | --- | --- |
-| `tests/modules/core/` | `modules/core.py` | Subtitle payloads, timestamp semantics, source titles, context URLs, cue classification, sparse audio-patch validation, and pure-editorial boundary merging. |
-| `tests/modules/io/` | `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
-| `tests/modules/media/` | `modules/media.py` | Real FFmpeg and FFprobe probing, splitting, stream mapping, complete audio extraction, and split cleanup. |
-| `tests/modules/gemini/` | `modules/gemini.py` | Gemini request contracts, caption cache, chunk generation, audio refinement, and text refinement outcomes. |
-| `tests/modules/pipeline/` | `modules/pipeline.py` | Configuration policy, persisted run state, locking, scheduling, stitching, recovery, toggle combinations, and cleanup. |
-| `tests/cli/` | `gemini_subs.py` | Subprocess argument parsing, validation, exit status, and diagnostics. |
-| `tests/support/` | Test infrastructure | Scenario fakes and persistent-state builders shared by behavioral tests. |
+| Path | Scope |
+| --- | --- |
+| `tests/conftest.py` | Session-scoped tiny FFmpeg media fixtures for H.264, VP9, HEVC, silent video, and embedded subtitles. |
+| `tests/support/gemini_fakes.py` | Stateful `ScriptedGeminiClient` driving real `google.genai.Client` instances over `httpx2.MockTransport`. |
+| `tests/test_e2e_pipeline.py` | End-to-end 4-pass `pipeline.run_generation` flows, real SDK and wire schema checks, refinement toggles, single-chunk boundary skip, partial-failure resume, cache invalidation, work-directory locking, stream/validation retries, and `scripts/benchmark.py` coverage. |
+| `tests/test_cli.py` | `gemini_subs.py` subprocess help, environment precedence, preflight validation errors, exit codes, and `--refine-only` execution. |
+| `tests/test_media_io.py` | Real FFmpeg and FFprobe codec probing, stream-copy splitting, subtitle exclusion, Opus audio extraction, corrupt cache regeneration, atomic JSON/VTT failure safety, HTML entity round-trips, and tagged-VTT rejection. |
+| `tests/test_audio_patch.py` | Combinatorial `sparse-patch-v1` repair-region filtering, lineage order and contiguity, pure-editorial and mixed-fragment preservation, overlap rules, and audio/video end clamping. |
+| `tests/test_text_contracts.py` | Pass 3 structural-edit guards, speaker-label casing precedence, pure-editorial boundary merging, caption and timestamp validation, source-title derivation, and context URL classification. |
 
 ## Automated contracts
 
-| Area | Observable contract |
+| Capability | Observable contract |
 | --- | --- |
-| Core | Accepted timestamp forms, exact millisecond rounding, invalid interval rejection, caption ordering, end clamping, payload validation, multiline text preservation, source-title derivation, context URL validation and classification, cue classification, sparse patch reconstruction and validation, repair-region boundary authority, visual fragment preservation, deletion rules, and pure-editorial boundary merging. |
-| Io | Atomic JSON and VTT publication with failure-safe target preservation. |
-| Media | Supported codec probing, unsupported input rejection, decodable stream-copy chunks, audio retention, subtitle exclusion, segment index validation, split recovery, complete mono Opus audio extraction, audio cache reuse, and split artifact cleanup. |
-| Gemini | Client boundary translation, outbound request configuration, tool routing, structured response validation, streamed text assembly, audio refinement requests and caches, direct YouTube inputs, caption cache behavior, text-only refinement, SDK failure propagation, and failure-safe output. |
-| Pipeline | Runtime validation, resumable state selection, valid cache reuse, corrupt-state regeneration, process locking, concurrent filesystem outcomes, segment-offset stitching, refinement toggle combinations, final publication, recovery, and failed-run retention. |
-| CLI | Help, parsing errors, validation precedence, environment configuration, mode-specific preflight behavior, removed-option rejection, stable diagnostic meaning, and exit status. |
+| End-to-end pipeline | Pass 0 concurrent Search, URL Context, and YouTube analysis overlapping FFmpeg split and Opus extraction; grounded-name forwarding; Pass 1 concurrent chunk generation, thought-chunk exclusion, and stitch offset/banner merging; Pass 2 sparse audio repair; Pass 3 grounded refinement and speaker casing; toggle matrix; single-chunk Pass 2 skip; partial-failure retention and cache-backed resume; advisory lock contention and failure settlement; real SDK `HttpRetryOptions`, disabled AFC, and sanitized wire `responseSchema` checks; benchmark runner execution and reference metrics. |
+| CLI | Usage help, exit status (`0`, `1`, `2`), stderr diagnostics without tracebacks, `.env` and environment variable overrides (including empty refinement fallback vars), preflight output-parent and URL checks before media or API work, and `--refine-only` behavior. |
+| Media and I/O | VP9, H.264, and HEVC probing and stream-copy splitting; unsupported codec and missing audio rejection; embedded subtitle exclusion; corrupt split, `segments.csv`, and Opus cache regeneration; failure-safe atomic JSON and VTT writes; `&`/`<`/`>` entity escaping; unsupported WebVTT tag rejection. |
+| Audio patch invariants | Out-of-authority edit/merge/delete/recovery filtering, fatal unknown IDs, monotonic script lineage, editorial-skipping merges and splits, nested and multi-fragment visual multiset equality, crossed-retime sorting and overlap rules, repair-envelope bounds, and `audio_duration` vs `source_duration` grace rules. |
+| Text and core contracts | Pass 3 rejection of cue-class, visual-fragment, and turn/label structure mutations; accepted dialogue re-wrapping; speaker casing tie-breaks and grounded overrides; timestamp parsing and millisecond rounding; chunk overrun clamping; source-title suffix stripping; HTTP(S) and YouTube URL classification. |
 
-Tests assert returned values, files, parsed WebVTT captions, persisted state, diagnostics, exit status, and requests sent across external API boundaries.
-Tests do not assert private helper calls or internal execution order unless ordering changes an observable contract.
+## Test boundaries and anti-bloat rules
 
-## Test boundaries
-
-Media integration tests generate tiny session-scoped fixtures with real `ffmpeg` and `ffprobe`.
-The suite fails clearly when required binaries or VP9, H.264, and HEVC encoders are unavailable.
-
-Gemini tests use stateful scenario fakes and never contact the live service.
-Failure scenarios occur at the process, API, or publication boundary and verify resulting files and resumable state.
-
-CLI tests run `gemini_subs.py` in subprocesses.
-They scrub Gemini credentials and use an unreachable base URL to prevent accidental network requests.
-Successful generation and refinement lifecycle behavior is tested through the pipeline interface.
+1. **Real media, never fake FFmpeg:** Session-scoped fixtures in `tests/conftest.py` encode tiny `64x64` test videos with real `ffmpeg` and `ffprobe`.
+   The suite fails clearly when `ffmpeg`, `ffprobe`, or required VP9, H.264, and HEVC encoders are missing.
+   Parametrize across all three codecs only for codec probing and splitting in `tests/test_media_io.py`; use the shared H.264 fixture everywhere else.
+2. **Real Gemini SDK with mock HTTP transport, never internal mocks:** `ScriptedGeminiClient` wraps `google.genai.Client` with `httpx2.MockTransport` so every request runs real SDK parameter validation, schema transformation, wire serialization, and response deserialization.
+   Never monkeypatch internal `modules/` functions (`_run_preflight_context`, `process_chunk`, `boundary_audio_refine_subtitles`, `global_refine_subtitles`, or `media.*`) to stub pipeline passes.
+3. **One boundary per rule:** Test each contract once at the highest practical layer.
+   When `tests/test_e2e_pipeline.py` or `tests/test_cli.py` already covers a behavior, do not add duplicate adapter or helper tests.
+4. **Equivalence classes over item proliferation:** Fold related valid or invalid inputs into table assertions by equivalence class instead of creating separate pytest items for each extension, URL variant, `argparse` error, or dictionary key.
+   Extend an existing scenario instead of adding single-assertion micro-tests.
 
 ## Review-only specifications
 
-The following details remain specified in `CONTEXT.md` or `AGENTS.md` but are not frozen by automated tests:
+The following details remain specified in `CONTEXT.md` or `AGENTS.md` and are not frozen by automated tests:
 
 - Prompt prose and required prompt instructions.
-- Manifest JSON representation and hash construction.
-- Exact FFmpeg argument arrays.
-- Executor sizing and concurrency details.
-- Nested Gemini SDK response, candidate, grounding, and URL metadata shapes.
-- Gemini SDK event normalization into project-owned stream metadata.
-- Direct helper outputs that executable adapter and lifecycle tests already cover.
-- Internal staging filenames and directories.
+- Manifest JSON representation and SHA-256 truncation details beyond observable work-directory isolation.
+- Exact FFmpeg and FFprobe command-line argument arrays.
+- Thread-pool sizing formulas.
+- Internal staging filenames and private helper implementations.
 
-Review these details against `CONTEXT.md` and `AGENTS.md` when their implementation changes.
-Do not add source-text, prompt snapshot, complete command-array, private-call, helper-name, or provider event-shape assertions.
+Review these details against `CONTEXT.md` and `AGENTS.md` when changing their implementation.
+Do not add source-text, AST, prompt-snapshot, command-array, or private-helper assertions.
 
 ## Commands
 
@@ -66,13 +58,12 @@ Run the complete suite:
 uv run pytest
 ```
 
-Run one intended module area:
+Run a single capability file:
 
 ```bash
-uv run pytest tests/modules/core
-uv run pytest tests/modules/io
-uv run pytest tests/modules/media
-uv run pytest tests/modules/gemini
-uv run pytest tests/modules/pipeline
-uv run pytest tests/cli
+uv run pytest tests/test_e2e_pipeline.py
+uv run pytest tests/test_cli.py
+uv run pytest tests/test_media_io.py
+uv run pytest tests/test_audio_patch.py
+uv run pytest tests/test_text_contracts.py
 ```
