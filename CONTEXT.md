@@ -125,6 +125,8 @@ It defaults to `high`.
 The `xhigh` level applies to `gemini-4-hydrogen` and is not supported on `gemini-4-carbon` or `gemini-4-argon`.
 The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
+All five Gemini request types use `MAX_OUTPUT_TOKENS = 65536` through `build_content_config()`.
+This shared output-token limit applies to chunk generation, Pass 0 web research and YouTube analysis, audio refinement, and text refinement.
 Every request configured with a thinking level sets `include_thoughts=True`.
 Thought tokens stream in real time across the transport boundary.
 These tokens keep the HTTP streaming connection active.
@@ -222,22 +224,32 @@ When simultaneous speech and meaningful editorial text cannot be sequenced witho
 
 HTTP transport errors, 429 rate limits, and 5xx server errors are handled natively by the Gemini SDK.
 Every client sets `http_options.retry_options` to `types.HttpRetryOptions()`, so the SDK makes up to 5 attempts with exponential backoff and jitter.
+All five request types use one host stream reader.
+Transport failures, malformed SSE JSON, rate limits, and 5xx errors during stream consumption restart the request within a limit of 3 host attempts.
+Each restart discards partial answer text and grounding metadata and waits 1 second, then 2 seconds.
+All streams reject `MAX_TOKENS` and other failure finish reasons before parsing or publication.
+Chunk workers reuse one client across their retry attempts and close only their own client.
 Each chunk worker makes up to 3 attempts per chunk to recover from transient host-side response validation failures.
 Examples are malformed JSON, a schema violation, inverted timestamps, and a collapsed interval.
 A host validation retry waits 1 second after the first attempt and 2 seconds after the second.
 A successful attempt publishes the chunk JSON atomically.
 Permanent failures do not retry.
-Examples are 401 and 403 responses, a missing chunk file, and exhausted SDK retries.
+Examples are 400, 401, and 403 responses, a missing chunk file, and exhausted SDK retries before stream consumption.
 The chunk fails immediately without publishing chunk JSON.
+Fatal 400, 401, and 403 responses abort result collection and cancel queued chunk futures while running workers finish.
 When every host attempt fails, the worker logs the final error and publishes no JSON.
 The run stays resumable because valid published chunks are skipped on the next run.
 
 ## Structured data schemas
 
+All structured response schemas sent to Gemini inline model references and omit `$defs` and unsupported `additionalProperties` keywords.
+Host-side validation keeps `extra="forbid"` to reject unexpected fields.
+
 ### Chunk generation: `SubtitleResponse`
 
 ```python
 class Caption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: int
     start: str
     end: str
@@ -245,6 +257,7 @@ class Caption(BaseModel):
 
 
 class SubtitleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     captions: list[Caption]
 ```
 
@@ -269,17 +282,18 @@ class AudioRefinementResponse(BaseModel):
 ```
 
 Wire fields use camelCase (`contractVersion`, `deletedSourceIds`, `sourceIds`).
-The JSON schema sent to Gemini strips unsupported `additionalProperties` keywords while host-side validation keeps `extra="forbid"`.
 
 ### Global text refinement: `RefinementResponse`
 
 ```python
 class RefinedCaption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: int
     text: str
 
 
 class RefinementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     changes: list[RefinedCaption]
 ```
 
@@ -365,7 +379,7 @@ Canonical spelling selection per group:
 
 Publication boundary:
 
-- `gemini.global_refine_subtitles()` merges its `grounded_names` argument with the preflight context names and canonicalizes before it saves the refined VTT atomically.
+- `gemini.global_refine_subtitles()` canonicalizes with the preflight context names before it saves the refined VTT atomically.
 - `pipeline.run_generation()` canonicalizes without grounded names when it publishes the final artifact directly without text refinement.
 
 ## Stitching and pure-editorial boundary merging
@@ -482,10 +496,8 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 
 ### Speaker label casing canonicalization
 
-1. `core.canonicalize_speaker_casing(vtt, effective_grounded_names)` runs deterministically after the model changes and before the atomic save.
-2. `gemini.global_refine_subtitles()` merges its `grounded_names` argument with the preflight context names.
-   Exact duplicates are removed while the first occurrence stays.
-   Preflight names win case-insensitive collisions because they come later in the merged list.
+1. `core.canonicalize_speaker_casing(vtt, preflight_context.grounded_names)` runs deterministically after the model changes and before the atomic save.
+2. `gemini.global_refine_subtitles()` uses only the preflight context for grounded names.
 
 ## Work state, locking, and recovery
 
@@ -506,7 +518,6 @@ Locking:
 - Released automatically on process exit.
 
 Atomic writes:
-- Chunk JSON uses `.tmp` sibling + `os.replace()`.
 - JSON publication uses `io.atomic_write_json()` with a unique temporary sibling, failure cleanup, and `os.replace()`.
 - Extracted audio uses `.tmp` sibling + `os.replace()`.
 - VTT publication uses `io.atomic_save_vtt()` (`.{name}.<random>.tmp.vtt` + read-back cue verification + `os.replace()`).

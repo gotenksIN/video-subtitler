@@ -4,12 +4,14 @@ import hashlib
 import json
 import os
 import time
+from contextlib import closing
 from pathlib import Path
 
+import httpx2
 import webvtt
 from google import genai
-from google.genai import types
-from pydantic import ValidationError
+from google.genai import errors, types
+from pydantic import TypeAdapter, ValidationError
 
 from modules import core, io, media
 
@@ -19,13 +21,13 @@ DEFAULT_CHUNK_MODEL = "gemini-4-hydrogen"
 DEFAULT_REFINE_MODEL = "gemini-4-hydrogen"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "high"
-REFINEMENT_MAX_OUTPUT_TOKENS = 65536
+MAX_OUTPUT_TOKENS = 65536
 DEFAULT_AUDIO_REFINE_MODEL = "gemini-4-hydrogen"
 AUDIO_REFINE_THINKING_LEVEL = "high"
-AUDIO_REFINE_MAX_OUTPUT_TOKENS = 65536
 AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
 PREFLIGHT_CONTEXT_FILENAME = "preflight_context.json"
 STREAM_REQUEST_ATTEMPTS = 3
+CAPTIONS_ADAPTER = TypeAdapter(list[core.Caption])
 
 
 def create_client(api_key, base_url):
@@ -42,6 +44,7 @@ def create_client(api_key, base_url):
 
 def build_content_config(**kwargs):
     """Build a config with AFC disabled for direct Models requests."""
+    kwargs.setdefault("max_output_tokens", MAX_OUTPUT_TOKENS)
     kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
         disable=True
     )
@@ -58,11 +61,38 @@ def build_thinking_config(thinking_level):
     )
 
 
+def sanitize_response_schema(model):
+    """Inline model references and strip keywords unsupported by Gemini."""
+    schema = model.model_json_schema()
+    definitions = schema.get("$defs", {})
+
+    def remove_additional_properties(value):
+        if isinstance(value, dict):
+            if "$ref" in value:
+                name = value["$ref"].removeprefix("#/$defs/")
+                return remove_additional_properties(
+                    {
+                        **definitions[name],
+                        **{k: v for k, v in value.items() if k != "$ref"},
+                    }
+                )
+            return {
+                key: remove_additional_properties(item)
+                for key, item in value.items()
+                if key not in {"additionalProperties", "$defs"}
+            }
+        if isinstance(value, list):
+            return [remove_additional_properties(item) for item in value]
+        return value
+
+    return remove_additional_properties(schema)
+
+
 def generate_content_config(thinking_level):
     """Build the response configuration for chunk video generation."""
     kwargs = {
         "response_mime_type": "application/json",
-        "response_schema": core.SubtitleResponse,
+        "response_schema": sanitize_response_schema(core.SubtitleResponse),
     }
     thinking_config = build_thinking_config(thinking_level)
     if thinking_config is not None:
@@ -156,10 +186,8 @@ def load_cached_captions(out_json, chunk_duration):
     if not os.path.exists(out_json):
         return None
     try:
-        with open(out_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        response = core.SubtitleResponse(captions=data)
-        return core.validate_captions(response.captions, chunk_duration)
+        captions = CAPTIONS_ADAPTER.validate_json(Path(out_json).read_bytes())
+        return core.validate_captions(captions, chunk_duration)
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         print(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
@@ -202,9 +230,10 @@ def process_chunk(
 
         print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
-        for attempt in range(STREAM_REQUEST_ATTEMPTS):
-            with create_client(api_key, base_url) as client:
-                response_stream = client.models.generate_content_stream(
+        with create_client(api_key, base_url) as client:
+            for attempt in range(STREAM_REQUEST_ATTEMPTS):
+                full_json_text, _, _, _ = read_stream(
+                    client,
                     model=model_name,
                     contents=[
                         types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
@@ -212,38 +241,37 @@ def process_chunk(
                     ],
                     config=generate_content_config(thinking_level),
                 )
-                full_json_text = ""
-                for response_chunk in response_stream:
-                    if response_chunk.text:
-                        full_json_text += response_chunk.text
-
-            # Parsing and caption validation raise ValueError subclasses,
-            # so every ValueError here marks an unusable model response.
-            try:
-                parsed_response = core.SubtitleResponse.model_validate_json(
-                    full_json_text
-                )
-                validated = core.validate_captions(
-                    parsed_response.captions, chunk_duration
-                )
-            except ValueError as error:
-                if attempt == STREAM_REQUEST_ATTEMPTS - 1:
-                    print(
-                        f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
-                        f"{error}"
+                # Only host response validation uses the chunk attempt budget.
+                try:
+                    parsed_response = core.SubtitleResponse.model_validate_json(
+                        full_json_text
                     )
-                    return False
-                delay = 2**attempt
-                print(
-                    f"[Worker-{chunk_idx:03d}] Warning: Attempt {attempt + 1} failed "
-                    f"for {chunk_name} ({error}); retrying in {delay}s..."
-                )
-                time.sleep(delay)
-                continue
+                    validated = core.validate_captions(
+                        parsed_response.captions, chunk_duration
+                    )
+                except ValueError as error:
+                    if attempt == STREAM_REQUEST_ATTEMPTS - 1:
+                        print(
+                            f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
+                            f"{error}"
+                        )
+                        return False
+                    delay = 2**attempt
+                    print(
+                        f"[Worker-{chunk_idx:03d}] Warning: Attempt {attempt + 1} failed "
+                        f"for {chunk_name} ({error}); retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                    continue
 
-            io.atomic_write_json(out_json, validated)
-            print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
-            return True
+                io.atomic_write_json(out_json, validated)
+                print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
+                return True
+    except errors.ClientError as error:
+        if error.code in {400, 401, 403}:
+            raise
+        print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {error}")
+        return False
     except Exception as e:  # noqa: BLE001 - A chunk failure must keep the run resumable.
         print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
         return False
@@ -512,14 +540,39 @@ def build_youtube_analysis_config(thinking_level):
 def build_refinement_config(thinking_level):
     """Build structured config for script refinement without tools."""
     kwargs = {
-        "max_output_tokens": REFINEMENT_MAX_OUTPUT_TOKENS,
         "response_mime_type": "application/json",
-        "response_schema": core.RefinementResponse,
+        "response_schema": sanitize_response_schema(core.RefinementResponse),
     }
     thinking_config = build_thinking_config(thinking_level)
     if thinking_config is not None:
         kwargs["thinking_config"] = thinking_config
     return build_content_config(**kwargs)
+
+
+def read_stream(client, **request):
+    """Restart interrupted streams with fresh text and grounding buffers."""
+    for attempt in range(STREAM_REQUEST_ATTEMPTS):
+        response_stream = client.models.generate_content_stream(**request)
+        try:
+            with closing(response_stream):
+                return collect_stream_metadata(response_stream)
+        except (
+            httpx2.TransportError,
+            ConnectionError,
+            TimeoutError,
+            errors.APIError,
+            errors.UnknownApiResponseError,
+            json.JSONDecodeError,
+        ) as error:
+            if isinstance(error, errors.APIError) and not (
+                error.code == 429 or 500 <= error.code < 600
+            ):
+                raise
+            if attempt == STREAM_REQUEST_ATTEMPTS - 1:
+                raise
+            delay = 2**attempt
+            print(f"Interrupted Gemini stream ({error}); retrying in {delay}s...")
+            time.sleep(delay)
 
 
 def collect_stream_metadata(response_stream):
@@ -531,7 +584,16 @@ def collect_stream_metadata(response_stream):
     for chunk in response_stream:
         if chunk.text:
             full_text += chunk.text
-        for candidate in chunk.candidates or []:
+        for candidate in getattr(chunk, "candidates", None) or []:
+            reason = getattr(candidate, "finish_reason", None)
+            reason_text = getattr(reason, "value", reason)
+            if reason_text and str(reason_text).upper() not in {
+                "STOP",
+                "FINISH_REASON_UNSPECIFIED",
+            }:
+                raise RuntimeError(
+                    f"Gemini stream failed with finish reason {reason_text}"
+                )
             metadata = getattr(candidate, "grounding_metadata", None)
             if metadata:
                 search_queries.extend(
@@ -632,13 +694,11 @@ def run_preflight_context(
             thinking_level=thinking_level,
             ordinary_urls=ordinary_urls,
         )
-        research_stream = client.models.generate_content_stream(
+        research_text, queries, sources, retrieved_urls = read_stream(
+            client,
             model=model_name,
             contents=research_prompt,
             config=research_config,
-        )
-        research_text, queries, sources, retrieved_urls = collect_stream_metadata(
-            research_stream
         )
         verify_refinement_grounding(
             queries=queries,
@@ -668,12 +728,12 @@ def run_preflight_context(
                 for url in youtube_urls
             ] + [youtube_prompt]
             youtube_config = build_youtube_analysis_config(thinking_level)
-            youtube_stream = client.models.generate_content_stream(
+            youtube_text, _, _, _ = read_stream(
+                client,
                 model=model_name,
                 contents=youtube_contents,
                 config=youtube_config,
             )
-            youtube_text, _, _, _ = collect_stream_metadata(youtube_stream)
             if youtube_text.strip():
                 youtube_context = youtube_text.strip()
 
@@ -691,9 +751,7 @@ def load_cached_preflight_context(chunk_dir) -> core.PreflightContext | None:
     if not path.exists():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return core.PreflightContext.model_validate(data)
+        return core.PreflightContext.model_validate_json(path.read_bytes())
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         print(f"Ignoring invalid cached preflight context {path}: {e}")
         path.unlink(missing_ok=True)
@@ -715,7 +773,6 @@ def global_refine_subtitles(
     thinking_level,
     source_title=None,
     context_urls=None,
-    grounded_names=None,
     preflight_context: core.PreflightContext | None = None,
 ):
     """Run the global refinement pipeline on an input WebVTT file."""
@@ -752,15 +809,12 @@ def global_refine_subtitles(
         print(
             "Sending script to Gemini for global refinement (this may take a minute)..."
         )
-        response_stream = client.models.generate_content_stream(
+        full_json_text, _, _, _ = read_stream(
+            client,
             model=model_name,
             contents=prompt,
             config=build_refinement_config(thinking_level),
         )
-        full_json_text = ""
-        for response_chunk in response_stream:
-            if response_chunk.text:
-                full_json_text += response_chunk.text
 
     try:
         refinements = core.RefinementResponse.model_validate_json(full_json_text)
@@ -779,12 +833,7 @@ def global_refine_subtitles(
     for change in changes:
         vtt[change.id].text = change.text
 
-    # Preflight-grounded names win case-insensitive collisions with caller
-    # names inside canonicalize_speaker_casing.
-    effective_grounded_names = list(
-        dict.fromkeys([*(grounded_names or ()), *preflight_context.grounded_names])
-    )
-    core.canonicalize_speaker_casing(vtt, effective_grounded_names)
+    core.canonicalize_speaker_casing(vtt, preflight_context.grounded_names)
     io.atomic_save_vtt(vtt, output_vtt)
     print(f"Saved refined subtitles to {output_vtt}")
 
@@ -885,28 +934,10 @@ Return one sparse patch object. Do not return the complete script.
 
 def audio_refinement_config():
     """Build structured config for boundary audio refinement without tools."""
-    schema = core.AudioRefinementResponse.model_json_schema()
-    cue_schema = schema.pop("$defs")["AudioRefinedCue"]
-    schema["properties"]["cues"]["items"] = cue_schema
-
-    def remove_additional_properties(value):
-        if isinstance(value, dict):
-            return {
-                key: remove_additional_properties(item)
-                for key, item in value.items()
-                if key != "additionalProperties"
-            }
-        if isinstance(value, list):
-            return [remove_additional_properties(item) for item in value]
-        return value
-
     return build_content_config(
         response_mime_type="application/json",
-        # The Gemini endpoint rejects Pydantic's additionalProperties keyword.
-        # Host-side parsing still enforces extra="forbid" on both models.
-        response_json_schema=remove_additional_properties(schema),
+        response_json_schema=sanitize_response_schema(core.AudioRefinementResponse),
         thinking_config=build_thinking_config(AUDIO_REFINE_THINKING_LEVEL),
-        max_output_tokens=AUDIO_REFINE_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -933,7 +964,8 @@ def run_audio_refinement_request(
         )
     with create_client(api_key, base_url) as client:
         print("Sending complete audio and script for boundary audio refinement...")
-        response_stream = client.models.generate_content_stream(
+        full_json_text, _, _, _ = read_stream(
+            client,
             model=model,
             contents=[
                 types.Part.from_bytes(
@@ -943,18 +975,6 @@ def run_audio_refinement_request(
             ],
             config=audio_refinement_config(),
         )
-        full_json_text = ""
-        for response_chunk in response_stream:
-            if response_chunk.text:
-                full_json_text += response_chunk.text
-            for candidate in getattr(response_chunk, "candidates", None) or []:
-                reason = getattr(candidate, "finish_reason", None)
-                reason_text = str(getattr(reason, "value", reason)).upper()
-                if reason_text == "MAX_TOKENS":
-                    raise RuntimeError(
-                        "Audio refinement response exceeded the configured "
-                        "output budget (MAX_TOKENS)."
-                    )
     try:
         return full_json_text, core.AudioRefinementResponse.model_validate_json(
             full_json_text
@@ -1006,8 +1026,8 @@ def load_cached_audio_refinement(work_dir, identity):
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
         if not isinstance(stored, dict) or stored.get("identity") != identity:
             raise ValueError("cache identity mismatch")
-        response = core.AudioRefinementResponse.model_validate(
-            json.loads(response_path.read_text(encoding="utf-8"))
+        response = core.AudioRefinementResponse.model_validate_json(
+            response_path.read_bytes()
         )
     except (ValueError, OSError) as error:
         print(f"Ignoring invalid audio refinement cache {response_path}: {error}")
@@ -1089,8 +1109,6 @@ def boundary_audio_refine_subtitles(
         )
         response_to_cache = response
     candidate_path = Path(work_dir) / "audio_refined.vtt"
-    candidate_tmp = Path(work_dir) / "audio_refined.vtt.tmp"
-    candidate_tmp.unlink(missing_ok=True)
     try:
         if response_to_cache is not None:
             try:
@@ -1112,12 +1130,10 @@ def boundary_audio_refine_subtitles(
             candidate_vtt.captions.append(
                 webvtt.Caption(entry["start"], entry["end"], entry["text"])
             )
-        io.atomic_save_vtt(candidate_vtt, candidate_tmp)
-        os.replace(candidate_tmp, candidate_path)
+        io.atomic_save_vtt(candidate_vtt, candidate_path)
         if response_to_cache is not None:
             store_audio_refinement_cache(work_dir, identity, response_to_cache)
     except Exception:
-        candidate_tmp.unlink(missing_ok=True)
         discard_audio_refinement_cache(work_dir)
         raise
     if Path(output_vtt) != candidate_path:

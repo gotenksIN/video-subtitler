@@ -5,7 +5,7 @@ import json
 import pytest
 from google.genai import errors, types
 
-from modules import core, gemini
+from modules import gemini
 from tests.support.gemini_fakes import (
     ScriptedGeminiClient,
     chunk_call,
@@ -55,8 +55,18 @@ def test_chunk_request_streams_chunk_bytes_and_publishes_canonical_captions(
     assert video_part.inline_data.mime_type == "video/mp4"
     assert video_part.inline_data.data == b"video bytes"
     assert request.config.response_mime_type == "application/json"
-    assert request.config.response_schema is core.SubtitleResponse
+    schema = request.config.response_schema
+    assert schema["required"] == ["captions"]
+    caption_schema = schema["properties"]["captions"]["items"]
+    assert caption_schema["required"] == ["id", "start", "end", "text"]
+    assert caption_schema["properties"]["id"]["type"] == "integer"
+    for field in ("start", "end", "text"):
+        assert caption_schema["properties"][field]["type"] == "string"
+    serialized_schema = json.dumps(schema)
+    for keyword in ("additionalProperties", "additional_properties", "$defs", "$ref"):
+        assert f'"{keyword}":' not in serialized_schema
     assert request.config.automatic_function_calling.disable is True
+    assert request.config.max_output_tokens == 65536
     assert request.config.tools is None
     assert request.config.thinking_config.thinking_level == getattr(
         types.ThinkingLevel, thinking_level.upper()
@@ -255,12 +265,18 @@ def test_permanent_chunk_failure_fails_immediately_without_retry(
     sleeps = []
     monkeypatch.setattr(gemini.time, "sleep", sleeps.append)
 
-    assert (
-        gemini.process_chunk(
-            "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+    if isinstance(error, errors.ClientError):
+        with pytest.raises(errors.ClientError, match="403"):
+            gemini.process_chunk(
+                "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+            )
+    else:
+        assert (
+            gemini.process_chunk(
+                "key", None, chunk_state(), tmp_path, "model", "video/mp4", "high"
+            )
+            is False
         )
-        is False
-    )
     assert not (tmp_path / "subtitle_chunk_000.json").exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert len(client.requests) == 1

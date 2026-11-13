@@ -55,7 +55,15 @@ def test_refinement_changes_text_only_and_preserves_timestamps(tmp_path, monkeyp
 
     refinement = client.requests[1]
     assert refinement.config.response_mime_type == "application/json"
-    assert refinement.config.response_schema is core.RefinementResponse
+    schema = refinement.config.response_schema
+    assert schema["required"] == ["changes"]
+    change_schema = schema["properties"]["changes"]["items"]
+    assert change_schema["required"] == ["id", "text"]
+    assert change_schema["properties"]["id"]["type"] == "integer"
+    assert change_schema["properties"]["text"]["type"] == "string"
+    serialized_schema = json.dumps(schema)
+    for keyword in ("additionalProperties", "additional_properties", "$defs", "$ref"):
+        assert f'"{keyword}":' not in serialized_schema
     assert refinement.config.automatic_function_calling.disable is True
     assert refinement.config.tools is None
     assert (
@@ -144,6 +152,7 @@ def test_identity_research_sends_grounded_plain_text_request(tmp_path, monkeypat
     assert research.config.response_mime_type is None
     assert research.config.response_schema is None
     assert research.config.automatic_function_calling.disable is True
+    assert research.config.max_output_tokens == 65536
     assert research.config.thinking_config.thinking_level == types.ThinkingLevel.MEDIUM
     assert research.config.thinking_config.include_thoughts is True
     assert research.config.temperature is None
@@ -191,6 +200,7 @@ def test_youtube_context_urls_become_direct_video_analysis(tmp_path, monkeypatch
     assert analysis.config.response_mime_type is None
     assert analysis.config.response_schema is None
     assert analysis.config.automatic_function_calling.disable is True
+    assert analysis.config.max_output_tokens == 65536
     assert analysis.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
     assert analysis.config.thinking_config.include_thoughts is True
     assert analysis.config.temperature is None
@@ -617,7 +627,7 @@ def test_supplied_preflight_context_skips_research_requests(tmp_path, monkeypatc
     assert len(client.requests) == 1
     refinement = client.requests[0]
     assert refinement.config.response_mime_type == "application/json"
-    assert refinement.config.response_schema is core.RefinementResponse
+    assert refinement.config.response_schema["required"] == ["changes"]
     assert refinement.config.automatic_function_calling.disable is True
     assert refinement.config.tools is None
     assert (

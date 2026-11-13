@@ -21,6 +21,8 @@ REPAIR_WINDOW_SECONDS = 10.0
 
 
 class Caption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: int
     start: str = Field(description="Start time in HH:MM:SS.mmm format")
     end: str = Field(description="End time in HH:MM:SS.mmm format")
@@ -28,15 +30,21 @@ class Caption(BaseModel):
 
 
 class SubtitleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     captions: list[Caption]
 
 
 class RefinedCaption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: int = Field(description="The integer ID of the subtitle to change")
     text: str = Field(description="The corrected text")
 
 
 class RefinementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     changes: list[RefinedCaption] = Field(
         description="List of subtitles to change. Only include ones that need changes."
     )

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import webvtt
+from google.genai import errors
 
 from modules import core, gemini, io, media
 
@@ -116,6 +117,11 @@ def collect_api_results(futures):
         try:
             if not future.result():
                 failed.append(chunk_name)
+        except errors.ClientError as error:
+            if error.code in {400, 401, 403}:
+                raise
+            print(f"ERROR processing {chunk_name}: {error}")
+            failed.append(chunk_name)
         except Exception as e:  # noqa: BLE001 - Convert worker failures to results.
             print(f"ERROR processing {chunk_name}: {e}")
             failed.append(chunk_name)
@@ -136,7 +142,8 @@ def process_chunks(
 ):
     """Process video chunks concurrently with a thread pool and collect failures."""
     print(f"Processing {len(chunks)} chunks using {api_workers} workers...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=api_workers) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=api_workers)
+    try:
         futures = {
             executor.submit(
                 gemini.process_chunk,
@@ -153,6 +160,8 @@ def process_chunks(
             for chunk in chunks
         }
         return collect_api_results(futures)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def stitch(chunk_dir, output_vtt):
