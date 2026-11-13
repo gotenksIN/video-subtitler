@@ -114,7 +114,29 @@ def test_generation_validation_failures_exit_one_with_stable_diagnostics(
     process = run_cli(input_name, *arguments, cwd=tmp_path)
 
     assert process.returncode == 1
-    assert message in output(process)
+    assert message in process.stderr
+    assert process.stdout == ""
+    assert not (tmp_path / "temp_video_chunks").exists()
+
+
+@pytest.mark.parametrize("refine_only", [False, True])
+@pytest.mark.parametrize("parent_kind", ["missing", "file"])
+def test_output_parent_validation_precedes_media_and_api_work(
+    tmp_path, refine_only, parent_kind
+):
+    source = make_video(tmp_path)
+    parent = tmp_path / "output-parent"
+    if parent_kind == "file":
+        parent.write_text("not a directory", encoding="utf-8")
+    arguments = [str(source), "--output", str(parent / "out.vtt"), "--api-key", "key"]
+    if refine_only:
+        arguments.append("--refine-only")
+
+    process = run_cli(*arguments, cwd=tmp_path)
+
+    assert process.returncode == 1
+    assert "Output parent is not a directory" in process.stderr
+    assert process.stdout == ""
     assert not (tmp_path / "temp_video_chunks").exists()
 
 

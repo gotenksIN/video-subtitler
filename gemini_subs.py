@@ -38,7 +38,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL", gemini.DEFAULT_CHUNK_MODEL),
+        default=os.environ.get("GEMINI_MODEL") or gemini.DEFAULT_CHUNK_MODEL,
         help="Gemini model for chunk video subtitle generation.",
     )
     parser.add_argument(
@@ -104,14 +104,24 @@ def main():
         try:
             context_urls = core.validate_context_urls(args.context_url)
         except ValueError as e:
-            print(f"Error: {e}")
+            print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
         if not os.path.exists(args.video_file_or_vtt):
-            print(f"Error: Input VTT file not found: {args.video_file_or_vtt}")
+            print(
+                f"Error: Input VTT file not found: {args.video_file_or_vtt}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not Path(args.output).parent.is_dir():
+            print(
+                f"Error: Output parent is not a directory: {Path(args.output).parent}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         if not args.api_key:
             print(
-                "Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."
+                "Error: Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key.",
+                file=sys.stderr,
             )
             sys.exit(1)
         try:
@@ -126,7 +136,7 @@ def main():
                 context_urls=context_urls,
             )
         except Exception as e:  # noqa: BLE001 - Convert refinement failures to CLI errors.
-            print(f"Error: {e}")
+            print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
         sys.exit(0)
 
@@ -148,7 +158,7 @@ def main():
     try:
         pipeline.run_generation(config)
     except Exception as e:  # noqa: BLE001 - Convert pipeline failures to CLI errors.
-        print(f"Error: {e}")
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

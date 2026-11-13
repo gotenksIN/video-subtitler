@@ -259,6 +259,11 @@ def validate_generation_config(config: GenerationConfig) -> list[str]:
     if config.video_path.resolve() == config.output_path.resolve():
         raise RuntimeError("--output must not resolve to the source video")
 
+    if not config.output_path.parent.is_dir():
+        raise RuntimeError(
+            f"Output parent is not a directory: {config.output_path.parent}"
+        )
+
     if not config.api_key:
         raise RuntimeError(
             "Gemini API key not configured. Set GEMINI_API_KEY in .env or the environment, or pass --api-key."

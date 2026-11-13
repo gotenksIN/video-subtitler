@@ -114,6 +114,9 @@ Install headless GPL static binaries via `./scripts/ffmpeg.sh`.
 `python-dotenv` loads `.env` when `gemini_subs.py` starts.
 The shell environment and CLI arguments can also provide these values.
 CLI arguments take precedence over environment variables.
+An empty `GEMINI_MODEL` uses the default chunk model.
+Both CLI modes reject an output path whose parent is missing or is not a directory before media or API work.
+CLI errors go to standard error.
 
 | Variable | CLI option | Default | Use |
 | --- | --- | --- | --- |

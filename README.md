@@ -240,6 +240,8 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
   Successful runs clean up the temporary work directory.
 - Output WebVTT files are ignored by Git by default.
   Move or rename files to track specific subtitle outputs.
+- Create the output parent directory before you run either CLI mode.
+  Error messages go to standard error.
 
 ## Development
 
