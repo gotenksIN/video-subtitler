@@ -43,9 +43,11 @@ def create_client(api_key, base_url):
     return genai.Client(**kwargs)
 
 
-def build_content_config(**kwargs):
+def build_content_config(*, thinking_level=None, **kwargs):
     """Build a config with AFC disabled for direct Models requests."""
     kwargs.setdefault("max_output_tokens", MAX_OUTPUT_TOKENS)
+    if thinking_level is not None and "thinking_config" not in kwargs:
+        kwargs["thinking_config"] = build_thinking_config(thinking_level)
     kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
         disable=True
     )
@@ -91,14 +93,11 @@ def sanitize_response_schema(model):
 
 def generate_content_config(thinking_level):
     """Build the response configuration for chunk video generation."""
-    kwargs = {
-        "response_mime_type": "application/json",
-        "response_schema": sanitize_response_schema(core.SubtitleResponse),
-    }
-    thinking_config = build_thinking_config(thinking_level)
-    if thinking_config is not None:
-        kwargs["thinking_config"] = thinking_config
-    return build_content_config(**kwargs)
+    return build_content_config(
+        thinking_level=thinking_level,
+        response_mime_type="application/json",
+        response_schema=sanitize_response_schema(core.SubtitleResponse),
+    )
 
 
 def build_generation_prompt(chunk_duration, source_title=None, candidate_names=None):
@@ -570,34 +569,21 @@ def build_research_config(thinking_level, ordinary_urls):
     tools = [types.Tool(google_search=types.GoogleSearch())]
     if ordinary_urls:
         tools.append(types.Tool(url_context=types.UrlContext()))
-    kwargs = {
-        "tools": tools,
-    }
-    thinking_config = build_thinking_config(thinking_level)
-    if thinking_config is not None:
-        kwargs["thinking_config"] = thinking_config
-    return build_content_config(**kwargs)
+    return build_content_config(thinking_level=thinking_level, tools=tools)
 
 
 def build_youtube_analysis_config(thinking_level):
     """Build plain-text config for direct YouTube analysis without tools."""
-    kwargs = {}
-    thinking_config = build_thinking_config(thinking_level)
-    if thinking_config is not None:
-        kwargs["thinking_config"] = thinking_config
-    return build_content_config(**kwargs)
+    return build_content_config(thinking_level=thinking_level)
 
 
 def build_refinement_config(thinking_level):
     """Build structured config for script refinement without tools."""
-    kwargs = {
-        "response_mime_type": "application/json",
-        "response_schema": sanitize_response_schema(core.RefinementResponse),
-    }
-    thinking_config = build_thinking_config(thinking_level)
-    if thinking_config is not None:
-        kwargs["thinking_config"] = thinking_config
-    return build_content_config(**kwargs)
+    return build_content_config(
+        thinking_level=thinking_level,
+        response_mime_type="application/json",
+        response_schema=sanitize_response_schema(core.RefinementResponse),
+    )
 
 
 def read_stream(client, **request):
@@ -1032,8 +1018,8 @@ def audio_refinement_config():
     """Build structured config for boundary audio refinement without tools."""
     return build_content_config(
         response_mime_type="application/json",
-        response_json_schema=sanitize_response_schema(core.AudioRefinementResponse),
-        thinking_config=build_thinking_config(AUDIO_REFINE_THINKING_LEVEL),
+        response_schema=sanitize_response_schema(core.AudioRefinementResponse),
+        thinking_level=AUDIO_REFINE_THINKING_LEVEL,
     )
 
 

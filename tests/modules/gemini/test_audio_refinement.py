@@ -87,6 +87,25 @@ def test_audio_request_sends_inline_ogg_bytes_with_sparse_config(tmp_path, monke
     assert audio_part.inline_data.mime_type == "audio/ogg"
     assert audio_part.inline_data.data == b"ogg audio bytes"
     assert isinstance(request.contents[1], str)
+    assert request.config.response_mime_type == "application/json"
+    assert request.config.tools is None
+    schema = request.config.response_schema
+    contract_schema = schema["properties"]["contractVersion"]
+    assert contract_schema["type"] == "string"
+    assert contract_schema["const"] == "sparse-patch-v1"
+    cue_schema = schema["properties"]["cues"]["items"]
+    assert cue_schema["required"] == ["sourceIds", "start", "end", "text"]
+    assert cue_schema["properties"]["sourceIds"]["items"]["type"] == "integer"
+    for field in ("start", "end", "text"):
+        assert cue_schema["properties"][field]["type"] == "string"
+    serialized_schema = json.dumps(schema)
+    for keyword in (
+        "additionalProperties",
+        "additional_properties",
+        "$defs",
+        "$ref",
+    ):
+        assert f'"{keyword}":' not in serialized_schema
     assert request.config.automatic_function_calling.disable is True
     assert request.config.thinking_config.thinking_level == types.ThinkingLevel.HIGH
     assert request.config.thinking_config.include_thoughts is True
