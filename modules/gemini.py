@@ -120,8 +120,10 @@ def build_generation_prompt(chunk_duration, source_title=None, candidate_names=N
             "Use a candidate's canonical English name only when direct in-clip evidence "
             "(such as a visible name banner, lower-third, title card, or spoken "
             "introduction) establishes attribution in this clip. Never assign candidate "
-            "identities from appearance alone. Leave dialogue unlabeled when attribution "
-            "is uncertain.\n\n"
+            "identities from appearance alone. When candidate-name attribution is "
+            "uncertain, use a clear descriptive role per Rule 18, such as Host:, "
+            "Official:, or Guide:. Leave dialogue unlabeled only when neither a "
+            "candidate name nor a clear descriptive role can be distinguished.\n\n"
         )
     return f"""You are an expert subtitle generator and translator.
 
@@ -333,6 +335,8 @@ Use Google Search to research this video and return a concise plain-text summary
 
 {IDENTITY_RESEARCH_SECTION}:
 Canonical English public names, aliases, and roles for the people who speak in this video.
+When a speaker performs in character under an established recurring stage or character persona rather than appearing as themselves, use the active persona name as the canonical English speaker name.
+List any performer legal or real name as an alias.
 Begin each entry on its own line with the canonical English public name or the stable role, followed by a colon, then give the aliases, the role, and the cited evidence.
 
 {TERMINOLOGY_RESEARCH_SECTION}:
@@ -487,7 +491,7 @@ A grammatical, intelligible, and faithful line must remain unchanged. Do not rew
 
 Change text only for:
 
-1. Existing speaker labels that have incorrect spelling, casing, or identity established by the script.
+1. Existing speaker labels that have incorrect spelling, casing, or identity established by the script. This includes replacing a generic role or kinship label with the speaker's canonical name only under the unambiguous one-to-one correspondence required by Rule 32.
 2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
 3. Objective grammar, spelling, punctuation, or OCR errors.
 4. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
@@ -529,8 +533,8 @@ SPEAKER LABELS
 29. An unlabeled line remains unlabeled, even when adjacent lines, timestamps, speaker turns, the source title, identity research, or video analysis suggest a possible speaker.
 30. Do not propagate a label from one cue to another.
 31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate the spelling of an existing label, but they are not an attribution map.
-32. You may correct an existing label only when its spelling, casing, or identity is clearly established by the script. Keep the label's presence or absence unchanged otherwise.
-33. Preserve existing speaker labels, label placement, line breaks, and turn boundaries. Do not add or remove labels for formatting convenience.
+32. You may correct an existing label only when its spelling, casing, or identity is clearly established by the script. Replace a generic role or kinship label (Host:, Father:, Daughter:, Official:, Son-in-law:) with the speaker's canonical name only when the script establishes an unambiguous one-to-one correspondence globally or within that scene. Never replace shared or ambiguous multi-person roles (Guest: when multiple guests exist), collective labels (Audience:, Fans:), or unverified incidental roles (Producer:, Staff:, Shop Owner:) with a person's name. Keep unlabeled lines unlabeled.
+33. Preserve existing speaker labels except for corrections authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. This exception remains subordinate to the two-line cue limit for mixed cues ("[Editorial]" followed by "Speaker: Dialogue") and multi-speaker cues; never add a third line or combine distinct turns. Do not add or remove labels for formatting convenience.
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.
 
@@ -549,7 +553,7 @@ ON-SCREEN AND MIXED CUES
 FORMATTING AND OUTPUT
 
 45. Preserve line breaks when they distinguish multiple speakers.
-46. Keep each subtitle to no more than 42 characters per line and two lines where possible without deleting meaning or altering acceptable text.
+46. Rule 13 forbids changes solely for line length: leave untouched cues unchanged. When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to no more than 42 characters per line and at most two lines. The two-line limit for the whole cue takes precedence for mixed cues and multi-speaker cues; preserve their visual content and separate turns, and never add a third line.
 47. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
 48. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
 49. Do not return unchanged entries.
@@ -1006,6 +1010,7 @@ REPAIR RULES
 6. Keep speaker labels and their turn structure. Do not guess identities from the audio.
 7. Do not describe sounds, music, or actions unless the script already does.
 8. Every output cue must contain text.
+9. Apply readability guidance only to cues already being modified or recovered. Preserve existing line breaks on retimed dialogue when readable. Wrap rewritten, split, merged, or recovered spoken dialogue to no more than 42 characters per line and two lines per cue; keep mixed cues to two lines total. Never emit patch cues solely to re-wrap unchanged cues. Never alter whitespace or line breaks inside [bracketed] visual fragments.
 
 RESPONSE FORMAT
 

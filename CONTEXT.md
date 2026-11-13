@@ -231,7 +231,9 @@ Each chunk prompt carries optional context blocks before the timing rules.
 `SOURCE CONTEXT` holds the derived source title with candidate-identity warnings.
 `CANDIDATE SPEAKER IDENTITIES` holds the preflight grounded names as a candidate roster.
 The roster permits a candidate's canonical English name only when direct in-clip evidence, such as a visible name banner, lower-third, title card, or spoken introduction, establishes attribution in the clip.
-It never assigns identities from appearance alone, and it leaves uncertain dialogue unlabeled.
+It never assigns identities from appearance alone.
+When candidate-name attribution is uncertain, generation uses a clear descriptive role, such as `Host:`, `Official:`, or `Guide:`.
+It leaves dialogue unlabeled only when neither a candidate name nor a clear descriptive role can be distinguished.
 When simultaneous speech and meaningful editorial text cannot be sequenced without loss, generation permits a two-line mixed cue with bracketed editorial text followed by dialogue.
 
 ### Chunk generation retry
@@ -440,6 +442,11 @@ Request configuration:
   - Pure editorial cues must be preserved identically.
   - Mixed cues must preserve their bracketed fragments across descendants.
   - Deletions are allowed only for dialogue cues inside repair regions.
+  - Readability guidance applies only to cues already being modified or recovered.
+    Preserve existing line breaks on retimed dialogue when readable.
+    Wrap rewritten, split, merged, or recovered spoken dialogue to no more than 42 characters per line and two lines per cue, including mixed cues.
+    Never emit a patch solely to re-wrap an unchanged cue.
+    Never alter whitespace or line breaks inside bracketed visual fragments.
 
 ### Candidate reconstruction and publication
 1. Host filters the sparse patch to repair authority before reconstruction.
@@ -487,6 +494,9 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Tool: Google Search + optional URL Context.
    - Output: Plain text with two sections:
      - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
+       When a speaker performs in character under an established recurring stage or character persona, use the active persona name as the canonical English speaker name.
+       This rule applies when the speaker does not appear as themselves.
+       List any performer legal or real name as an alias.
        Emit entries only for verified named speakers or a single concrete recurring role, such as `Host:`.
        Omit catch-all and negative summaries for incidental or unidentified speakers.
      - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
@@ -517,9 +527,14 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
+      A generic role or kinship label may become a canonical name only when the script establishes an unambiguous one-to-one correspondence globally or within that scene.
+      Shared or ambiguous multi-person roles, collective labels, and unverified incidental roles must not become personal names.
    4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
    6. Forbids retiming, merging, splitting, adding, or deleting cues.
+   7. Leave untouched cues unchanged, even when they exceed line-length guidance.
+      When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to at most two lines of no more than 42 characters each.
+      Mixed cues and multi-speaker cues retain their visual content and separate turns within the two-line cue limit; the wrapping exception never permits a third line.
 6. Output: `RefinementResponse` applied atomically to target.
    Before applying any change, the host verifies balanced brackets, unchanged cue class and outer visual fragment count, and separate nonempty dialogue turns.
    Labeled turns retain labels at their original positions; unlabeled turns cannot gain labels.
