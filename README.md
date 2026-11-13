@@ -19,13 +19,13 @@ flowchart TD
 
     Split --> Chunks[Concurrent video chunks]
     Context --> FlashGen
-    Chunks --> FlashGen[Gemini Flash: Subtitle generation with candidate roster]
+    Chunks --> FlashGen[Gemini 4 Hydrogen: Subtitle generation with candidate roster]
     FlashGen --> Stitch[Stitch & merge visual fragments]
 
     Stitch --> AudioPass[2. Boundary audio refinement]
     Audio --> AudioPass
 
-    AudioPass --> ProRefine[3. Gemini Pro: Structured text polish with preflight context]
+    AudioPass --> ProRefine[3. Gemini 4 Hydrogen: Structured text polish with preflight context]
     Context --> ProRefine
     ProRefine --> Output[Final English WebVTT subtitles]
 ```
@@ -34,7 +34,7 @@ flowchart TD
 
 - **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
 - **Concurrent processing:** Process video chunks in parallel using multiple Gemini API workers.
-- **Boundary audio refinement:** Extract the complete audio track and repair dialogue faults near chunk boundaries with a boundary-limited Gemini Flash pass.
+- **Boundary audio refinement:** Extract the complete audio track and repair dialogue faults near chunk boundaries with a boundary-limited Gemini 4 Hydrogen pass.
 - **Structured outputs:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and invalid chunk output.
 - **Grounded refinement:** Run web identity research with Google Search, optional direct YouTube video analysis, and structured script polish.
   Speaker identities use verified evidence instead of appearance guesses.
@@ -67,9 +67,9 @@ flowchart TD
 
    # Optional: set a custom base URL or change default models
    GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-3.8-flash
-   GEMINI_AUDIO_REFINE_MODEL=gemini-3.8-flash
-   GEMINI_REFINE_MODEL=gemini-3.1-pro-preview
+   GEMINI_MODEL=gemini-4-hydrogen
+   GEMINI_AUDIO_REFINE_MODEL=gemini-4-hydrogen
+   GEMINI_REFINE_MODEL=gemini-4-hydrogen
    ```
 
 ## Usage
@@ -110,12 +110,12 @@ Noninteractive execution without a context URL never prompts:
 
 Benchmark subtitle generation and refinement models across full video runs:
 ```bash
-./scripts/benchmark.py "your_video.webm" --case gemini-3.8-flash:gemini-3.8-flash:gemini-3.1-pro-preview
+./scripts/benchmark.py "your_video.webm" --case gemini-4-hydrogen:gemini-4-hydrogen:gemini-4-hydrogen
 ```
 
 Compare generated subtitles against a reference WebVTT file:
 ```bash
-./scripts/benchmark.py "your_video.webm" --model gemini-3.8-flash --reference-vtt "reference.vtt"
+./scripts/benchmark.py "your_video.webm" --model gemini-4-hydrogen --reference-vtt "reference.vtt"
 ```
 
 The benchmark saves generated subtitles and `benchmark-results.json` to the output directory.
@@ -136,7 +136,7 @@ uv run python gemini_subs.py "your_video.webm" \
 
 ### Audio-first processing and refinement
 
-By default, the pipeline uses `gemini-3.8-flash` for chunk video generation and boundary audio refinement, and `gemini-3.1-pro-preview` for global text refinement.
+By default, the pipeline uses `gemini-4-hydrogen` for chunk video generation, boundary audio refinement, and global text refinement.
 Chunk processing limits context to 60 seconds per stream-copy chunk.
 The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
 The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
@@ -193,14 +193,15 @@ uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polishe
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`).
 - `--workers`: Maximum concurrent API workers (default: `7`).
 - `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
-  Supported levels are `low`, `medium`, and `high` for Gemini 3+ models.
+  Supported levels are `low`, `medium`, `high`, and `xhigh`.
+  `xhigh` applies to `gemini-4-hydrogen`.
   The global text refinement pass always uses `high`.
   The boundary audio refinement pass always uses `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
-- `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-3.8-flash`).
-- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-3.8-flash`).
-- `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-3.1-pro-preview`).
+- `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-4-hydrogen`).
+- `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-4-hydrogen`).
+- `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-4-hydrogen`).
 - `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
   Repeat the option to supply several URLs.
   Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, or `m.youtube.com` with a `/watch` path and nonempty `v` query, or `youtu.be` with exactly one path segment) become direct video inputs for a separate YouTube analysis pass.

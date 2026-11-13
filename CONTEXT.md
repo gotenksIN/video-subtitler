@@ -7,7 +7,7 @@ This context defines the architecture, data schemas, algorithms, prompt contract
 This project is a Python command-line tool that creates English WebVTT subtitles from video.
 It uses an audio-first pipeline with four Gemini passes:
 1. A preflight pass researches participant identities and topic terminology before chunk generation.
-2. Stream-copy video chunks are subtitled concurrently with Gemini Flash.
+2. Stream-copy video chunks are subtitled concurrently with Gemini 4 Hydrogen.
 3. A boundary-limited audio pass listens to the complete extracted audio and repairs faults near chunk boundaries.
 4. A grounded text pass improves the complete subtitle script with the preflight research context.
 
@@ -116,9 +116,9 @@ CLI arguments take precedence over environment variables.
 | --- | --- | --- | --- |
 | `GEMINI_API_KEY` | `--api-key` | None | Required Gemini credential. |
 | `GEMINI_API_BASE` | `--base-url` | SDK default | Optional Gemini-compatible proxy base URL. |
-| `GEMINI_MODEL` | `--model` | `gemini-3.8-flash` | Chunk video model. |
-| `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-3.8-flash` | Boundary audio refinement model. |
-| `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-3.1-pro-preview` | Full-script refinement model. |
+| `GEMINI_MODEL` | `--model` | `gemini-4-hydrogen` | Chunk video model. |
+| `GEMINI_AUDIO_REFINE_MODEL` | `--audio-refine-model` | `gemini-4-hydrogen` | Boundary audio refinement model. |
+| `GEMINI_REFINE_MODEL` | `--refine-model` | `gemini-4-hydrogen` | Full-script refinement model. |
 
 The chunk thinking level accepts `low`, `medium`, `high`, and `xhigh`.
 It defaults to `high`.
@@ -382,7 +382,7 @@ If a required result cannot load, stitching fails before publishing the VTT.
 Repairs boundary faults by listening to `extracted_audio.ogg`.
 
 Request configuration:
-- `DEFAULT_AUDIO_REFINE_MODEL = "gemini-3.8-flash"`
+- `DEFAULT_AUDIO_REFINE_MODEL = "gemini-4-hydrogen"`
 - Fixed thinking level: `HIGH`
 - Thought streaming enabled through `include_thoughts=True`
 - Max output tokens: `65536`
@@ -449,7 +449,7 @@ The pass uses the refinement model (`config.refine_model` or `config.model`) wit
 
 ### Structured refinement (Pass 3)
 
-1. Model: `gemini-3.1-pro-preview` (thinking level `high`, `max_output_tokens: 65536`).
+1. Model: `gemini-4-hydrogen` (thinking level `high`, `max_output_tokens: 65536`).
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
