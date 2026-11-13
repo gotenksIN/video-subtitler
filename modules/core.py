@@ -546,9 +546,6 @@ def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
     referenced = {source_id for cue in response.cues for source_id in cue.source_ids}
     deleted = set(response.deleted_source_ids)
 
-    patch_starts = [parse_time(canonical_timestamp(cue.start)) for cue in response.cues]
-    if any(after < before for before, after in itertools.pairwise(patch_starts)):
-        raise ValueError("Sparse audio refinement cues are not in script order")
     patch_lineage = [source_id for cue in response.cues for source_id in cue.source_ids]
     if any(after < before for before, after in itertools.pairwise(patch_lineage)):
         raise ValueError(
@@ -634,9 +631,7 @@ def validate_audio_refinement_response(
         end_ms = round(parse_time(end) * 1000)
         if start_ms < 0:
             raise ValueError(f"Audio refinement cue has a negative start: {start}")
-        cue_text = "\n".join(
-            line.rstrip() for line in cue.text.strip().splitlines() if line.strip()
-        )
+        cue_text = cue.text
         candidate = {
             "source_ids": cue_ids,
             "start": start,
@@ -659,8 +654,18 @@ def validate_audio_refinement_response(
                     f"Audio refinement cue {start} --> {end} exceeds the "
                     "complete audio duration"
                 )
-            end_ms = audio_duration_ms
-            end = format_time(end_ms / 1000)
+            unchanged_outside_dialogue = (
+                len(cue_ids) == 1
+                and cue_ids[0] in source_by_id
+                and source_by_id[cue_ids[0]]["classification"] == "dialogue"
+                and is_identical_copy(candidate, source_by_id)
+                and not interval_intersects_any(
+                    (parse_time(start), parse_time(end)), regions
+                )
+            )
+            if not unchanged_outside_dialogue:
+                end_ms = audio_duration_ms
+                end = format_time(end_ms / 1000)
         if end_ms <= start_ms:
             raise ValueError(
                 f"Audio refinement cue {start} --> {end} rounds to a "
@@ -702,7 +707,13 @@ def validate_audio_refinement_response(
     last_cue_index = {}
     for index, cue in enumerate(response_cues):
         for source_id in set(cue["source_ids"]):
-            if source_id in last_cue_index and last_cue_index[source_id] != index - 1:
+            if source_id in last_cue_index and any(
+                len(interposed["source_ids"]) != 1
+                or source_by_id[interposed["source_ids"][0]]["classification"]
+                != "editorial"
+                or not is_identical_copy(interposed, source_by_id)
+                for interposed in response_cues[last_cue_index[source_id] + 1 : index]
+            ):
                 raise ValueError(
                     f"Source ID {source_id} repeats in non-adjacent output cues"
                 )
@@ -803,6 +814,30 @@ def validate_audio_refinement_response(
         key=lambda item: parse_time(item["start"]),
     )
 
+    active = []
+    for cue in ordered_cues:
+        start = parse_time(cue["start"])
+        active = [other for other in active if parse_time(other["end"]) > start]
+        for other in active:
+            if not cue["source_ids"] or not other["source_ids"]:
+                continue
+            inherited_overlap = any(
+                left != right
+                and max(
+                    parse_time(source_by_id[left]["start"]),
+                    parse_time(source_by_id[right]["start"]),
+                )
+                < min(
+                    parse_time(source_by_id[left]["end"]),
+                    parse_time(source_by_id[right]["end"]),
+                )
+                for left in other["source_ids"]
+                for right in cue["source_ids"]
+            )
+            if not inherited_overlap:
+                raise ValueError("Audio refinement introduces a new timestamp overlap")
+        active.append(cue)
+
     for entry in source_entries:
         start = parse_time(entry["start"])
         end = parse_time(entry["end"])
@@ -882,42 +917,35 @@ def validate_audio_refinement_response(
 
 
 def merge_visual_boundary_fragments(entries, boundary_starts):
-    """Merge exact pure-editorial cues clipped at adjacent segment boundaries.
-
-    Two cues merge when they come from adjacent owner chunks, classify as
-    pure editorial cues, share exactly the same trimmed text, and the first
-    ends within 0.5 seconds of the shared boundary while the second starts
-    within 0.5 seconds of it. The merged cue keeps the first start, the
-    second end, the shared trimmed text, and the later owner index so one
-    persistent visual cue can cross several boundaries.
-    """
-    entries = list(entries)
-    merged = True
-    while merged:
-        merged = False
-        for current_index, current in enumerate(entries):
-            if current["chunk_idx"] >= len(boundary_starts):
-                continue
-            boundary = boundary_starts[current["chunk_idx"]]
-            for following_index in range(current_index + 1, len(entries)):
-                following = entries[following_index]
-                if (
-                    following["chunk_idx"] == current["chunk_idx"] + 1
-                    and classify_cue_text(current["text"]) == "editorial"
-                    and classify_cue_text(following["text"]) == "editorial"
-                    and current["text"].strip() == following["text"].strip()
-                    and abs(boundary - current["end"]) <= 0.5
-                    and abs(following["start"] - boundary) <= 0.5
-                ):
-                    entries[current_index] = {
-                        "start": current["start"],
-                        "end": following["end"],
-                        "text": current["text"].strip(),
-                        "chunk_idx": following["chunk_idx"],
-                    }
-                    del entries[following_index]
-                    merged = True
-                    break
-            if merged:
-                break
-    return entries
+    """Merge case-insensitive editorial fragments in one script-order pass."""
+    result = []
+    pending = {}
+    for entry in entries:
+        if classify_cue_text(entry["text"]) != "editorial":
+            result.append(entry)
+            continue
+        owner = entry["chunk_idx"]
+        text_key = entry["text"].strip().casefold()
+        previous = pending.pop((owner - 1, text_key), None)
+        if (
+            previous is not None
+            and abs(entry["start"] - boundary_starts[owner - 1]) <= 0.5
+        ):
+            current = result[previous]
+            entry = {
+                "start": current["start"],
+                "end": entry["end"],
+                "text": current["text"].strip(),
+                "chunk_idx": owner,
+            }
+            result[previous] = entry
+            index = previous
+        else:
+            index = len(result)
+            result.append(entry)
+        if (
+            owner < len(boundary_starts)
+            and abs(entry["end"] - boundary_starts[owner]) <= 0.5
+        ):
+            pending[(owner, text_key)] = index
+    return result

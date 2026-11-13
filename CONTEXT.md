@@ -216,6 +216,7 @@ Each chunk prompt carries optional context blocks before the timing rules.
 `CANDIDATE SPEAKER IDENTITIES` holds the preflight grounded names as a candidate roster.
 The roster permits a candidate's canonical English name only when direct in-clip evidence, such as a visible name banner, lower-third, title card, or spoken introduction, establishes attribution in the clip.
 It never assigns identities from appearance alone, and it leaves uncertain dialogue unlabeled.
+When simultaneous speech and meaningful editorial text cannot be sequenced without loss, generation permits a two-line mixed cue with bracketed editorial text followed by dialogue.
 
 ### Chunk generation retry
 
@@ -373,13 +374,14 @@ Stitching offsets chunk-relative timestamps by each segment's actual `start` fro
 It loads each cached chunk through `gemini.load_cached_captions()` and uses its validated, clamped timestamps.
 If a required result cannot load, stitching fails before publishing the VTT.
 
-`merge_visual_boundary_fragments()` merges exact pure-editorial cues split at keyframe cuts:
+`merge_visual_boundary_fragments()` merges case-insensitive pure-editorial cues split at keyframe cuts:
 - Adjacent owner chunks (`chunk_idx` and `chunk_idx + 1`).
 - Both classify as `editorial` (every line is `[Text]`).
-- Trimmed texts match exactly.
+- Trimmed texts match after casefolding; the first spelling stays.
 - First cue ends within 0.5s of the boundary; second starts within 0.5s of the boundary.
 - Merged cue spans from first start to second end with the later owner index.
-- Merging repeats until stable. Dialogue and mixed cues never merge.
+- One linear script-order pass merges fragments across successive boundaries, including fragments separated by dialogue cues.
+  Dialogue and mixed cues never merge.
 
 ## Boundary-limited audio refinement
 
@@ -413,11 +415,18 @@ Request configuration:
    The host discards every other patch cue and deletion, so cues outside repair regions survive as exact copies of their source entries.
    References to unknown source IDs pass through and fail validation.
 2. Host expands the filtered patch by inserting exact copies of omitted source cues.
+   Patch source IDs must be monotonically non-decreasing in script order, but retimed starts may cross.
+   The host sorts reconstructed cues by start time and source ID before overlap and split validation.
+   Validation preserves source whitespace without trimming unchanged copies.
+   Split descendants may span interposed unchanged pure-editorial cues.
 3. Host validates envelope containment, visual fragment multiset equality, and timestamp validity.
+   Retimed source cues cannot introduce overlaps with other source lineages; existing source overlaps may remain.
    Changed cues may exceed their strict envelope by up to the repair window on each side.
    Recovered cues may exceed a repair region by up to the repair window on each side.
    An unchanged singleton editorial or mixed cue keeps its exact source timing through the source-video end, even if the audio ends earlier.
    This applies to omitted cues reconstructed by the host and identical cues echoed by the model.
+   An untouched dialogue cue outside every repair region keeps its exact timing when its end exceeds the audio duration by at most 0.5 seconds.
+   Dialogue overruns greater than 0.5 seconds fail validation.
    Visual cues past the source-video end fail validation; recovered and changed cues still obey the audio end with the existing 0.5-second clamp.
    Cached patches are revalidated with the supplied source-video duration without changing cache identity or contract version.
 4. Host publishes through `io.atomic_save_vtt()`, which reads back the temporary file and verifies cue equality before `os.replace()`.

@@ -136,7 +136,7 @@ ON-SCREEN TEXT
 25. Ignore decorative text, logos, persistent watermarks, repeated UI, and text unrelated to understanding the video.
 26. Keep on-screen text distinct from spoken dialogue.
 27. Render on-screen text in square brackets, without mechanical prefixes such as "On-screen text:".
-28. Do not combine unrelated dialogue and on-screen text in one caption.
+28. When spoken dialogue and meaningful on-screen text occur simultaneously and cannot be sequenced without dropping speech or converting captions into dialogue, use a two-line mixed cue: "[Editorial text]" on the first line and "Speaker: Dialogue" on the second. Otherwise keep unrelated content separate.
 29. Do not describe visible actions such as "(walks)", "(rings bell)", or "(sprays product)" unless corresponding written editorial text actually appears in the video.
 30. Translate source-language editorial idioms and visual-caption metaphors into understandable English rather than preserving an incomprehensible literal translation.
 31. Do not wrap ordinary spoken dialogue in quotation marks.
@@ -859,7 +859,7 @@ SCRIPT
 REPAIR RULES
 
 1. Fix dialogue that disagrees with what the audio says: add missing spoken dialogue, delete duplicated or hallucinated dialogue, merge split turns, split merged turns, rewrite mistranslations, and retime cues to the audible syllables.
-2. Preserve silent gaps. Start dialogue at the first audible syllable and end it at the last audible syllable.
+2. Preserve silent gaps. Start dialogue at the first audible syllable and end it at the last audible syllable. Retiming source cues must not create new timestamp overlaps with other source-lineage cues, including unchanged cues. Existing source overlaps may remain. Recovered dialogue is exempt from this retime restriction.
 3. Keep visual content untouched. The audio cannot establish what appears on screen. Preserve every [bracketed] visual fragment exactly as it appears, attached to its original cue lineage. Pure editorial cues must remain byte-for-byte identical in text and timing.
 4. A mixed cue may change timing when its dialogue is repaired, but every bracketed fragment must be preserved exactly once within that lineage.
 5. Do not add bracketed text to a recovered cue.

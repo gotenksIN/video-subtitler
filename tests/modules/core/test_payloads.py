@@ -248,6 +248,82 @@ def test_refinement_rejects_lowercase_label_insertion():
 # --- Sparse Audio Refinement Response & Authority ---
 
 
+@pytest.mark.parametrize("preceding_end,accepted", [(5.0, False), (6.0, True)])
+def test_audio_retimes_reject_new_but_preserve_source_overlaps(preceding_end, accepted):
+    sources = source_entries()
+    sources[0]["end"] = core.format_time(preceding_end)
+    patch = patch_response(
+        cues=[patch_cue([1], "00:00:04.500", "00:00:09.000", "Host: Topic.")]
+    )
+    if accepted:
+        cues = core.validate_audio_refinement_response(
+            patch, sources, 35.0, [10.0, 20.0], source_duration=35.0
+        )
+        assert cues[1]["start"] == "00:00:04.500"
+    else:
+        with pytest.raises(ValueError, match="new timestamp overlap"):
+            core.validate_audio_refinement_response(
+                patch, sources, 35.0, [10.0, 20.0], source_duration=35.0
+            )
+
+
+@pytest.mark.parametrize("overlap", [False, True])
+def test_crossed_audio_retimes_sort_before_overlap_validation(overlap):
+    sources = [
+        {
+            "id": 0,
+            "start": "00:00:05.000",
+            "end": "00:00:06.000",
+            "text": "First.",
+            "classification": "dialogue",
+        },
+        {
+            "id": 1,
+            "start": "00:00:07.000",
+            "end": "00:00:08.000",
+            "text": "Second.",
+            "classification": "dialogue",
+        },
+    ]
+    patch = patch_response(
+        cues=[
+            patch_cue([0], "00:00:08.000", "00:00:09.000", "First."),
+            patch_cue(
+                [1],
+                "00:00:07.000",
+                "00:00:08.500" if overlap else "00:00:08.000",
+                "Second.",
+            ),
+        ]
+    )
+    if overlap:
+        with pytest.raises(ValueError, match="new timestamp overlap"):
+            core.validate_audio_refinement_response(
+                patch, sources, 20.0, [10.0], source_duration=20.0
+            )
+    else:
+        cues = core.validate_audio_refinement_response(
+            patch, sources, 20.0, [10.0], source_duration=20.0
+        )
+        assert [(cue["source_ids"], cue["start"]) for cue in cues] == [
+            ([1], "00:00:07.000"),
+            ([0], "00:00:08.000"),
+        ]
+
+
+def test_audio_patch_rejects_reversed_source_lineage():
+    patch = patch_response(
+        cues=[
+            patch_cue([1], "00:00:05.000", "00:00:09.000", "Second."),
+            patch_cue([0], "00:00:00.000", "00:00:05.000", "First."),
+        ]
+    )
+    with pytest.raises(ValueError, match="source IDs out of script order"):
+        core.validate_audio_refinement_response(
+            patch, source_entries(), 35.0, [10.0], source_duration=35.0
+        )
+
+
 def test_sparse_audio_refinement_applies_edits_and_preserves_omitted_cues():
     sources = source_entries()
     # Edit cue 1 (rewrite), delete cue 2, recover a new cue at 00:00:07.000
@@ -370,6 +446,56 @@ def test_unchanged_visual_cue_survives_short_audio(echoed, text):
     assert [(cue["start"], cue["end"], cue["text"]) for cue in cues] == [
         (source["start"], source["end"], text)
     ]
+
+
+@pytest.mark.parametrize("overrun", [0.001, 0.5, 0.501])
+@pytest.mark.parametrize("echoed", [False, True])
+def test_outside_dialogue_preserves_audio_grace_verbatim(overrun, echoed):
+    source = {
+        "id": 0,
+        "start": "00:00:29.000",
+        "end": core.format_time(30 + overrun),
+        "text": "  Host: Goodbye.  ",
+        "classification": "dialogue",
+    }
+    patch = patch_response(
+        cues=[patch_cue([0], source["start"], source["end"], source["text"])]
+        if echoed
+        else []
+    )
+    if overrun > 0.5:
+        with pytest.raises(ValueError, match="complete audio duration"):
+            core.validate_audio_refinement_response(
+                patch, [source], 30.0, [5.0], source_duration=31.0
+            )
+    else:
+        cues = core.validate_audio_refinement_response(
+            patch, [source], 30.0, [5.0], source_duration=31.0
+        )
+        assert cues == [
+            {"source_ids": [0], **{k: source[k] for k in ("start", "end", "text")}}
+        ]
+
+
+@pytest.mark.parametrize("lineage", [[], [0]])
+def test_changed_or_recovered_dialogue_clamps_audio_grace(lineage):
+    source = {
+        "id": 0,
+        "start": "00:00:28.000",
+        "end": "00:00:29.000",
+        "text": "Host: Original.",
+        "classification": "dialogue",
+    }
+    cues = core.validate_audio_refinement_response(
+        patch_response(
+            cues=[patch_cue(lineage, "00:00:29.000", "00:00:30.500", "Changed.")]
+        ),
+        [source],
+        30.0,
+        [25.0],
+        source_duration=31.0,
+    )
+    assert cues[-1]["end"] == "00:00:30.000"
 
 
 def test_unchanged_visual_cue_past_video_end_is_rejected():
