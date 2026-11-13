@@ -252,6 +252,7 @@ def validate_refinement_changes(changes, source_texts):
             raise ValueError(f"subtitle ID {change.id} is duplicated")
         if not change.text.strip():
             raise ValueError(f"subtitle ID {change.id} has empty text")
+        change.text = _validate_caption_text(change.text)
         source = source_texts[change.id]
         if _has_unmatched_brackets(change.text):
             raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
@@ -403,11 +404,22 @@ def canonicalize_speaker_casing(vtt, grounded_names=None):
     }
 
     spelling_counts = {}
+
+    def labeled_lines(text):
+        depth = 0
+        for line in text.splitlines():
+            match = SPEAKER_LABEL_RE.match(line) if depth == 0 else None
+            for character in line:
+                if character == "[":
+                    depth += 1
+                elif character == "]" and depth:
+                    depth -= 1
+            yield line, match
+
     for caption in captions:
         if classify_cue_text(caption.raw_text) == "editorial":
             continue
-        for line in caption.raw_text.splitlines():
-            match = SPEAKER_LABEL_RE.match(line)
+        for _line, match in labeled_lines(caption.raw_text):
             if not match:
                 continue
             label = match.group(2)
@@ -426,8 +438,7 @@ def canonicalize_speaker_casing(vtt, grounded_names=None):
             continue
         lines = caption.raw_text.splitlines()
         rewritten = []
-        for line in lines:
-            match = SPEAKER_LABEL_RE.match(line)
+        for line, match in labeled_lines(caption.raw_text):
             if match and match.group(2).casefold() in targets:
                 target = targets[match.group(2).casefold()]
                 line = match.group(1) + target + match.group(3) + line[match.end() :]
@@ -632,6 +643,13 @@ def validate_audio_refinement_response(
             "end": end,
             "text": cue_text,
         }
+        if not (
+            len(cue_ids) == 1
+            and cue_ids[0] in source_by_id
+            and _is_identical_copy(candidate, source_by_id)
+        ):
+            cue_text = _validate_caption_text(cue_text)
+            candidate["text"] = cue_text
         unchanged_visual = (
             len(cue_ids) == 1
             and cue_ids[0] in source_by_id

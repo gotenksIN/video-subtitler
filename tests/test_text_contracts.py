@@ -18,6 +18,10 @@ def test_text_refinement_rejects_structural_mutations():
         ("Host: Hello\nGuest: Yes", "Host: Hello\nGuest:"),
         ("Host: Hello\nworld", "Host: Hello\nGuest: world"),
         ("Hello\nHost: Yes", "Host: Hello\nHost: Yes"),
+        ("Host: Hello world", "Host: Hello\n\nworld"),
+        ("Host: Hello world", "Host: Hello\n \nworld"),
+        ("Host: Hello world", "Host: Hello\rworld"),
+        ("Host: Hello", "Host: Hello\n\n"),
     ):
         with pytest.raises(ValueError):
             core.validate_refinement_changes(
@@ -40,6 +44,7 @@ def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
         ("Host: Hello world", "Host: Hello\nworld"),
         ("Host: Hello\nGuest: Yes", "Host: Hello Guest: Yes"),
         ("well, she asked:", "well, she asks:"),
+        ("Host: Hello world", "Host: Hello\nworld\n"),
     ):
         core.validate_refinement_changes(
             [core.RefinedCaption(id=0, text=replacement)], [source]
@@ -88,6 +93,11 @@ def test_speaker_casing_preserves_visual_and_non_label_text(texts, names, expect
         "No label [HOST: Graphic]",
     ]
     assert value[-1].end == core.format_time(len(texts) + 2)
+    visual = "[Profile [Details]\nHOST: Kim]\nHost: Hi"
+    for grounded_names in ([], ["Host"]):
+        mixed = [webvtt.Caption("00:00:00.000", "00:00:01.000", visual)]
+        core.canonicalize_speaker_casing(mixed, grounded_names)
+        assert mixed[0].raw_text == visual
 
 
 def test_only_matching_editorial_fragments_merge_at_adjacent_boundaries():

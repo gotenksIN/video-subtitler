@@ -207,7 +207,7 @@ def test_changed_and_recovered_cues_obey_expanded_repair_envelopes():
 def test_unchanged_visual_cues_keep_video_end_when_audio_ends_earlier():
     for text in ("[End card]", "Host: Goodbye [End card]"):
         entries = sources((9, 10, text))
-        for patch in ([], [cue([0], 9, 10, text)]):
+        for patch in ([], [cue([0], 9, 10, text)], [cue([0], 9, 10, text + "\n")]):
             assert validate(entries, patch, boundaries=(5,), audio=8, video=10) == [
                 {
                     "source_ids": [0],
@@ -261,6 +261,20 @@ def test_recovered_speech_and_brackets_must_be_well_formed():
     for text in ("Host:", "[Visual] Talk", "Missing [bracket", "Bad]"):
         with pytest.raises(ValueError):
             validate([], [cue([], 12, 14, text)])
+    for text in ("Hello\n\nworld", "Hello\n \nworld", "Hello\rworld", "Hello\n\n"):
+        for lineage in ([], [0]):
+            with pytest.raises(ValueError):
+                validate(sources((12, 14, "Original")), [cue(lineage, 12, 14, text)])
+    for lineage in ([], [0]):
+        result = validate(
+            sources((12, 14, "Original")),
+            [cue(lineage, 15, 16, "Hello\nworld\n")],
+        )
+        assert result[-1]["text"] == "Hello\nworld"
+    whitespace = "  Host: Hello\n \nworld\r  "
+    entries = sources((12, 14, whitespace))
+    for patch in ([], [cue([0], 12, 14, whitespace)]):
+        assert validate(entries, patch)[0]["text"] == whitespace
     entries = sources((12, 14, "Bad [bracket"))
     with pytest.raises(ValueError, match="source cue contains unmatched brackets"):
         validate(entries)
