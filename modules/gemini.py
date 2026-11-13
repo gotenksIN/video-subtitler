@@ -1190,7 +1190,6 @@ def boundary_audio_refine_subtitles(
             source_title=source_title,
         )
         response_to_cache = response
-    candidate_path = Path(work_dir) / "audio_refined.vtt"
     try:
         if response_to_cache is not None:
             try:
@@ -1212,12 +1211,10 @@ def boundary_audio_refine_subtitles(
             candidate_vtt.captions.append(
                 webvtt.Caption(entry["start"], entry["end"], entry["text"])
             )
-        io.atomic_save_vtt(candidate_vtt, candidate_path)
+        io.atomic_save_vtt(candidate_vtt, output_vtt)
         if response_to_cache is not None:
             store_audio_refinement_cache(work_dir, identity, response_to_cache)
     except Exception:
         discard_audio_refinement_cache(work_dir)
         raise
-    if Path(output_vtt) != candidate_path:
-        io.atomic_save_vtt(candidate_vtt, output_vtt)
     print(f"Saved boundary audio-refined subtitles to {output_vtt}")
