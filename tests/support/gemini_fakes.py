@@ -1,151 +1,224 @@
-"""Reusable stateful fakes for the Gemini SDK streaming boundary.
+"""Stateful Gemini scenarios through the real SDK and an HTTP transport seam."""
 
-These fakes script streaming responses and record every request the
-adapter sends to the SDK. Tests assert on the recorded request state and
-on real files, not on internal call sequences or prompt wording.
-"""
-
+import json
 from dataclasses import dataclass, field
-from threading import Lock
-from types import SimpleNamespace
+from threading import Lock, local
 
-import webvtt
+import httpx2
+from google import genai
+from google.genai import errors, types
 
 from modules import gemini
+
+_REAL_CLIENT = genai.Client
 
 
 @dataclass(frozen=True)
 class RecordedRequest:
-    """One request the adapter sent to the SDK boundary."""
-
     model: str
     contents: object
-    config: object
+    config: types.GenerateContentConfig
+    kind: str
+    url: str
+    headers: httpx2.Headers
+    body: dict
+    http_options: types.HttpOptions
 
 
 @dataclass
 class StreamCall:
-    """One scripted streaming response."""
-
+    kind: str
     pieces: list = field(default_factory=list)
     error: Exception | None = None
-    kind: str | None = None
+    on_request: object = None
 
 
 class ScriptedGeminiClient:
-    """Stateful fake for genai.Client used as a context manager.
-
-    Consumes calls in order within each request kind. Records each request.
-    An unscripted request raises AssertionError, so tests can assert that
-    no extra API request was issued.
-    """
+    """Drive real SDK clients with scripted HTTP and SSE responses."""
 
     def __init__(self, calls=()):
-        self._pending = list(calls)
+        self.pending = list(calls)
         self.requests = []
         self._lock = Lock()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    @property
-    def models(self):
-        return self
-
-    def generate_content_stream(self, **kwargs):
-        contents = kwargs["contents"]
-        kind = None
-        if kwargs["config"].tools:
+    @staticmethod
+    def _kind(config):
+        if config.tools:
             kind = "research"
-        elif isinstance(contents, list) and any(
-            getattr(part, "file_data", None) and part.file_data.mime_type == "video/*"
-            for part in contents
-        ):
+        elif config.response_schema:
+            properties = config.response_schema["properties"]
+            kind = next(
+                name
+                for key, name in (
+                    ("captions", "chunk"),
+                    ("cues", "audio"),
+                    ("changes", "text"),
+                )
+                if key in properties
+            )
+        else:
             kind = "youtube"
+        return kind
+
+    def create_client(self, **kwargs):
+        active = local()
+        options = dict(kwargs.get("http_options") or {})
+
+        def handle(wire_request):
+            model, contents, config = active.request
+            request = RecordedRequest(
+                model,
+                contents,
+                config,
+                self._kind(config),
+                str(wire_request.url),
+                wire_request.headers,
+                json.loads(wire_request.content),
+                types.HttpOptions(**options),
+            )
+            return self._respond(request)
+
+        options["httpx_client"] = httpx2.Client(transport=httpx2.MockTransport(handle))
+        client = _REAL_CLIENT(**{**kwargs, "http_options": options})
+        generate = client.models.generate_content_stream
+
+        def generate_content_stream(*, model, contents, config):
+            active.request = (model, contents, config)
+            try:
+                yield from generate(model=model, contents=contents, config=config)
+            finally:
+                del active.request
+
+        client.models.generate_content_stream = generate_content_stream
+        return client
+
+    def _respond(self, request):
         with self._lock:
+            self.requests.append(request)
             index = next(
-                (
-                    i
-                    for i, call in enumerate(self._pending)
-                    if call.kind in (None, kind)
-                ),
+                (i for i, call in enumerate(self.pending) if call.kind == request.kind),
                 None,
             )
             if index is None:
-                raise AssertionError("the pipeline issued an unexpected Gemini request")
-            call = self._pending.pop(index)
-            self.requests.append(
-                RecordedRequest(
-                    model=kwargs["model"],
-                    contents=contents,
-                    config=kwargs["config"],
+                raise AssertionError(f"Unexpected Gemini {request.kind} request")
+            call = self.pending.pop(index)
+        if call.on_request:
+            call.on_request(request)
+        if call.error:
+            if isinstance(call.error, errors.APIError):
+                return httpx2.Response(
+                    call.error.code,
+                    json={
+                        "error": {
+                            "code": call.error.code,
+                            "message": call.error.message,
+                        }
+                    },
                 )
-            )
-        if call.error is not None:
             raise call.error
-        return self._stream(call)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_EventStream(call.pieces),
+        )
 
-    @staticmethod
-    def _stream(call):
-        for piece in call.pieces:
-            if isinstance(piece, SimpleNamespace):
-                yield piece
+
+class _EventStream(httpx2.SyncByteStream):
+    def __init__(self, pieces):
+        self.pieces = pieces
+
+    def __iter__(self):
+        for piece in self.pieces:
+            if isinstance(piece, errors.APIError):
+                data = {"error": {"code": piece.code, "message": piece.message}}
+            elif isinstance(piece, Exception):
+                raise piece
             else:
-                yield SimpleNamespace(text=piece)
+                chunk = stream_chunk(piece) if isinstance(piece, str) else piece
+                data = chunk.model_dump(mode="json", by_alias=True, exclude_none=True)
+            yield f"data: {json.dumps(data)}\n\n".encode()
 
 
-def stream_chunk(text=None, finish_reason=None, thought=False):
-    """One SDK stream chunk with optional candidate finish metadata."""
-    return SimpleNamespace(
-        text=None if thought else text,
-        candidates=[SimpleNamespace(finish_reason=finish_reason)],
+def stream_chunk(
+    text=None, *, thought=False, finish_reason=None, grounding=False, urls=()
+):
+    """Build SDK chunks without testing SDK representation details."""
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(parts=[types.Part(text=text, thought=thought)]),
+                finish_reason=finish_reason,
+                grounding_metadata=types.GroundingMetadata(
+                    web_search_queries=["speaker identities"]
+                )
+                if grounding
+                else None,
+                url_context_metadata=types.UrlContextMetadata(
+                    url_metadata=[
+                        types.UrlMetadata(
+                            retrieved_url=url,
+                            url_retrieval_status=status,
+                        )
+                        for url, status in urls
+                    ]
+                )
+                if urls
+                else None,
+            )
+        ]
     )
 
 
-def chunk_call(pieces, error=None):
-    """One scripted chunk-generation response."""
-    return StreamCall(pieces=list(pieces), error=error)
+def research_call(*, grounding=True, urls=(), **kwargs):
+    return StreamCall(
+        "research",
+        [
+            stream_chunk(
+                "PARTICIPANTS AND SPEAKERS\nHost: Presenter\n"
+                "TOPIC TERMINOLOGY AND PROPER NOUNS\nOpus: Audio codec",
+                grounding=grounding,
+                urls=urls,
+            )
+        ],
+        **kwargs,
+    )
 
 
-def research_call(pieces=("Research text",), error=None):
-    """One scripted grounded identity research response."""
-    return StreamCall(pieces=list(pieces), error=error, kind="research")
+def chunk_call(text="HOST: Hello.", *, banner_end=None, **kwargs):
+    captions = [{"id": 0, "start": "0.1", "end": "0.5", "text": text}]
+    if banner_end is not None:
+        captions.append(
+            {"id": 1, "start": "0", "end": str(banner_end), "text": "[Title]"}
+        )
+    return StreamCall(
+        "chunk",
+        [
+            stream_chunk("not JSON", thought=True),
+            json.dumps({"captions": captions}),
+        ],
+        **kwargs,
+    )
 
 
-def youtube_call(pieces=("YouTube analysis",), error=None):
-    """One scripted direct YouTube analysis response."""
-    return StreamCall(pieces=list(pieces), error=error, kind="youtube")
+def audio_call(cues=(), deleted=(), **kwargs):
+    return StreamCall(
+        "audio",
+        [
+            json.dumps(
+                {
+                    "contractVersion": "sparse-patch-v1",
+                    "deletedSourceIds": list(deleted),
+                    "cues": list(cues),
+                }
+            )
+        ],
+        **kwargs,
+    )
 
 
-def refinement_call(pieces, error=None):
-    """One scripted structured refinement response."""
-    return StreamCall(pieces=list(pieces), error=error)
-
-
-def audio_call(pieces, error=None):
-    """One scripted audio-refinement response."""
-    return StreamCall(pieces=list(pieces), error=error)
+def text_call(changes=(), **kwargs):
+    return StreamCall("text", [json.dumps({"changes": list(changes)})], **kwargs)
 
 
 def use_client(monkeypatch, client):
-    """Route every create_client call in modules.gemini to one scripted fake."""
-    monkeypatch.setattr(gemini, "create_client", lambda *args, **kwargs: client)
-
-
-def write_vtt(path, captions):
-    """Write a real WebVTT file with (start, end, text) caption tuples."""
-    value = webvtt.WebVTT()
-    value.captions.extend(
-        webvtt.Caption(start, end, text) for start, end, text in captions
-    )
-    value.save(str(path))
-    return path
-
-
-def read_captions(path):
-    """Return (start, end, text) tuples from a real WebVTT file."""
-    vtt = webvtt.read(str(path))
-    return [(caption.start, caption.end, caption.text) for caption in vtt]
+    monkeypatch.setattr(gemini.genai, "Client", client.create_client)
