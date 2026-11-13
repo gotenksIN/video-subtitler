@@ -59,10 +59,14 @@ def build_manifest(config: GenerationConfig, source_inspection: media.MediaInspe
         "chunk_mime": mime,
         "video_codec": video_codec,
     }
-    digest = hashlib.sha256(
+    return manifest, os.path.join(CHUNK_ROOT, manifest_digest(manifest))
+
+
+def manifest_digest(manifest):
+    """Return the stable work-directory key for a JSON manifest."""
+    return hashlib.sha256(
         json.dumps(manifest, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
-    return manifest, os.path.join(CHUNK_ROOT, digest)
 
 
 def acquire_lock(chunk_dir):

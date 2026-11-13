@@ -4,6 +4,7 @@ import pytest
 import webvtt
 
 from modules import pipeline
+from tests.support.gemini_fakes import read_captions
 from tests.support.workdir import write_chunk_layout, write_chunk_subtitles
 
 
@@ -16,10 +17,6 @@ def stitch_layout(tmp_path, rows, captions_by_chunk):
             [{"id": cue_id, **caption} for cue_id, caption in enumerate(captions)],
         )
     return tmp_path / "output.vtt"
-
-
-def captions_of(path):
-    return [(caption.start, caption.end, caption.text) for caption in webvtt.read(path)]
 
 
 def test_stitch_offsets_captions_by_actual_segment_starts(tmp_path):
@@ -36,7 +33,7 @@ def test_stitch_offsets_captions_by_actual_segment_starts(tmp_path):
     result = pipeline.stitch(tmp_path, output)
 
     assert result == output
-    assert captions_of(output) == [
+    assert read_captions(output) == [
         ("00:00:01.000", "00:00:02.000", "First chunk"),
         ("00:00:02.500", "00:00:03.500", "Second chunk"),
         ("00:00:05.000", "00:00:06.000", "Third chunk"),
@@ -109,7 +106,7 @@ def test_stitch_merges_exact_editorial_fragments_at_a_boundary(tmp_path):
 
     pipeline.stitch(tmp_path, output)
 
-    assert captions_of(output) == [("00:00:01.000", "00:00:03.000", "[Chapter One]")]
+    assert read_captions(output) == [("00:00:01.000", "00:00:03.000", "[Chapter One]")]
 
 
 @pytest.mark.parametrize(

@@ -124,6 +124,8 @@ Compare generated subtitles against a reference WebVTT file:
 ```
 
 The benchmark saves generated subtitles and `benchmark-results.json` to the output directory.
+It runs preflight once before chunk generation and shares the cached context across all cases.
+The first case's text-refinement model runs preflight; chunk-only runs use the default refinement model.
 
 ### Generation mode
 

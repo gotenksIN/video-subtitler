@@ -10,7 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-import webvtt
 from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +99,7 @@ def parse_args():
 
 def normalize_text(text):
     """Normalize subtitle text by removing speaker labels and punctuation."""
-    text = re.sub(r"^\s*[A-Z][\w' -]{1,30}:\s*", "", text)
+    text = re.sub(core.SPEAKER_LABEL_RE.pattern, "", text, flags=re.MULTILINE)
     text = re.sub(r"[^\w\s]", " ", text.lower())
     return text.split()
 
@@ -122,13 +121,13 @@ def interval_intersection(left, right):
 
 def compare_reference(output_vtt, reference_vtt):
     """Compare generated subtitles against reference VTT and return metrics."""
-    generated = webvtt.read(str(output_vtt))
-    reference = webvtt.read(str(reference_vtt))
+    generated = io.read_plain_vtt(output_vtt)
+    reference = io.read_plain_vtt(reference_vtt)
     generated_words = [
-        word for caption in generated for word in normalize_text(caption.text)
+        word for caption in generated for word in normalize_text(caption.raw_text)
     ]
     reference_words = [
-        word for caption in reference for word in normalize_text(caption.text)
+        word for caption in reference for word in normalize_text(caption.raw_text)
     ]
     generated_intervals = core.merge_intervals(
         [(core.parse_time(c.start), core.parse_time(c.end)) for c in generated]
@@ -177,7 +176,9 @@ def link_or_copy(src, dst):
         shutil.copy2(src, dst)
 
 
-def run_chunk_generation(args, model, output_vtt, work_dir, chunks, mime, source_title):
+def run_chunk_generation(
+    args, model, output_vtt, work_dir, chunks, mime, source_title, preflight_context
+):
     """Run chunk subtitle generation and stitch into one VTT."""
     started = time.perf_counter()
     failed = pipeline.process_chunks(
@@ -190,12 +191,16 @@ def run_chunk_generation(args, model, output_vtt, work_dir, chunks, mime, source
         mime,
         args.thinking_level,
         source_title,
+        candidate_names=preflight_context.grounded_names,
     )
     if failed:
         raise RuntimeError(
             f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}"
         )
     pipeline.stitch(str(work_dir), str(output_vtt))
+    io.atomic_save_vtt(
+        core.canonicalize_speaker_casing(io.read_plain_vtt(output_vtt)), output_vtt
+    )
     return time.perf_counter() - started
 
 
@@ -213,6 +218,9 @@ def run_audio_refinement(
 ):
     """Run boundary audio refinement on stitched subtitles."""
     started = time.perf_counter()
+    if not boundaries:
+        io.atomic_save_vtt(io.read_plain_vtt(stitched_vtt), output_vtt)
+        return time.perf_counter() - started
     gemini.boundary_audio_refine_subtitles(
         stitched_vtt=str(stitched_vtt),
         audio_path=str(audio_path),
@@ -226,11 +234,20 @@ def run_audio_refinement(
         model_name=audio_model,
         source_title=source_title,
     )
+    io.atomic_save_vtt(
+        core.canonicalize_speaker_casing(io.read_plain_vtt(output_vtt)), output_vtt
+    )
     return time.perf_counter() - started
 
 
 def run_text_refinement(
-    args, refine_model, input_vtt, output_vtt, source_title, context_urls
+    args,
+    refine_model,
+    input_vtt,
+    output_vtt,
+    source_title,
+    context_urls,
+    preflight_context,
 ):
     """Run global text refinement on input subtitles."""
     started = time.perf_counter()
@@ -243,6 +260,7 @@ def run_text_refinement(
         gemini.REFINEMENT_THINKING_LEVEL,
         source_title=source_title,
         context_urls=context_urls,
+        preflight_context=preflight_context,
     )
     return time.perf_counter() - started
 
@@ -266,18 +284,8 @@ def _run_full_matrix(args, output_dir):
     if not args.video_file.is_file():
         raise RuntimeError(f"Source video not found: {args.video_file}")
 
-    if not args.api_key:
-        raise RuntimeError(
-            "Gemini API key not configured. Set GEMINI_API_KEY or pass --api-key."
-        )
-    if args.chunk_dur <= 0:
-        raise RuntimeError("--chunk-dur must be greater than 0")
-    if args.workers <= 0:
-        raise RuntimeError("--workers must be greater than 0")
     if args.reference_vtt and not args.reference_vtt.is_file():
         raise RuntimeError(f"Reference VTT not found: {args.reference_vtt}")
-
-    context_urls = core.validate_context_urls(args.context_url)
 
     cases = list(args.case or [])
     if not cases and not args.model:
@@ -294,6 +302,18 @@ def _run_full_matrix(args, output_dir):
     )
     thinking_level = args.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
     args.thinking_level = thinking_level
+    context_urls = pipeline.validate_generation_config(
+        pipeline.GenerationConfig(
+            video_path=args.video_file,
+            output_path=output_dir / "benchmark-results.json",
+            model=generation_models[0],
+            api_key=args.api_key,
+            chunk_dur=args.chunk_dur,
+            workers=args.workers,
+            thinking_level=thinking_level,
+            context_urls=tuple(args.context_url or ()),
+        )
+    )
 
     source_title = core.derive_source_title(args.video_file)
 
@@ -309,9 +329,7 @@ def _run_full_matrix(args, output_dir):
         "chunk_mime": mime,
         "video_codec": video_codec,
     }
-    work_key = hashlib.sha256(
-        json.dumps(manifest, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:16]
+    work_key = pipeline.manifest_digest(manifest)
     work_dir = output_dir / "work" / work_key
     work_dir.mkdir(parents=True, exist_ok=True)
     media.split_video(str(args.video_file), str(work_dir), args.chunk_dur, manifest)
@@ -341,32 +359,51 @@ def _run_full_matrix(args, output_dir):
             raise RuntimeError(
                 "Source video does not contain an audio stream for audio refinement."
             )
-        audio_path, audio_duration, source_duration, _reused = (
-            media.extract_complete_audio(
-                str(args.video_file),
-                str(work_dir),
-                source_inspection=source_inspection,
+        source_duration = source_inspection.duration
+        if source_duration <= 0:
+            raise RuntimeError("Source video duration must be positive and finite")
+        if boundaries:
+            audio_path, audio_duration, source_duration, _reused = (
+                media.extract_complete_audio(
+                    str(args.video_file),
+                    str(work_dir),
+                    source_inspection=source_inspection,
+                )
             )
-        )
 
     # 3. Chunk generation per unique generation model.
     generated_vtts = {}
     generation_timings = {}
+    preflight_contexts = {}
     for gen_model in generation_models:
         gen_output = output_dir / f"{safe_model_name(gen_model)}.generated.vtt"
-        generation_identity = json.dumps(
-            {
-                "model": gen_model,
-                "thinking_level": thinking_level,
-                "split": split_identity,
-            },
-            sort_keys=True,
-        )
-        generation_key = hashlib.sha256(
-            generation_identity.encode("utf-8")
-        ).hexdigest()[:16]
+        generation_identity = {
+            "model": gen_model,
+            "thinking_level": thinking_level,
+            "split": split_identity,
+        }
+        generation_key = pipeline.manifest_digest(generation_identity)
         gen_work = work_dir / f"generation-{generation_key}"
         gen_work.mkdir(parents=True, exist_ok=True)
+        preflight_identity = {
+            "source_title": source_title,
+            "context_urls": context_urls,
+            "model_name": gen_model,
+            "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
+        }
+        preflight_context = gemini.load_cached_preflight_context(
+            gen_work, **preflight_identity
+        )
+        if preflight_context is None:
+            preflight_context = gemini.run_preflight_context(
+                api_key=args.api_key,
+                base_url=args.base_url,
+                **preflight_identity,
+            )
+            gemini.store_preflight_context(
+                gen_work, preflight_context, **preflight_identity
+            )
+        preflight_contexts[gen_model] = preflight_context
         for chunk in chunks:
             src = work_dir / chunk["name"]
             dst = gen_work / chunk["name"]
@@ -385,6 +422,7 @@ def _run_full_matrix(args, output_dir):
             chunks,
             mime,
             source_title,
+            preflight_contexts[gen_model],
         )
         generated_vtts[gen_model] = gen_output
         generation_timings[gen_model] = gen_seconds
@@ -400,11 +438,9 @@ def _run_full_matrix(args, output_dir):
             output_dir
             / f"{safe_model_name(gen_model)}_audio_{safe_model_name(audio_model)}.vtt"
         )
-        audio_identity = json.dumps(
-            {"generation_model": gen_model, "audio_model": audio_model},
-            sort_keys=True,
+        audio_key = pipeline.manifest_digest(
+            {"generation_model": gen_model, "audio_model": audio_model}
         )
-        audio_key = hashlib.sha256(audio_identity.encode("utf-8")).hexdigest()[:16]
         audio_work = work_dir / f"audio-{audio_key}"
         audio_work.mkdir(parents=True, exist_ok=True)
         audio_seconds = run_audio_refinement(
@@ -437,6 +473,7 @@ def _run_full_matrix(args, output_dir):
             final_vtt,
             source_title,
             context_urls,
+            preflight_contexts[gen_model],
         )
         gen_seconds = generation_timings[gen_model]
         audio_seconds = audio_refine_timings[(gen_model, audio_model)]

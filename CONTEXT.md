@@ -566,15 +566,23 @@ Recovery on retry:
 
 ## Benchmark runner (`scripts/benchmark.py`)
 
-Runs matrix benchmarking across 3 passes:
+Runs matrix benchmarking with shared preflight research and three subtitle passes:
 - `--case GEN:AUDIO:REFINE`: 3-tuple model cases.
 - `--model`: Independent chunk-only models.
 - `--context-url`: Grounding URLs for text refinement.
 - `--reference-vtt`: Optional reference subtitles for comparison.
 - Outputs `benchmark_results/benchmark-results.json` and stage VTTs.
 
+The runner caches one preflight context per generation model in that model's generation work directory.
+Each generation model runs Pass 0 with thinking level `high`, including chunk-only runs.
+Chunk prompts receive that model's grounded names as candidate identities.
+Text refinement reuses the context for its case's generation model.
+Chunk-only and audio-refined artifacts canonicalize speaker casing without grounded names.
+Single-chunk cases skip audio extraction and Pass 2.
+Manifest hashing and generation input validation reuse pipeline helpers.
+
 ### Comparison metrics
-- Text normalization: strip speaker label `^\s*[A-Z][\w' -]{1,30}:\s*`, strip punctuation, lowercase words.
+- Text normalization: strip `SPEAKER_LABEL_RE` labels from every line, strip punctuation, and lowercase words.
 - `text_similarity`: `SequenceMatcher(None, ref_words, gen_words).ratio()`.
 - `temporal_recall`: `overlap_seconds / reference_seconds`.
 - `temporal_precision`: `overlap_seconds / generated_seconds`.
