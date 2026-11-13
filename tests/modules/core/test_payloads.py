@@ -347,6 +347,18 @@ def test_sparse_audio_refinement_applies_edits_and_preserves_omitted_cues():
     assert "Host: See [Chapter 1] now." in texts  # Mixed cue 4 preserved
 
 
+def test_audio_refinement_accepts_colon_terminated_unlabeled_recovered_dialogue():
+    text = "well, she asked:"
+    cues = core.validate_audio_refinement_response(
+        patch_response(cues=[patch_cue([], "00:00:07.000", "00:00:09.000", text)]),
+        source_entries(),
+        35.0,
+        [10.0],
+        source_duration=35.0,
+    )
+    assert any(cue["text"] == text and cue["source_ids"] == [] for cue in cues)
+
+
 def test_audio_refinement_accepts_unchanged_nested_visual_fragments():
     sources = [
         {

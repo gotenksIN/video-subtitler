@@ -12,10 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
-SPEAKER_LABEL_RE = re.compile(r"^([ \t]*)([A-Z][\w'. -]{1,30})(:[ \t]*)")
-REFINEMENT_LABEL_RE = re.compile(
-    r"(?m)^[ \t]*(?i:[A-Z][\w'. -]{1,30}):[ \t]*|(?<!\S)[A-Z][\w'.-]*:[ \t]*"
-)
+_SPEAKER_LABEL_BODY = r"[A-Z][\w'. -]{1,30}"
+_LINE_LABEL_PATTERN = rf"^[ \t]*(?i:{_SPEAKER_LABEL_BODY}):[ \t]*"
+_INLINE_LABEL_PATTERN = r"(?<!\S)[A-Z][\w'.-]*:[ \t]*"
+SPEAKER_LABEL_RE = re.compile(rf"^([ \t]*)({_SPEAKER_LABEL_BODY})(:[ \t]*)")
+REFINEMENT_LABEL_RE = re.compile(rf"(?m){_LINE_LABEL_PATTERN}|{_INLINE_LABEL_PATTERN}")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
 REPAIR_WINDOW_SECONDS = 10.0
 
@@ -221,7 +222,7 @@ def _refinement_dialogue_labels(text, cue_id, source_labels=()):
             re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
         )
         label_re = re.compile(
-            rf"(?m)^[ \t]*(?i:[A-Z][\w'. -]{{1,30}}):[ \t]*|(?<!\S)(?i:{names}):[ \t]*|(?<!\S)[A-Z][\w'.-]*:[ \t]*",
+            rf"(?m){_LINE_LABEL_PATTERN}|(?<!\S)(?i:{names}):[ \t]*|{_INLINE_LABEL_PATTERN}",
         )
     else:
         label_re = REFINEMENT_LABEL_RE
@@ -387,19 +388,6 @@ def has_unmatched_brackets(text):
     return unmatched
 
 
-def dialogue_turns(text):
-    """Return per-line normalized dialogue word tuples, skipping visual lines."""
-    turns = []
-    for line in text.splitlines():
-        dialogue = re.sub(
-            r"^([^:\[\]]+):\s*", "", re.sub(r"\[[^\]]*\]", "", line)
-        ).strip()
-        words = tuple(re.findall(r"\w+", dialogue.lower()))
-        if words:
-            turns.append(words)
-    return turns
-
-
 def canonicalize_speaker_casing(vtt, grounded_names=None):
     """Rewrite speaker label spellings to one canonical casing per speaker.
 
@@ -549,7 +537,7 @@ def filter_audio_refinement_patch(
     )
 
 
-def reconstruct_sparse_audio_candidate(response, source_entries, source_by_id):
+def reconstruct_sparse_audio_candidate(response, source_entries):
     """Expand sparse patches with exact copies of every omitted source cue."""
     referenced = {source_id for cue in response.cues for source_id in cue.source_ids}
     deleted = set(response.deleted_source_ids)
@@ -600,9 +588,7 @@ def validate_audio_refinement_response(
     if len(source_ids) != len(source_entries):
         raise ValueError("Audio refinement source IDs are not unique")
     response = filter_audio_refinement_patch(response, source_entries, boundaries)
-    response = reconstruct_sparse_audio_candidate(
-        response, source_entries, source_by_id
-    )
+    response = reconstruct_sparse_audio_candidate(response, source_entries)
     regions = build_repair_regions(boundaries)
     audio_duration_ms = round(audio_duration * 1000)
     source_duration_ms = round(source_duration * 1000)
@@ -624,7 +610,7 @@ def validate_audio_refinement_response(
         cue_ids = list(cue.source_ids)
         if not cue_ids and visual_fragment_strings(cue.text):
             raise ValueError("Recovered cues must not contain bracketed text")
-        if not cue_ids and not dialogue_turns(cue.text):
+        if not cue_ids and not re.search(r"\w", REFINEMENT_LABEL_RE.sub("", cue.text)):
             raise ValueError("Recovered cues must contain spoken dialogue")
         if cue_ids != sorted(set(cue_ids)):
             raise ValueError(
