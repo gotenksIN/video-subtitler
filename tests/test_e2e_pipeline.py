@@ -192,10 +192,41 @@ def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
 
 
 def test_preflight_grounding_failures_abort_before_chunks_and_preserve_output(
-    config, monkeypatch
+    config, monkeypatch, fast_retries
 ):
     config.output_path.write_text("previous", encoding="ascii")
     for scenario, urls, message in (
+        (
+            [
+                StreamCall(
+                    "research", error=errors.ServerError(503, {"message": "exhausted"})
+                )
+                for _ in range(5)
+            ],
+            (),
+            "exhausted",
+        ),
+        (
+            [
+                StreamCall(
+                    "research",
+                    [
+                        types.GenerateContentResponse(
+                            prompt_feedback=types.GenerateContentResponsePromptFeedback(
+                                block_reason="SAFETY"
+                            )
+                        )
+                    ],
+                )
+            ],
+            (),
+            "Gemini request blocked: SAFETY",
+        ),
+        (
+            [StreamCall("research", [types.GenerateContentResponse()])],
+            (),
+            "Gemini stream returned no candidates",
+        ),
         ([research_call(grounding=False)], (), "no Google Search grounding"),
         ([research_call()], ("https://example.com/context",), "was not retrieved"),
         (
@@ -212,8 +243,9 @@ def test_preflight_grounding_failures_abort_before_chunks_and_preserve_output(
     ):
         client = ScriptedGeminiClient(scenario)
         use_client(monkeypatch, client)
-        with pytest.raises((RuntimeError, errors.ClientError), match=message):
+        with pytest.raises((RuntimeError, errors.APIError), match=message):
             pipeline.run_generation(replace(config, context_urls=urls))
+        assert not client.pending
         assert not any(r.kind == "chunk" for r in client.requests)
         assert config.output_path.read_text() == "previous"
         assert list(workdirs()[0].glob("chunk_*.mp4"))
@@ -465,6 +497,7 @@ def test_stream_and_validation_retries_discard_partial_answers(
         selected,
         [
             research_call(),
+            StreamCall("chunk", [errors.ServerError(503, {"message": "SSE error"})]),
             StreamCall("chunk", ['{"captions":', httpx2.TransportError("interrupted")]),
             StreamCall(
                 "chunk", ['{"captions":[{"id":0,"start":"1","end":"0","text":"Bad"}]}']
@@ -473,7 +506,7 @@ def test_stream_and_validation_retries_discard_partial_answers(
             chunk_call(),
         ],
     )
-    assert [r.kind for r in client.requests].count("chunk") == 4
+    assert [r.kind for r in client.requests].count("chunk") == 5
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
         "HOST: Hello.",
         "HOST: Hello.",

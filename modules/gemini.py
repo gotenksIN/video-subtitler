@@ -592,9 +592,17 @@ def _read_stream(client, **request):
     """Restart interrupted streams with fresh text and grounding buffers."""
     for attempt in range(_STREAM_REQUEST_ATTEMPTS):
         response_stream = client.models.generate_content_stream(**request)
+        seen = False
+
+        def chunks(stream):
+            nonlocal seen
+            for chunk in stream:
+                seen = True
+                yield chunk
+
         try:
             with closing(response_stream):
-                return _collect_stream_metadata(response_stream)
+                return _collect_stream_metadata(chunks(response_stream))
         except (
             httpx2.TransportError,
             ConnectionError,
@@ -603,6 +611,15 @@ def _read_stream(client, **request):
             errors.UnknownApiResponseError,
             json.JSONDecodeError,
         ) as error:
+            if not seen and (
+                (
+                    isinstance(error, errors.APIError)
+                    and error.response is not None
+                    and getattr(error.response, "status_code", None) != 200
+                )
+                or isinstance(error, (httpx2.ConnectError, httpx2.ConnectTimeout))
+            ):
+                raise
             if isinstance(error, errors.APIError) and not (
                 error.code == 429 or 500 <= error.code < 600
             ):
@@ -620,10 +637,17 @@ def _collect_stream_metadata(response_stream):
     search_queries = []
     grounded_sources = []
     retrieved_urls = {}
+    saw_candidate = False
     for chunk in response_stream:
+        feedback = getattr(chunk, "prompt_feedback", None)
+        block_reason = getattr(feedback, "block_reason", None)
+        block_reason_text = getattr(block_reason, "value", block_reason)
+        if block_reason_text and block_reason_text != "BLOCKED_REASON_UNSPECIFIED":
+            raise RuntimeError(f"Gemini request blocked: {block_reason_text}")
         if chunk.text:
             full_text += chunk.text
         for candidate in getattr(chunk, "candidates", None) or []:
+            saw_candidate = True
             reason = getattr(candidate, "finish_reason", None)
             reason_text = getattr(reason, "value", reason)
             if reason_text and str(reason_text).upper() not in {
@@ -649,6 +673,8 @@ def _collect_stream_metadata(response_stream):
                     url = entry.retrieved_url
                     if url:
                         retrieved_urls[url] = entry.url_retrieval_status
+    if not saw_candidate:
+        raise RuntimeError("Gemini stream returned no candidates")
     return full_text, search_queries, grounded_sources, retrieved_urls
 
 
