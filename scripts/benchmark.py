@@ -165,7 +165,7 @@ def safe_model_name(model):
     """Return a sanitized model name safe for filenames."""
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", model).strip(".") or "model"
     digest = hashlib.sha256(model.encode("utf-8")).hexdigest()[:8]
-    return f"{stem}-{digest}"
+    return f"{stem[:48]}-{digest}"
 
 
 def link_or_copy(src, dst):
@@ -181,6 +181,13 @@ def run_chunk_generation(
 ):
     """Run chunk subtitle generation and stitch into one VTT."""
     started = time.perf_counter()
+    cached = all(
+        gemini.load_cached_captions(
+            work_dir / f"subtitle_chunk_{chunk['idx']:03d}.json", chunk["duration"]
+        )
+        is not None
+        for chunk in chunks
+    )
     failed = pipeline.process_chunks(
         args.api_key,
         args.base_url,
@@ -201,7 +208,7 @@ def run_chunk_generation(
     io.atomic_save_vtt(
         core.canonicalize_speaker_casing(io.read_plain_vtt(output_vtt)), output_vtt
     )
-    return time.perf_counter() - started
+    return time.perf_counter() - started, cached
 
 
 def run_audio_refinement(
@@ -220,8 +227,8 @@ def run_audio_refinement(
     started = time.perf_counter()
     if not boundaries:
         io.atomic_save_vtt(io.read_plain_vtt(stitched_vtt), output_vtt)
-        return time.perf_counter() - started
-    gemini.boundary_audio_refine_subtitles(
+        return time.perf_counter() - started, True
+    cached = gemini.boundary_audio_refine_subtitles(
         stitched_vtt=str(stitched_vtt),
         audio_path=str(audio_path),
         audio_duration=audio_duration,
@@ -237,7 +244,7 @@ def run_audio_refinement(
     io.atomic_save_vtt(
         core.canonicalize_speaker_casing(io.read_plain_vtt(output_vtt)), output_vtt
     )
-    return time.perf_counter() - started
+    return time.perf_counter() - started, cached
 
 
 def run_text_refinement(
@@ -268,18 +275,6 @@ def run_text_refinement(
 def run_full_matrix(args):
     """Lock the output directory and run the configured benchmark matrix."""
     output_dir = args.output_dir or Path("benchmark_results")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    lock_root = output_dir / "work"
-    lock_root.mkdir(parents=True, exist_ok=True)
-    lock_file = pipeline.acquire_lock(lock_root)
-    try:
-        _run_full_matrix(args, output_dir)
-    finally:
-        pipeline.release_lock(lock_file)
-
-
-def _run_full_matrix(args, output_dir):
-    """Run benchmark matrix across configured generation, audio, and text refinement models."""
     args.video_file = Path(args.video_file)
     if not args.video_file.is_file():
         raise RuntimeError(f"Source video not found: {args.video_file}")
@@ -300,6 +295,9 @@ def _run_full_matrix(args, output_dir):
     generation_models = list(
         dict.fromkeys([gen for gen, _, _ in cases] + (args.model or []))
     )
+    selected_models = [*generation_models, *(model for case in cases for model in case)]
+    if any(not model.strip() for model in selected_models):
+        raise ValueError("Benchmark model names must not be empty")
     thinking_level = args.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
     args.thinking_level = thinking_level
     context_urls = pipeline.validate_generation_config(
@@ -312,9 +310,23 @@ def _run_full_matrix(args, output_dir):
             workers=args.workers,
             thinking_level=thinking_level,
             context_urls=tuple(args.context_url or ()),
-        )
+        ),
+        require_output_parent=False,
     )
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock_root = output_dir / "work"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_file = pipeline.acquire_lock(lock_root)
+    try:
+        _run_full_matrix(args, output_dir, cases, generation_models, context_urls)
+    finally:
+        pipeline.release_lock(lock_file)
+
+
+def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
+    """Run benchmark matrix across validated generation and refinement models."""
+    thinking_level = args.thinking_level
     source_title = core.derive_source_title(args.video_file)
 
     # 1. Probe video and split once.
@@ -374,6 +386,9 @@ def _run_full_matrix(args, output_dir):
     # 3. Chunk generation per unique generation model.
     generated_vtts = {}
     generation_timings = {}
+    generation_cached = {}
+    preflight_timings = {}
+    preflight_cached = {}
     preflight_contexts = {}
     for gen_model in generation_models:
         gen_output = output_dir / f"{safe_model_name(gen_model)}.generated.vtt"
@@ -392,12 +407,22 @@ def _run_full_matrix(args, output_dir):
             "model_name": gen_model,
             "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
         }
+        preflight_started = time.perf_counter()
+        preflight_path = gen_work / "preflight_context.json"
+        preflight_stat = preflight_path.stat() if preflight_path.exists() else None
         preflight_context = gemini.load_or_run_preflight_context(
             gen_work,
             api_key=args.api_key,
             base_url=args.base_url,
             **preflight_identity,
         )
+        preflight_timings[gen_model] = time.perf_counter() - preflight_started
+        # Cache misses publish a replacement file atomically.
+        published_stat = preflight_path.stat()
+        preflight_cached[gen_model] = preflight_stat is not None and (
+            preflight_stat.st_ino,
+            preflight_stat.st_mtime_ns,
+        ) == (published_stat.st_ino, published_stat.st_mtime_ns)
         preflight_contexts[gen_model] = preflight_context
         for chunk in chunks:
             src = work_dir / chunk["name"]
@@ -409,7 +434,7 @@ def _run_full_matrix(args, output_dir):
         seg_dst.unlink(missing_ok=True)
         link_or_copy(seg_src, seg_dst)
 
-        gen_seconds = run_chunk_generation(
+        gen_seconds, cached = run_chunk_generation(
             args,
             gen_model,
             gen_output,
@@ -421,10 +446,12 @@ def _run_full_matrix(args, output_dir):
         )
         generated_vtts[gen_model] = gen_output
         generation_timings[gen_model] = gen_seconds
+        generation_cached[gen_model] = cached
 
     # 4. Audio refinement per unique (gen_model, audio_model).
     audio_refined_vtts = {}
     audio_refine_timings = {}
+    audio_refine_cached = {}
     unique_audio_pairs = dict.fromkeys(
         (gen, audio) for gen, audio, _ in cases if audio is not None
     ).keys()
@@ -438,7 +465,7 @@ def _run_full_matrix(args, output_dir):
         )
         audio_work = work_dir / f"audio-{audio_key}"
         audio_work.mkdir(parents=True, exist_ok=True)
-        audio_seconds = run_audio_refinement(
+        audio_seconds, cached = run_audio_refinement(
             args,
             audio_model,
             generated_vtts[gen_model],
@@ -452,6 +479,7 @@ def _run_full_matrix(args, output_dir):
         )
         audio_refined_vtts[(gen_model, audio_model)] = audio_output
         audio_refine_timings[(gen_model, audio_model)] = audio_seconds
+        audio_refine_cached[(gen_model, audio_model)] = cached
 
     # 5. Global text refinement and final reporting.
     results = []
@@ -476,10 +504,17 @@ def _run_full_matrix(args, output_dir):
             "generation_model": gen_model,
             "audio_refine_model": audio_model,
             "refinement_model": refine_model,
+            "preflight_seconds": preflight_timings[gen_model],
+            "preflight_cached": preflight_cached[gen_model],
             "generation_seconds": gen_seconds,
+            "generation_cached": generation_cached[gen_model],
             "audio_refine_seconds": audio_seconds,
+            "audio_refine_cached": audio_refine_cached[(gen_model, audio_model)],
             "refinement_seconds": refine_seconds,
-            "total_seconds": gen_seconds + audio_seconds + refine_seconds,
+            "total_seconds": preflight_timings[gen_model]
+            + gen_seconds
+            + audio_seconds
+            + refine_seconds,
             "final_vtt": str(final_vtt),
         }
         if args.reference_vtt:
@@ -494,10 +529,14 @@ def _run_full_matrix(args, output_dir):
                 "generation_model": model,
                 "audio_refine_model": None,
                 "refinement_model": None,
+                "preflight_seconds": preflight_timings[model],
+                "preflight_cached": preflight_cached[model],
                 "generation_seconds": generation_timings[model],
+                "generation_cached": generation_cached[model],
                 "audio_refine_seconds": 0.0,
+                "audio_refine_cached": True,
                 "refinement_seconds": 0.0,
-                "total_seconds": generation_timings[model],
+                "total_seconds": preflight_timings[model] + generation_timings[model],
                 "generated_vtt": str(generated_vtts[model]),
             }
             if args.reference_vtt:

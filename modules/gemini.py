@@ -1282,3 +1282,4 @@ def boundary_audio_refine_subtitles(
         _discard_audio_refinement_cache(work_dir)
         raise
     print(f"Saved boundary audio-refined subtitles to {output_vtt}")
+    return response_to_cache is None

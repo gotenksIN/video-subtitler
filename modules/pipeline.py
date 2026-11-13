@@ -239,7 +239,9 @@ def stitch(chunk_dir, output_vtt):
     return output_vtt
 
 
-def validate_generation_config(config: GenerationConfig) -> list[str]:
+def validate_generation_config(
+    config: GenerationConfig, *, require_output_parent: bool = True
+) -> list[str]:
     """Validate pipeline generation configuration inputs."""
     context_urls = core.validate_context_urls(config.context_urls)
 
@@ -258,7 +260,7 @@ def validate_generation_config(config: GenerationConfig) -> list[str]:
     if config.video_path.resolve() == config.output_path.resolve():
         raise RuntimeError("--output must not resolve to the source video")
 
-    if not config.output_path.parent.is_dir():
+    if require_output_parent and not config.output_path.parent.is_dir():
         raise RuntimeError(
             f"Output parent is not a directory: {config.output_path.parent}"
         )

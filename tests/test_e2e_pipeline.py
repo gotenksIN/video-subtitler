@@ -609,6 +609,10 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
         encoding="ascii",
     )
     output = config.output_path.parent / "benchmark"
+    long_prefix = "projects/" + "long-project-" * 8 + "/locations/global/models/"
+    gen_model, audio_model, text_model = (
+        long_prefix + suffix for suffix in ("gen-a", "audio", "text")
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -620,7 +624,7 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
             "--chunk-dur",
             "1",
             "--case",
-            "gen-a:audio:text",
+            f"{gen_model}:{audio_model}:{text_model}",
             "--model",
             "gen-b",
             "--output-dir",
@@ -629,6 +633,26 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
             str(reference),
         ],
     )
+    args = benchmark.parse_args()
+    invalid_output = output.with_name("invalid-benchmark")
+    for overrides, message in (
+        ({"video_file": "absent.mp4"}, "Source video not found"),
+        ({"reference_vtt": Path("absent.vtt")}, "Reference VTT not found"),
+        ({"api_key": None}, "API key not configured"),
+        ({"model": [""]}, "model names must not be empty"),
+        ({"case": [("gen", " ", "text")]}, "model names must not be empty"),
+        ({"case": [("gen", "audio", " ")]}, "model names must not be empty"),
+        ({"workers": 0}, "--workers"),
+        ({"chunk_dur": 0}, "--chunk-dur"),
+        ({"thinking_level": "invalid"}, "--thinking-level"),
+        ({"context_url": ["invalid"]}, "--context-url"),
+    ):
+        invalid_args = type(args)(
+            **{**vars(args), "output_dir": invalid_output, **overrides}
+        )
+        with pytest.raises((ValueError, RuntimeError), match=message):
+            benchmark.run_full_matrix(invalid_args)
+        assert not invalid_output.exists()
     client = ScriptedGeminiClient(
         [
             research_call(),
@@ -642,19 +666,27 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
     benchmark.run_full_matrix(benchmark.parse_args())
     assert not client.pending
     assert {r.model for r in client.requests if r.kind == "research"} == {
-        "gen-a",
+        gen_model,
         "gen-b",
     }
     assert len(list(output.glob("*.vtt"))) == 4
     results = json.loads((output / "benchmark-results.json").read_text())
     assert len(results) == 2
     for result in results:
+        assert result["preflight_seconds"] >= 0
+        assert result["preflight_cached"] is False
+        assert result["generation_cached"] is False
+        assert result["audio_refine_cached"] is (result["audio_refine_model"] is None)
         assert result["comparison"]["text_similarity"] == 1
         assert result["comparison"]["temporal_iou"] > 0.8
     resumed = ScriptedGeminiClient([text_call()])
     use_client(monkeypatch, resumed)
     benchmark.run_full_matrix(benchmark.parse_args())
     assert [r.kind for r in resumed.requests] == ["text"]
+    results = json.loads((output / "benchmark-results.json").read_text())
+    assert all(result["generation_cached"] for result in results)
+    assert all(result["preflight_cached"] for result in results)
+    assert all(result["audio_refine_cached"] for result in results)
     url = "https://example.com/updated"
     monkeypatch.setattr(sys, "argv", [*sys.argv, "--context-url", url])
     updated = ScriptedGeminiClient(
@@ -674,3 +706,24 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
     assert [r.kind for r in updated.requests].count("chunk") == 4
     for path in output.glob("*.generated.vtt"):
         assert {cue.raw_text for cue in io.read_plain_vtt(path)} == {"HOST: Updated."}
+    results = json.loads((output / "benchmark-results.json").read_text())
+    assert all(not result["generation_cached"] for result in results)
+    assert all(not result["preflight_cached"] for result in results)
+    assert results[0]["audio_refine_cached"] is False
+    generation_cache = next(
+        path
+        for path in (output / "work").rglob("subtitle_chunk_000.json")
+        if "Updated." in path.read_text()
+    )
+    generation_cache.write_text("corrupt", encoding="ascii")
+    for path in (output / "work").rglob("audio_refinement.json"):
+        path.write_text("corrupt", encoding="ascii")
+    repaired = ScriptedGeminiClient(
+        [chunk_call("HOST: Updated."), audio_call(), text_call()]
+    )
+    use_client(monkeypatch, repaired)
+    benchmark.run_full_matrix(benchmark.parse_args())
+    assert not repaired.pending
+    results = json.loads((output / "benchmark-results.json").read_text())
+    assert sum(result["generation_cached"] for result in results) == 1
+    assert results[0]["audio_refine_cached"] is False
