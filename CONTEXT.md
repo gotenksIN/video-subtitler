@@ -590,10 +590,10 @@ Recovery on retry:
 
 ## Benchmark runner (`scripts/benchmark.py`)
 
-Runs matrix benchmarking with shared preflight research and three subtitle passes:
+Runs matrix benchmarking with per-generation-model preflight research and three subtitle passes:
 - `--case GEN:AUDIO:REFINE`: 3-tuple model cases.
 - `--model`: Independent chunk-only models.
-- `--context-url`: Grounding URLs for text refinement.
+- `--context-url`: Grounding URLs for preflight research, chunk generation, and text refinement.
 - `--reference-vtt`: Optional reference subtitles for comparison.
 - Outputs `benchmark_results/benchmark-results.json` and stage VTTs.
 

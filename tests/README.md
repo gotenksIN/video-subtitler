@@ -44,19 +44,18 @@ Successful generation and refinement lifecycle behavior is tested through the pi
 
 ## Review-only specifications
 
-The following details remain specified in `AGENTS.md` but are not frozen by automated tests:
+The following details remain specified in `CONTEXT.md` or `AGENTS.md` but are not frozen by automated tests:
 
 - Prompt prose and required prompt instructions.
 - Manifest JSON representation and hash construction.
 - Exact FFmpeg argument arrays.
-- Worker-count and thread-allocation formulas.
+- Executor sizing and concurrency details.
 - Nested Gemini SDK response, candidate, grounding, and URL metadata shapes.
 - Gemini SDK event normalization into project-owned stream metadata.
 - Direct helper outputs that executable adapter and lifecycle tests already cover.
-- Thread identities, executor details, and other concurrency mechanisms.
 - Internal staging filenames and directories.
 
-Review these details against `AGENTS.md` when their implementation changes.
+Review these details against `CONTEXT.md` and `AGENTS.md` when their implementation changes.
 Do not add source-text, prompt snapshot, complete command-array, private-call, helper-name, or provider event-shape assertions.
 
 ## Commands

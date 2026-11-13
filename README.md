@@ -1,63 +1,64 @@
 # Gemini subtitle generator
 
 A Python CLI that uses the Google Gemini API to generate English WebVTT subtitles from video.
-It uses a 4-pass pipeline:
-1. Researches participant identities and topic terminology with grounded search and video analysis.
-2. Generates chunk subtitles concurrently using candidate speaker identities.
-3. Repairs chunk boundaries against the complete extracted audio.
-4. Refines the complete script with structured proofreading and the preflight context.
+It uses a four-pass pipeline:
+
+0. Researches participant identities and topic terminology with grounded web search and optional YouTube video analysis.
+1. Generates chunk subtitles concurrently using candidate speaker identities.
+2. Repairs chunk boundaries against the complete extracted audio track.
+3. Refines the complete script with structured proofreading and the preflight context.
 
 ## Pipeline overview
 
 ```mermaid
 flowchart TD
-    Video[Source video & URLs] --> Validate[Probe source video and validate audio when enabled]
-    Validate --> Research[0. Parallel grounded web & YouTube preflight research]
+    Video[Source video and URLs] --> Validate[Probe source video and validate audio when enabled]
+    Validate --> Research[0. Parallel grounded web and YouTube preflight research]
     Research --> Context[preflight_context.json]
     Validate --> Split[1. Stream-copy split]
     Split --> Audio[Extract complete audio when enabled and boundaries exist]
     Audio --> Chunks[Concurrent video chunks]
-    Context --> FlashGen
-    Chunks --> FlashGen[Gemini 4 Hydrogen: Subtitle generation with candidate roster]
-    FlashGen --> Stitch[Stitch & merge visual fragments]
+    Context --> ChunkGen
+    Chunks --> ChunkGen[1. Gemini 4 Hydrogen: Subtitle generation with candidate roster]
+    ChunkGen --> Stitch[Stitch and merge visual fragments]
 
     Stitch --> Boundary{Audio enabled and boundaries exist?}
     Boundary -->|Yes| AudioPass[2. Boundary audio refinement]
     Audio --> AudioPass
 
-    AudioPass --> ProRefine[3. Gemini 4 Hydrogen: Structured text polish with preflight context]
-    Boundary -->|No| ProRefine
-    Context --> ProRefine
-    ProRefine --> Output[Final English WebVTT subtitles]
+    AudioPass --> TextRefine[3. Gemini 4 Hydrogen: Structured text polish with preflight context]
+    Boundary -->|No| TextRefine
+    Context --> TextRefine
+    TextRefine --> Output[Final English WebVTT subtitles]
 ```
 
 Preflight runs concurrently with splitting and subsequent audio extraction.
-Chunk generation waits for both media preparation and preflight context.
+Chunk generation waits for both media preparation and the preflight context.
 The work-directory lock stays held until all preflight work settles, including on failure.
 
 ## Features
 
-- **Generation mode:** Provide a video file to create English subtitles with accurate timestamps.
-- **Concurrent processing:** Process video chunks in parallel using multiple Gemini API workers.
-- **Boundary audio refinement:** Extract the complete audio track and repair dialogue faults near chunk boundaries with a boundary-limited Gemini 4 Hydrogen pass.
-- **Structured outputs:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and invalid chunk output.
-- **Grounded refinement:** Run web identity research with Google Search, optional direct YouTube video analysis, and structured script polish.
-  Speaker identities use verified evidence instead of appearance guesses.
-- **Resumable failures:** Keep temporary work directories on failure so retries reuse valid completed chunks, extracted audio, and refinement caches.
-  Clean up temporary work files on success.
-- **Safe outputs:** Write chunk JSON, audio, and final WebVTT files atomically to prevent corrupted output.
+- **Audio-first generation:** Create English WebVTT subtitles with accurate speech timing and meaningful on-screen text.
+- **Concurrent chunk processing:** Process 60-second stream-copy chunks in parallel across multiple Gemini API workers.
+- **Boundary audio refinement:** Listen to the complete extracted audio track and repair dialogue faults near chunk boundaries without altering visual text.
+- **Grounded preflight and text polish:** Research participant names and proper nouns with Google Search, optional URL Context, and direct YouTube video analysis.
+  Speaker attribution relies on verified evidence rather than appearance guesses.
+- **Structured validation:** Validate model responses with Pydantic schemas to catch malformed timestamps, duplicate IDs, and broken cue structure.
+- **Resumable failures:** Preserve temporary work directories on failure so retries reuse valid chunks, extracted audio, and refinement caches.
+  Clean up temporary work files automatically on success.
+- **Atomic outputs:** Write chunk JSON, extracted audio, and final WebVTT files via temporary siblings before replacing the target file.
 
 ## Prerequisites
 
+- Python 3.14 or newer (managed automatically by `uv`).
 - [uv](https://github.com/astral-sh/uv) - Python package installer and resolver.
-- [FFmpeg](https://ffmpeg.org/) - Install `ffmpeg` and `ffprobe` in your system `PATH`.
-  - **Headless and X11-free installation (WSL/Ubuntu Server):** Install a precompiled GPL static build to avoid X11 and GUI dependencies.
-    Use the BtbN static build installer for your user binary directory:
+- [FFmpeg](https://ffmpeg.org/) - `ffmpeg` and `ffprobe` in your system `PATH`.
+  - **Headless Linux / WSL installation:** Install precompiled GPL static binaries without X11 dependencies into `~/.local/bin`:
     ```bash
     ./scripts/ffmpeg.sh
     ```
     Add `~/.local/bin` to your `PATH` by adding `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional tool executed automatically with `uvx`.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Optional tool run via `uvx` by `./scripts/yt-dl.sh`.
 
 ## Installation
 
@@ -66,91 +67,102 @@ The work-directory lock stays held until all preflight work settles, including o
    ```bash
    uv sync
    ```
-3. Create a `.env` file in the root directory and add your Gemini API credentials:
+3. Create a `.env` file in the root directory (see `.env.example`) and add your Gemini API credentials:
    ```env
    GEMINI_API_KEY=your_api_key_here
 
-   # Optional: set a custom base URL or change default models
-   GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
-   GEMINI_MODEL=gemini-4-hydrogen
-   GEMINI_AUDIO_REFINE_MODEL=gemini-4-hydrogen
-   GEMINI_REFINE_MODEL=gemini-4-hydrogen
+   # Optional: set a custom base URL or override default models
+   # GEMINI_API_BASE=https://main.your-proxy-domain.com/google/v1beta
+   # GEMINI_MODEL=gemini-4-hydrogen
+   # GEMINI_AUDIO_REFINE_MODEL=gemini-4-hydrogen
+   # GEMINI_REFINE_MODEL=gemini-4-hydrogen
    ```
 
 ## Usage
 
-Run the CLI using `uv run`.
+Run commands from the repository root with `uv run`.
 
-### Helper scripts
+### Generate subtitles
 
-Install or upgrade the BtbN GPL static FFmpeg build in `~/.local/bin`:
-```bash
-./scripts/ffmpeg.sh
-```
-
-Download a YouTube video as VP9 with Opus or Vorbis audio in WebM:
-```bash
-./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
-```
-
-Generate subtitles for a local video:
-```bash
-./scripts/subtitle.sh "your_video.webm"
-```
-
-The subtitle helper writes output to `your_video.webm.vtt`.
-If you omit the context URL argument, the helper checks standard input.
-It prompts once for an optional context URL only when standard input is a terminal.
-Press Enter with a blank answer to skip it.
-
-For noninteractive execution with grounded context, supply the URL as the second argument:
-```bash
-./scripts/subtitle.sh "your_video.webm" "https://youtube.com/watch?v=..."
-```
-
-Noninteractive execution without a context URL never prompts:
-```bash
-./scripts/subtitle.sh "your_video.webm" </dev/null
-```
-
-Benchmark subtitle generation and refinement models across full video runs:
-```bash
-./scripts/benchmark.py "your_video.webm" --case gemini-4-hydrogen:gemini-4-hydrogen:gemini-4-hydrogen
-```
-
-Compare generated subtitles against a reference WebVTT file:
-```bash
-./scripts/benchmark.py "your_video.webm" --model gemini-4-hydrogen --reference-vtt "reference.vtt"
-```
-
-The benchmark saves generated subtitles and `benchmark-results.json` to the output directory.
-It runs preflight once before chunk generation and shares the cached context across all cases.
-The first case's text-refinement model runs preflight; chunk-only runs use the default refinement model.
-
-### Generation mode
-
-Generate English subtitles from a video:
+Generate English subtitles from a local video:
 ```bash
 uv run python gemini_subs.py "your_video.webm" --output "generated_subtitles.vtt"
 ```
 
-Supply context URLs noninteractively for character name research and terminology grounding:
+Supply context URLs for participant identity research and terminology grounding:
 ```bash
 uv run python gemini_subs.py "your_video.webm" \
   --context-url "https://youtube.com/watch?v=..." \
   --output "generated_subtitles.vtt"
 ```
 
-### Audio-first processing and refinement
+Skip boundary audio refinement (for example, on silent videos):
+```bash
+uv run python gemini_subs.py "your_video.webm" --disable-audio-refine
+```
 
-By default, the pipeline uses `gemini-4-hydrogen` for chunk video generation, boundary audio refinement, and global text refinement.
-Chunk processing limits context to 60 seconds per stream-copy chunk.
-The audio refinement pass extracts the complete audio track, listens to it, and repairs dialogue faults near chunk boundaries without touching visual on-screen text.
-Single-chunk runs skip audio extraction and boundary refinement because no repair boundary exists.
-They use the stitched VTT as the input to text refinement or direct publication.
-The global text refinement pass corrects inconsistent character names, terminology, and continuity errors without changing timestamps.
+Skip global text refinement:
+```bash
+uv run python gemini_subs.py "your_video.webm" --disable-text-refine
+```
 
-Generation publishes one artifact based on the two refinement toggles:
+Refine an existing WebVTT file without video processing:
+```bash
+uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polished_subtitles.vtt"
+```
+
+### Helper scripts
+
+Download a YouTube video as VP9 with Opus or Vorbis audio in WebM:
+```bash
+./scripts/yt-dl.sh "https://youtube.com/watch?v=..."
+```
+
+Generate `<video>.vtt` with optional interactive context URL prompting:
+```bash
+./scripts/subtitle.sh "your_video.webm"
+```
+
+When you omit the context URL argument, `./scripts/subtitle.sh` prompts once only if standard input is a terminal.
+Press Enter with a blank answer to skip grounding URLs.
+
+Supply a context URL noninteractively as the second argument, or redirect standard input to suppress prompting:
+```bash
+./scripts/subtitle.sh "your_video.webm" "https://youtube.com/watch?v=..."
+./scripts/subtitle.sh "your_video.webm" </dev/null
+```
+
+### Benchmarking
+
+Compare model combinations across full video runs:
+```bash
+./scripts/benchmark.py "your_video.webm" --case gemini-4-hydrogen:gemini-4-hydrogen:gemini-4-hydrogen
+```
+
+Compare chunk-only output against a reference WebVTT file:
+```bash
+./scripts/benchmark.py "your_video.webm" --model gemini-4-hydrogen --reference-vtt "reference.vtt"
+```
+
+The benchmark writes generated VTT artifacts and `benchmark-results.json` to the output directory (`benchmark_results/` by default).
+It runs Pass 0 preflight once per unique generation model at `high` thinking and caches the result in that model's generation work directory.
+Chunk generation and text refinement reuse the preflight context for each case's generation model.
+
+### How the pipeline works
+
+By default, all passes use `gemini-4-hydrogen`.
+Preflight research and refinement passes run at `high` thinking, and chunk generation defaults to `high`.
+
+1. **Preflight (Pass 0):** Runs grounded Google Search (plus URL Context for non-YouTube URLs) and, when YouTube URLs are supplied, a concurrent direct YouTube video analysis pass.
+   Preflight fails before chunk generation (or before publication in `--refine-only` mode) when Search grounding is missing, a context URL fails retrieval, or a YouTube video is unavailable.
+   There is no ungrounded fallback, and any existing output file stays intact.
+2. **Chunk generation (Pass 1):** Splits the video at keyframes into 60-second stream-copy chunks and subtitles each chunk concurrently using candidate speaker identities from Pass 0.
+3. **Boundary audio refinement (Pass 2):** Extracts the complete mono Opus audio track and sends it with the stitched script to repair dialogue faults within 10 seconds of chunk boundaries.
+   The host discards edits outside repair regions and rejects patches that alter bracketed visual text.
+   Single-chunk runs skip audio extraction and Pass 2 because they have no repair boundaries.
+4. **Global text refinement (Pass 3):** Sends the script and preflight context to fix speaker label consistency, proper nouns, typos, and objective errors without changing timestamps.
+
+Generation publishes one final artifact based on the refinement toggles:
 
 | Audio refinement | Text refinement | Published input |
 | --- | --- | --- |
@@ -159,107 +171,60 @@ Generation publishes one artifact based on the two refinement toggles:
 | `--disable-audio-refine` | Enabled | Text-refined `stitched.vtt` |
 | `--disable-audio-refine` | `--disable-text-refine` | `stitched.vtt` |
 
-For a single-chunk run, use the audio-disabled rows regardless of the audio toggle.
+Single-chunk runs follow the audio-disabled rows regardless of `--disable-audio-refine`.
 
-Boundary audio refinement sends the complete audio plus the stitched script to Gemini in one streamed JSON request.
-The model returns a sparse patch of only changed cues.
-The host discards patch edits outside ten-second repair windows around chunk boundaries.
-Validation rejects patches that delete visual on-screen text or alter bracketed on-screen fragments.
+### CLI options
 
-Preflight has up to two Gemini requests and runs before chunk generation.
-Grounded web research and direct YouTube analysis run concurrently when you supply YouTube URLs.
-
-1. Grounded web identity research: a plain-text, streamed request with Google Search grounding.
-   It researches participant names in official English styling, roles, and evidence for speaker-label normalization.
-   Grounded research may change speaker identity and proper-name spelling only, never dialogue meaning or events.
-2. Direct YouTube analysis, only when you supply YouTube context URLs: a plain-text, streamed request that watches the attached videos without tools.
-   It returns participant identities, official names and roles, and timestamped speaker-identification observations.
-   Transient Gemini transport errors and rate limits retry automatically through SDK HTTP retry options.
-
-After audio refinement, text refinement sends one streamed JSON request with the `RefinementResponse` schema.
-It reuses the preflight context and does not use tools.
-In `--refine-only` mode, preflight runs before this request.
-
-Text refinement fails before publication when the research response carries no Google Search grounding, when a supplied context URL is not retrieved successfully, or when a YouTube video cannot be retrieved.
-The previous output stays intact.
-There is no ungrounded fallback.
-
-To skip the boundary audio refinement pass:
-```bash
-uv run python gemini_subs.py "your_video.webm" --disable-audio-refine
-```
-
-To skip the global text refinement pass:
-```bash
-uv run python gemini_subs.py "your_video.webm" --disable-text-refine
-```
-
-To run global text refinement on an existing WebVTT file without video processing:
-```bash
-uv run python gemini_subs.py "generated_subtitles.vtt" --refine-only -o "polished_subtitles.vtt"
-```
-
-### Additional options
-
+- `--output`, `-o`: Output WebVTT file path (default: `output_subtitles.vtt`).
 - `--disable-audio-refine`: Disable the boundary audio refinement pass after generation.
 - `--disable-text-refine`: Disable the global text refinement pass after generation.
 - `--refine-only`: Skip video processing and run global text refinement on an input WebVTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`).
 - `--workers`: Maximum concurrent API workers (default: `7`).
-- `--thinking-level`: Gemini thinking level for chunk video requests (default: `high`).
-  Supported levels are `low`, `medium`, `high`, and `xhigh`.
+- `--thinking-level`: Gemini thinking level for chunk video requests: `low`, `medium`, `high`, or `xhigh` (default: `high`).
   `xhigh` applies to `gemini-4-hydrogen`.
-  The global text refinement pass always uses `high`.
-  The boundary audio refinement pass always uses `high`.
+  Audio and text refinement passes always use `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
 - `--model`: Override `GEMINI_MODEL` for chunk video generation (default: `gemini-4-hydrogen`).
 - `--audio-refine-model`: Override `GEMINI_AUDIO_REFINE_MODEL` for boundary audio refinement (default: `gemini-4-hydrogen`).
 - `--refine-model`: Override `GEMINI_REFINE_MODEL` for global text refinement (default: `gemini-4-hydrogen`).
-- `--context-url`: Absolute HTTP(S) URL used as grounding context for global refinement.
+- `--context-url`: Absolute HTTP(S) URL used as grounding context for preflight research, chunk generation, and global text refinement.
   Repeat the option to supply several URLs.
-  Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, or `m.youtube.com` with a `/watch` path and nonempty `v` query, or `youtu.be` with exactly one path segment) become direct video inputs for a separate YouTube analysis pass.
+  Public YouTube watch or share URLs (`youtube.com`, `www.youtube.com`, or `m.youtube.com` with `/watch` and a nonempty `v` query, or `youtu.be` with one path segment) run in the direct YouTube analysis pass.
   Other URLs use the URL Context tool.
-  Refinement fails if any other URL is not retrieved successfully.
-  An invalid, private, or unavailable YouTube video fails the analysis request before publication.
 
 ## Notes
 
-- The initial split uses stream copy (`-c copy`) and cuts at keyframes, so chunk boundaries follow the source keyframe layout.
-  Supported input codecs are VP9, H.264, and HEVC/H.265.
-  VP9 chunks use WebM format, while H.264 and HEVC chunks use MP4 format.
-- AV1 input is rejected during probing because the processing pipeline supports VP9, H.264, and HEVC/H.265 only.
+- Stream-copy splitting (`-c copy`) cuts at keyframes for VP9 (`.webm`), H.264 (`.mp4`), and HEVC/H.265 (`.mp4`) inputs.
+  Other codecs such as AV1 fail during probing.
 - Boundary audio refinement requires an audio stream.
   Generation fails before splitting when the source has no audio and audio refinement is enabled.
-  Pass `--disable-audio-refine` to generate subtitles for a silent video.
-- Keep inline video and audio requests below 20 MiB.
+  Pass `--disable-audio-refine` for silent video.
+- Keep inline chunk video and extracted audio payloads below 20 MiB.
   Reduce `--chunk-dur` if chunk uploads fail.
-- When a chunk fails validation or API processing, stitching stops and the work directory is preserved for retry.
-  A malformed segment index or missing chunk file invalidates the split and regenerates it on retry.
-  Valid extracted audio and audio refinement responses are reused on retry.
-  Successful runs clean up the temporary work directory.
-- Output WebVTT files are ignored by Git by default.
-  Move or rename files to track specific subtitle outputs.
-- Create the output parent directory before you run either CLI mode.
-  Error messages go to standard error.
+- Create the output parent directory before running either CLI mode.
+  The CLI writes errors to standard error, and failed runs keep the work directory under `temp_video_chunks/` for retry.
+- Generated `.vtt` files are ignored by Git by default.
+  Move or rename files if you want to track specific subtitle outputs.
 
 ## Development
 
-Production code is organized into modular components under `modules/`.
-`modules/pipeline.py` orchestrates generation and `gemini_subs.py` parses and dispatches CLI requests.
-`AGENTS.md` is the authoritative behavioral specification and `tests/README.md` documents the test contract matrix.
-Tests under `tests/` mirror these module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
+Production modules live under `modules/`, orchestrated by `modules/pipeline.py` and dispatched by `gemini_subs.py`.
+`CONTEXT.md` is the authoritative architectural and domain specification.
+`AGENTS.md` defines agent workflow and coding instructions, and `tests/README.md` documents the test contract matrix.
+Tests under `tests/` mirror module boundaries (`tests/modules/core/`, `tests/modules/io/`, `tests/modules/media/`, `tests/modules/gemini/`, `tests/modules/pipeline/`, and `tests/cli/`).
 
 Run code quality checks and tests:
 
 ```bash
-# Lint, format, and static analysis
+# Lint, format, and static checks
 shellcheck scripts/subtitle.sh scripts/yt-dl.sh scripts/ffmpeg.sh
 uv run ruff check .
 uv run ruff format --check .
 uv run python -m compileall -q .
 
-# Run targeted module tests or the complete test suite
+# Targeted module tests or complete suite
 uv run pytest tests/modules/core
 uv run pytest tests/modules/io
 uv run pytest tests/modules/media
@@ -268,7 +233,7 @@ uv run pytest tests/modules/pipeline
 uv run pytest tests/cli
 uv run pytest
 
-# Verify CLI entry points
+# CLI entry points
 uv run python gemini_subs.py --help
 ./scripts/benchmark.py --help
 ```
