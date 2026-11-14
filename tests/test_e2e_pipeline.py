@@ -570,6 +570,101 @@ def test_stream_and_validation_retries_discard_partial_answers(
     ]
 
 
+@pytest.mark.parametrize("exhaust", [False, True], ids=["corrected", "exhausted"])
+def test_text_validation_retries_report_all_invalid_cues(
+    config, monkeypatch, fast_retries, capsys, exhaust
+):
+    selected = replace(config, chunk_dur=60, audio_refine=False)
+    sources = [
+        "Host: This is",
+        "Host: a test.",
+        "and a continuation.",
+        "without a label.",
+        "Host: The end.",
+    ]
+    invalid = [
+        {"id": 1, "text": "the test."},
+        {"id": 2, "text": "Host: and a continuation."},
+        {"id": 3, "text": "Host: without a label."},
+        {"id": 4, "text": "The ending."},
+    ]
+    corrected = [
+        {"id": 1, "text": "Host: the test."},
+        {"id": 4, "text": "Host: The ending."},
+    ]
+    client = ScriptedGeminiClient(
+        [
+            research_call(),
+            StreamCall(
+                "chunk",
+                [
+                    json.dumps(
+                        {
+                            "captions": [
+                                {
+                                    "id": index,
+                                    "start": str(index * 0.3),
+                                    "end": str((index + 1) * 0.3),
+                                    "text": text,
+                                }
+                                for index, text in enumerate(sources)
+                            ]
+                        }
+                    )
+                ],
+            ),
+            StreamCall("text", ['{"changes":']),
+            text_call(invalid),
+            text_call(invalid if exhaust else corrected),
+        ]
+    )
+    use_client(monkeypatch, client)
+    config.output_path.write_text("previous", encoding="ascii")
+    if exhaust:
+        with pytest.raises(
+            RuntimeError,
+            match="Parsing or validating the model refinement response failed:",
+        ) as failure:
+            pipeline.run_generation(selected)
+        for change in invalid:
+            assert f"subtitle ID {change['id']}" in str(failure.value)
+        assert config.output_path.read_text() == "previous"
+        assert (workdirs()[0] / "subtitle_chunk_000.json").is_file()
+        assert (workdirs()[0] / "preflight_context.json").is_file()
+    else:
+        pipeline.run_generation(selected)
+        captions = io.read_plain_vtt(config.output_path)
+        assert [cue.raw_text for cue in captions] == [
+            sources[0],
+            corrected[0]["text"],
+            sources[2],
+            sources[3],
+            corrected[1]["text"],
+        ]
+        assert [(cue.start, cue.end) for cue in captions] == [
+            (core.format_time(index * 0.3), core.format_time((index + 1) * 0.3))
+            for index in range(len(sources))
+        ]
+    assert not client.pending
+    requests = [request for request in client.requests if request.kind == "text"]
+    assert len(requests) == 3
+    assert "json_invalid" in requests[1].contents
+    for change in invalid:
+        cue_id = change["id"]
+        assert (
+            f"subtitle ID {cue_id} changes dialogue turns or labels"
+            in requests[2].contents
+        )
+        assert f"Source text: {sources[cue_id]!r}" in requests[2].contents
+        assert f"Proposed text: {change['text']!r}" in requests[2].contents
+    for request in requests:
+        assert request.config.automatic_function_calling.disable is True
+        schema = json.dumps(request.body["generationConfig"]["responseSchema"])
+        for keyword in ("additionalProperties", "$defs", "$ref"):
+            assert keyword not in schema
+    assert "retrying in 1s" in capsys.readouterr().out
+
+
 def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(
     config, monkeypatch
 ):

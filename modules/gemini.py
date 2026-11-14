@@ -158,7 +158,7 @@ SPEAKER LABELS
 18. When a name cannot be established, prefer a stable descriptive role such as "Host:", "Resident:", "Shop Owner:", or "Producer:" when the role is clear from the clip.
 19. Leave dialogue unlabeled when neither a name nor a stable role can be distinguished.
 20. Do not use generic numbered labels such as "Speaker 1:".
-21. Use the exact format "Name: Dialogue".
+21. Use the exact format "Name: Dialogue". When a single attributed speaker's turn spans consecutive cues, repeat that speaker's name or role prefix on each cue. Do not switch between repeated labels and unlabeled continuations within the chunk.
 22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line.
 23. Do not assign speaker labels to on-screen text.
 
@@ -532,10 +532,10 @@ SPEAKER LABELS
 
 28. Never add a speaker label to an unlabeled line.
 29. An unlabeled line remains unlabeled, even when adjacent lines, timestamps, speaker turns, the source title, identity research, or video analysis suggest a possible speaker.
-30. Do not propagate a label from one cue to another.
+30. Do not propagate a speaker label from one cue to another, even when you rename a role label such as "Host:" on one cue and the next cue continues that same speaker's sentence or turn without a label.
 31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate the spelling of an existing label, but they are not an attribution map.
 32. You may correct an existing label only when its spelling, casing, or identity is clearly established by the script. Replace a generic role or kinship label (Host:, Father:, Daughter:, Official:, Son-in-law:) with the speaker's canonical name only when the script establishes an unambiguous one-to-one correspondence globally or within that scene. Never replace shared or ambiguous multi-person roles (Guest: when multiple guests exist), collective labels (Audience:, Fans:), or unverified incidental roles (Producer:, Staff:, Shop Owner:) with a person's name. Keep unlabeled lines unlabeled.
-33. Preserve existing speaker labels except for corrections authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. This exception remains subordinate to the two-line cue limit for mixed cues ("[Editorial]" followed by "Speaker: Dialogue") and multi-speaker cues; never add a third line or combine distinct turns. Do not add or remove labels for formatting convenience.
+33. Never remove an existing speaker label from any cue, even when that cue continues a sentence mid-phrase from the preceding cue with the same speaker label repeated. Correct existing labels only as authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. This exception remains subordinate to the two-line cue limit for mixed cues ("[Editorial]" followed by "Speaker: Dialogue") and multi-speaker cues; never add a third line or combine distinct turns. Do not add or remove labels for formatting convenience.
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.
 
@@ -949,28 +949,45 @@ def global_refine_subtitles(
         terminology_context=preflight_context.terminology_context,
         youtube_context=preflight_context.youtube_context,
     )
+    source_texts = [cue.raw_text for cue in vtt]
+    request_prompt = prompt
 
     with create_client(api_key, base_url) as client:
         print(
             "Sending script to Gemini for global refinement (this may take a minute)..."
         )
-        full_json_text, _, _, _ = _read_stream(
-            client,
-            model=model_name,
-            contents=prompt,
-            config=_build_refinement_config(thinking_level),
-        )
-
-    try:
-        refinements = core.RefinementResponse.model_validate_json(full_json_text)
-        core.validate_refinement_changes(
-            refinements.changes, [cue.raw_text for cue in vtt]
-        )
-    except ValueError as e:
-        raise RuntimeError(
-            "Parsing or validating the model refinement response failed: "
-            f"{e}\nRaw response:\n{full_json_text}"
-        ) from e
+        for attempt in range(_STREAM_REQUEST_ATTEMPTS):
+            full_json_text, _, _, _ = _read_stream(
+                client,
+                model=model_name,
+                contents=request_prompt,
+                config=_build_refinement_config(thinking_level),
+            )
+            try:
+                refinements = core.RefinementResponse.model_validate_json(
+                    full_json_text
+                )
+                core.validate_refinement_changes(refinements.changes, source_texts)
+            except ValueError as error:
+                if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
+                    raise RuntimeError(
+                        "Parsing or validating the model refinement response failed: "
+                        f"{error}\nRaw response:\n{full_json_text}"
+                    ) from error
+                delay = 2**attempt
+                print(
+                    f"Warning: Global refinement attempt {attempt + 1} failed "
+                    f"({error}); retrying in {delay}s..."
+                )
+                request_prompt = (
+                    f"{prompt}\n\nCORRECTIVE VALIDATION FEEDBACK\n\n{error}\n\n"
+                    "Fix all reported violations against the original source cues. "
+                    "Return only a valid RefinementResponse JSON object with a "
+                    '"changes" list containing the complete corrected patch.'
+                )
+                time.sleep(delay)
+                continue
+            break
 
     changes = refinements.changes
     print(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")

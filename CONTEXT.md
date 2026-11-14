@@ -548,6 +548,12 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    Labeled turns retain labels at their original positions; unlabeled turns cannot gain labels.
    Existing label spelling and visual text within brackets may be corrected.
    Line wraps continue the same turn, and adjacent labeled turns remain separate even when written on one line.
+7. The host makes up to 3 validation attempts, matching the chunk validation retry pattern.
+   Malformed JSON, schema violations, and structural validation failures trigger corrective feedback on the next request.
+   Structural feedback lists every invalid change with its cue ID, source text, proposed text, and validation error.
+   Each retry uses the original script and asks for a complete corrected changes list.
+   The host reuses one client and waits 1 second after the first failure and 2 seconds after the second.
+   The final validation failure raises an error without publishing the refined output.
 
 ### Speaker label casing canonicalization
 

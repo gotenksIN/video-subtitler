@@ -245,36 +245,48 @@ def _refinement_dialogue_labels(text, cue_id, source_labels=()):
 def validate_refinement_changes(changes, source_texts):
     """Validate all replacements against the structure of their source cues."""
     seen_ids = set()
+    failures = []
     for change in changes:
-        if not 0 <= change.id < len(source_texts):
-            raise ValueError(f"subtitle ID {change.id} is out of range")
-        if change.id in seen_ids:
-            raise ValueError(f"subtitle ID {change.id} is duplicated")
-        if not change.text.strip():
-            raise ValueError(f"subtitle ID {change.id} has empty text")
-        change.text = _validate_caption_text(change.text)
-        source = source_texts[change.id]
-        if _has_unmatched_brackets(change.text):
-            raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
-        if classify_cue_text(change.text) != classify_cue_text(source):
-            raise ValueError(f"subtitle ID {change.id} changes cue class")
-        if len(_visual_fragment_strings(change.text)) != len(
-            _visual_fragment_strings(source)
-        ):
-            raise ValueError(f"subtitle ID {change.id} changes visual fragment count")
+        source = source_texts[change.id] if 0 <= change.id < len(source_texts) else None
+        proposed = change.text
+        try:
+            if source is None:
+                raise ValueError(f"subtitle ID {change.id} is out of range")
+            if change.id in seen_ids:
+                raise ValueError(f"subtitle ID {change.id} is duplicated")
+            seen_ids.add(change.id)
+            if not change.text.strip():
+                raise ValueError(f"subtitle ID {change.id} has empty text")
+            change.text = _validate_caption_text(change.text)
+            if _has_unmatched_brackets(change.text):
+                raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
+            if classify_cue_text(change.text) != classify_cue_text(source):
+                raise ValueError(f"subtitle ID {change.id} changes cue class")
+            if len(_visual_fragment_strings(change.text)) != len(
+                _visual_fragment_strings(source)
+            ):
+                raise ValueError(
+                    f"subtitle ID {change.id} changes visual fragment count"
+                )
 
-        source_labels = {
-            match.group(2)
-            for line in source.splitlines()
-            if (match := SPEAKER_LABEL_RE.match(line))
-        }
-        if _refinement_dialogue_labels(
-            change.text, change.id, source_labels
-        ) != _refinement_dialogue_labels(source, change.id, source_labels):
-            raise ValueError(
-                f"subtitle ID {change.id} changes dialogue turns or labels"
+            source_labels = {
+                match.group(2)
+                for line in source.splitlines()
+                if (match := SPEAKER_LABEL_RE.match(line))
+            }
+            if _refinement_dialogue_labels(
+                change.text, change.id, source_labels
+            ) != _refinement_dialogue_labels(source, change.id, source_labels):
+                raise ValueError(
+                    f"subtitle ID {change.id} changes dialogue turns or labels"
+                )
+        except ValueError as error:
+            failures.append(
+                f"subtitle ID {change.id}: {error}\n"
+                f"Source text: {source!r}\nProposed text: {proposed!r}"
             )
-        seen_ids.add(change.id)
+    if failures:
+        raise ValueError("\n\n".join(failures))
 
 
 def validate_context_urls(urls):

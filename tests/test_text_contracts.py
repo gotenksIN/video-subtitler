@@ -36,6 +36,36 @@ def test_text_refinement_rejects_structural_mutations():
         with pytest.raises(ValueError):
             core.validate_refinement_changes(changes, ["Original"])
 
+    sources = [
+        "Host: This is",
+        "Host: a test.",
+        "and a continuation.",
+        "Original",
+        "More text",
+    ]
+    replacements = ["Host: This is", "the test.", "Host: and a continuation."]
+    changes = [
+        core.RefinedCaption(id=index, text=text)
+        for index, text in enumerate(replacements)
+    ] + [
+        core.RefinedCaption(id=5, text="Unknown"),
+        core.RefinedCaption(id=0, text="Host: Duplicate"),
+        core.RefinedCaption(id=3, text=""),
+        core.RefinedCaption(id=4, text="Broken\n\ntext"),
+    ]
+    with pytest.raises(ValueError) as failure:
+        core.validate_refinement_changes(changes, sources)
+    message = str(failure.value)
+    for cue_id in (1, 2):
+        assert f"subtitle ID {cue_id} changes dialogue turns or labels" in message
+        assert f"Source text: {sources[cue_id]!r}" in message
+        assert f"Proposed text: {replacements[cue_id]!r}" in message
+    assert "subtitle ID 5 is out of range" in message
+    assert "Source text: None" in message
+    assert "subtitle ID 0 is duplicated" in message
+    assert "subtitle ID 3 has empty text" in message
+    assert "subtitle ID 4: Caption text must contain nonempty lines" in message
+
 
 def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
     for source, replacement in (
