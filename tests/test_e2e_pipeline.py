@@ -27,6 +27,8 @@ from tests.support.gemini_fakes import (
     use_client,
 )
 
+pytestmark = pytest.mark.usefixtures("fast_retries")
+
 
 @pytest.fixture
 def config(tmp_path, monkeypatch, media_files):
@@ -295,7 +297,7 @@ def test_gemini_4_long_decode_continues_text_and_publishes(config, monkeypatch):
 
 
 def test_preflight_grounding_failures_abort_before_chunks_and_preserve_output(
-    config, monkeypatch, fast_retries
+    config, monkeypatch
 ):
     config.output_path.write_text("previous", encoding="ascii")
     for scenario, urls, message in (
@@ -802,9 +804,7 @@ def test_lock_stays_held_until_preflight_settles_after_media_failure(
     assert (work / "preflight_context.json").is_file()
 
 
-def test_stream_and_validation_retries_discard_partial_answers(
-    config, monkeypatch, fast_retries
-):
+def test_stream_and_validation_retries_discard_partial_answers(config, monkeypatch):
     selected = replace(config, workers=1, audio_refine=False, refine_text=False)
     client = run(
         monkeypatch,
@@ -833,7 +833,7 @@ def test_stream_and_validation_retries_discard_partial_answers(
     "parse_first", [True, False], ids=["parse-first", "parse-retry"]
 )
 def test_text_validation_retries_report_all_invalid_cues(
-    config, monkeypatch, fast_retries, capsys, exhaust, parse_first
+    config, monkeypatch, capsys, exhaust, parse_first
 ):
     selected = replace(config, chunk_dur=60, audio_refine=False)
     sources = [

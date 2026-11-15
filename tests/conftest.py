@@ -1,9 +1,28 @@
 """Real media fixtures shared by capability tests."""
 
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
+
+
+def pytest_xdist_auto_num_workers(config):
+    if (
+        config.option.keyword
+        or config.option.collectonly
+        or all("::" in arg for arg in config.args)
+    ):
+        return 0
+    paths = [Path(arg.split("::", 1)[0]) for arg in config.args]
+    if paths and not any(
+        path.is_dir() or path.name in {"test_cli.py", "test_e2e_pipeline.py"}
+        for path in paths
+    ):
+        return 0
+    cap = 4 if {path.name for path in paths} == {"test_cli.py"} else 6
+    return min(cap, os.process_cpu_count() or 1)
 
 
 @pytest.fixture(scope="session")

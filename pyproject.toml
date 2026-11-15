@@ -14,10 +14,12 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.18",
 ]
 
 [tool.pytest.ini_options]
+addopts = "-n auto --dist worksteal"
 pythonpath = ["."]
 testpaths = ["tests"]
 
