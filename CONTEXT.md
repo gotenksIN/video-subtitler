@@ -142,8 +142,8 @@ These limits apply to chunk generation, Pass 0 web research and YouTube analysis
 Every request configured with a thinking level sets `include_thoughts=True`.
 Thought tokens stream in real time across the transport boundary.
 These tokens keep the HTTP streaming connection active.
-Host stream consumers read non-thought text parts directly from the first candidate.
-The host ignores thought and server-side tool parts when assembling JSON and research text outputs.
+Host stream consumers accumulate candidate answer text only.
+The host excludes thought-only stream chunks (`text=None`) from assembled JSON and research text outputs.
 
 Direct CLI defaults:
 - `--chunk-dur 60` seconds.
@@ -519,9 +519,6 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Runs concurrently with grounded web research when YouTube URLs are present.
    - Each request creates, uses, and closes its own client on its calling thread.
    - Attached video Parts for public YouTube URLs.
-   - Pass 0 uses `MediaProcessing.AGENTIC` for Gemini 4, `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite` model prefixes.
-     The model inspects frames and transcripts on demand.
-     Other models and Pass 1 chunk generation retain the default `STATIC` mode.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
 3. **Context assembly:**
    - Section splitting: The host splits the research text into identity and terminology sections at the section headers.

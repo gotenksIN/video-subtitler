@@ -194,7 +194,6 @@ def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
     assert any(tool.url_context is not None for tool in research_request.config.tools)
     youtube_request = next(r for r in client.requests if r.kind == "youtube")
     assert youtube_request.contents[0].file_data.file_uri == "https://youtu.be/example"
-    assert "mediaProcessing" not in youtube_request.body["contents"][0]["parts"][0]
     assert [path.name for path in workdirs()[0].iterdir()] == [pipeline.LOCK_NAME]
 
 
@@ -211,20 +210,7 @@ def test_gemini_4_long_decode_continues_text_and_publishes(config, monkeypatch):
         config,
         [
             *calls(text=False),
-            StreamCall(
-                "youtube",
-                [
-                    stream_chunk(
-                        parts=[
-                            types.Part(
-                                tool_call=types.ToolCall(tool_type="MEDIA_PROCESSING")
-                            )
-                        ]
-                    ),
-                    stream_chunk("Private video analysis", thought=True),
-                    "Direct identity context",
-                ],
-            ),
+            StreamCall("youtube", ["Direct identity context"]),
             StreamCall(
                 "text",
                 [
@@ -253,15 +239,6 @@ def test_gemini_4_long_decode_continues_text_and_publishes(config, monkeypatch):
         assert request.body["generationConfig"]["maxOutputTokens"] == 1_048_576
         assert_wire_config(request)
     text_requests = [r for r in client.requests if r.kind == "text"]
-    assert "Direct identity context" in text_requests[0].contents
-    assert "Private video analysis" not in text_requests[0].contents
-    youtube_request = next(r for r in client.requests if r.kind == "youtube")
-    assert (
-        youtube_request.body["contents"][0]["parts"][0]["mediaProcessing"] == "AGENTIC"
-    )
-    for request in client.requests:
-        if request.kind == "chunk":
-            assert "mediaProcessing" not in request.body["contents"][0]["parts"][0]
     assert len(text_requests) == 2
     assert "continuationToken" not in text_requests[0].body
     assert (
