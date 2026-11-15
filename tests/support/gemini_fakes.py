@@ -140,14 +140,24 @@ class _EventStream(httpx2.SyncByteStream):
 
 
 def stream_chunk(
-    text=None, *, thought=False, finish_reason=None, grounding=False, urls=()
+    text=None,
+    *,
+    thought=False,
+    finish_reason=None,
+    continuation_token=None,
+    parts=None,
+    grounding=False,
+    urls=(),
 ):
     """Build SDK chunks without testing SDK representation details."""
     return types.GenerateContentResponse(
         candidates=[
             types.Candidate(
-                content=types.Content(parts=[types.Part(text=text, thought=thought)]),
+                content=types.Content(
+                    parts=parts or [types.Part(text=text, thought=thought)]
+                ),
                 finish_reason=finish_reason,
+                continuation_token=continuation_token,
                 grounding_metadata=types.GroundingMetadata(
                     web_search_queries=["speaker identities"]
                 )

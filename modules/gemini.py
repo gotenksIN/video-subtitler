@@ -23,6 +23,7 @@ DEFAULT_REFINE_MODEL = "gemini-4-hydrogen"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"
 REFINEMENT_THINKING_LEVEL = "high"
 MAX_OUTPUT_TOKENS = 65536
+GEMINI_4_MAX_OUTPUT_TOKENS = 1_048_576
 DEFAULT_AUDIO_REFINE_MODEL = "gemini-4-hydrogen"
 _AUDIO_REFINE_THINKING_LEVEL = "high"
 _AUDIO_REFINE_RESPONSE_CONTRACT = core.AUDIO_REFINE_RESPONSE_CONTRACT
@@ -43,9 +44,20 @@ def create_client(api_key, base_url):
     return genai.Client(**kwargs)
 
 
-def _build_content_config(*, thinking_level=None, **kwargs):
+def _normalize_model_name(model_name):
+    name = (model_name or "").strip().lower()
+    return name.removeprefix("models/").removeprefix("google/")
+
+
+def _max_output_tokens_for_model(model_name):
+    if _normalize_model_name(model_name).startswith("gemini-4"):
+        return GEMINI_4_MAX_OUTPUT_TOKENS
+    return MAX_OUTPUT_TOKENS
+
+
+def _build_content_config(*, model_name=None, thinking_level=None, **kwargs):
     """Build a config with AFC disabled for direct Models requests."""
-    kwargs.setdefault("max_output_tokens", MAX_OUTPUT_TOKENS)
+    kwargs.setdefault("max_output_tokens", _max_output_tokens_for_model(model_name))
     if thinking_level is not None and "thinking_config" not in kwargs:
         kwargs["thinking_config"] = _build_thinking_config(thinking_level)
     kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
@@ -91,9 +103,10 @@ def _sanitize_response_schema(model):
     return remove_additional_properties(schema)
 
 
-def _generate_content_config(thinking_level):
+def _generate_content_config(model_name, thinking_level):
     """Build the response configuration for chunk video generation."""
     return _build_content_config(
+        model_name=model_name,
         thinking_level=thinking_level,
         response_mime_type="application/json",
         response_schema=_sanitize_response_schema(core.SubtitleResponse),
@@ -241,7 +254,7 @@ def process_chunk(
                         types.Part.from_bytes(data=video_data, mime_type=chunk_mime),
                         prompt,
                     ],
-                    config=_generate_content_config(thinking_level),
+                    config=_generate_content_config(model_name, thinking_level),
                 )
                 # Only host response validation uses the chunk attempt budget.
                 try:
@@ -566,22 +579,25 @@ SCRIPT
 """
 
 
-def _build_research_config(thinking_level, ordinary_urls):
+def _build_research_config(model_name, thinking_level, ordinary_urls):
     """Build plain-text config with Google Search grounding."""
     tools = [types.Tool(google_search=types.GoogleSearch())]
     if ordinary_urls:
         tools.append(types.Tool(url_context=types.UrlContext()))
-    return _build_content_config(thinking_level=thinking_level, tools=tools)
+    return _build_content_config(
+        model_name=model_name, thinking_level=thinking_level, tools=tools
+    )
 
 
-def _build_youtube_analysis_config(thinking_level):
+def _build_youtube_analysis_config(model_name, thinking_level):
     """Build plain-text config for direct YouTube analysis without tools."""
-    return _build_content_config(thinking_level=thinking_level)
+    return _build_content_config(model_name=model_name, thinking_level=thinking_level)
 
 
-def _build_refinement_config(thinking_level):
+def _build_refinement_config(model_name, thinking_level):
     """Build structured config for script refinement without tools."""
     return _build_content_config(
+        model_name=model_name,
         thinking_level=thinking_level,
         response_mime_type="application/json",
         response_schema=_sanitize_response_schema(core.RefinementResponse),
@@ -755,6 +771,7 @@ def _run_preflight_context(
             youtube_urls=youtube_urls,
         )
         research_config = _build_research_config(
+            model_name=model_name,
             thinking_level=thinking_level,
             ordinary_urls=ordinary_urls,
         )
@@ -790,7 +807,7 @@ def _run_preflight_context(
             types.Part.from_uri(file_uri=url, mime_type="video/*")
             for url in youtube_urls
         ] + [youtube_prompt]
-        youtube_config = _build_youtube_analysis_config(thinking_level)
+        youtube_config = _build_youtube_analysis_config(model_name, thinking_level)
         with create_client(api_key, base_url) as client:
             youtube_text, _, _, _ = _read_stream(
                 client,
@@ -961,7 +978,7 @@ def global_refine_subtitles(
                 client,
                 model=model_name,
                 contents=request_prompt,
-                config=_build_refinement_config(thinking_level),
+                config=_build_refinement_config(model_name, thinking_level),
             )
             try:
                 refinements = core.RefinementResponse.model_validate_json(
@@ -1095,9 +1112,10 @@ Return one sparse patch object. Do not return the complete script.
 """
 
 
-def _audio_refinement_config():
+def _audio_refinement_config(model_name):
     """Build structured config for boundary audio refinement without tools."""
     return _build_content_config(
+        model_name=model_name,
         response_mime_type="application/json",
         response_schema=_sanitize_response_schema(core.AudioRefinementResponse),
         thinking_level=_AUDIO_REFINE_THINKING_LEVEL,
@@ -1136,7 +1154,7 @@ def _run_audio_refinement_request(
                 ),
                 prompt,
             ],
-            config=_audio_refinement_config(),
+            config=_audio_refinement_config(model),
         )
     try:
         return full_json_text, core.AudioRefinementResponse.model_validate_json(

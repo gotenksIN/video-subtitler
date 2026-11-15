@@ -135,8 +135,10 @@ It defaults to `high`.
 The `xhigh` level applies to `gemini-4-hydrogen` and is not supported on `gemini-4-carbon` or `gemini-4-argon`.
 The text refinement pass always uses `high`.
 The audio refinement pass always uses `high`.
-All five Gemini request types use `MAX_OUTPUT_TOKENS = 65536` through `_build_content_config()`.
-This shared output-token limit applies to chunk generation, Pass 0 web research and YouTube analysis, audio refinement, and text refinement.
+All five Gemini request types select a model-aware output-token limit through `_build_content_config()`.
+Gemini 4 models (`gemini-4*`) use `GEMINI_4_MAX_OUTPUT_TOKENS = 1_048_576`.
+Other models use `MAX_OUTPUT_TOKENS = 65536`.
+These limits apply to chunk generation, Pass 0 web research and YouTube analysis, audio refinement, and text refinement.
 Every request configured with a thinking level sets `include_thoughts=True`.
 Thought tokens stream in real time across the transport boundary.
 These tokens keep the HTTP streaming connection active.
@@ -247,7 +249,12 @@ Every client sets `http_options.retry_options` to `types.HttpRetryOptions()`, so
 Requests retain the SDK default `automatic_continuation=True`.
 When a response ends with `CONTINUATION`, the SDK sends the same request with its continuation token until generation finishes and exposes the continued stream to the host.
 Timeouts, SDK retries, and billing apply separately to each continuation hop, not once to the full logical request.
-Each hop retains the request's output-token configuration; `max_output_tokens` is not a host-enforced aggregate budget across continuation hops.
+Each hop preserves the request's `max_output_tokens`.
+On Gemini 4, values above 65536 enable long decode with continuation at 64K-token hop boundaries.
+The server enforces `max_output_tokens` as the combined thinking and output budget across all hops.
+Gemini 4 shares a 1,048,576-token context window across input, thinking, and output.
+The server dynamically caps the output budget at 1,048,576 minus input tokens.
+The host does not enforce an aggregate token budget.
 Continuation is separate from automatic function calling, which stays disabled.
 All five request types use one host stream reader.
 Transport failures, malformed SSE JSON, rate limits, and 5xx errors during stream consumption restart the request within a limit of 3 host attempts.
@@ -432,7 +439,7 @@ Request configuration:
 - An omitted `GenerationConfig.audio_refine_model` uses `config.model`.
 - Fixed thinking level: `HIGH`
 - Thought streaming enabled through `include_thoughts=True`
-- Max output tokens: `65536`
+- Max output tokens for the default model: `1048576` via long decode, capped at 1,048,576 minus input tokens.
 - Response MIME: `application/json` with `AudioRefinementResponse` schema.
 - Automatic function calling disabled explicitly via `_build_content_config()`.
 
@@ -524,7 +531,8 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
 
 ### Structured refinement (Pass 3)
 
-1. Model: `gemini-4-hydrogen` (thinking level `high`, `max_output_tokens: 65536`).
+1. Model: `gemini-4-hydrogen` (thinking level `high`, `max_output_tokens: 1048576`).
+   Long decode permits up to 1,048,576 output tokens minus input tokens.
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.

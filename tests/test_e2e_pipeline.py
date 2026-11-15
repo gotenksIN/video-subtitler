@@ -1,5 +1,6 @@
 """Complete generation capabilities with real media and one external Gemini fake."""
 
+import base64
 import json
 import shutil
 import subprocess
@@ -62,6 +63,21 @@ def run(monkeypatch, config, scenario):
 
 def workdirs():
     return sorted(Path(pipeline.CHUNK_ROOT).glob("*"))
+
+
+def assert_wire_config(request):
+    assert request.config.automatic_function_calling.disable is True
+    config = request.body["generationConfig"]
+    if "responseSchema" in config:
+        schema = json.dumps(config["responseSchema"])
+        for keyword in (
+            "additionalProperties",
+            "additional_properties",
+            "$defs",
+            "$ref",
+        ):
+            assert keyword not in schema
+        assert config["responseMimeType"] == "application/json"
 
 
 def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
@@ -160,7 +176,7 @@ def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
     }
     for request in client.requests:
         cfg = request.config
-        assert cfg.automatic_function_calling.disable is True
+        assert_wire_config(request)
         assert request.url.startswith(config.base_url + "/")
         assert request.headers["x-goog-api-key"] == "test-key"
         assert request.http_options.base_url == config.base_url
@@ -172,22 +188,66 @@ def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
             if request.kind == "chunk"
             else types.ThinkingLevel.HIGH
         )
-        if cfg.response_schema:
-            serialized = json.dumps(request.body["generationConfig"]["responseSchema"])
-            for keyword in (
-                "additionalProperties",
-                "additional_properties",
-                "$defs",
-                "$ref",
-            ):
-                assert keyword not in serialized
-            assert cfg.response_mime_type == "application/json"
         assert bool(cfg.tools) is (request.kind == "research")
     research_request = next(r for r in client.requests if r.kind == "research")
     assert any(tool.google_search is not None for tool in research_request.config.tools)
     assert any(tool.url_context is not None for tool in research_request.config.tools)
     youtube_request = next(r for r in client.requests if r.kind == "youtube")
     assert youtube_request.contents[0].file_data.file_uri == "https://youtu.be/example"
+    assert [path.name for path in workdirs()[0].iterdir()] == [pipeline.LOCK_NAME]
+
+
+def test_gemini_4_long_decode_continues_text_and_publishes(config, monkeypatch):
+    config = replace(
+        config,
+        model="MoDeLs/GeMiNi-4-carbon",
+        audio_refine_model="GoOgLe/GeMiNi-4-argon",
+        refine_model="gemini-4-hydrogen",
+        context_urls=("https://youtu.be/example",),
+    )
+    client = run(
+        monkeypatch,
+        config,
+        [
+            *calls(text=False),
+            StreamCall("youtube", ["Direct identity context"]),
+            StreamCall(
+                "text",
+                [
+                    stream_chunk("not JSON", thought=True),
+                    stream_chunk(
+                        '{"changes":[{"id":0,',
+                        finish_reason="CONTINUATION",
+                        continuation_token=b"hop-2-token",
+                    ),
+                ],
+            ),
+            StreamCall(
+                "text",
+                [stream_chunk('"text":"HOST: Corrected."}]}', finish_reason="STOP")],
+            ),
+        ],
+    )
+    assert {r.kind for r in client.requests} == {
+        "research",
+        "youtube",
+        "chunk",
+        "audio",
+        "text",
+    }
+    for request in client.requests:
+        assert request.body["generationConfig"]["maxOutputTokens"] == 1_048_576
+        assert_wire_config(request)
+    text_requests = [r for r in client.requests if r.kind == "text"]
+    assert len(text_requests) == 2
+    assert "continuationToken" not in text_requests[0].body
+    assert (
+        base64.b64decode(text_requests[1].body["continuationToken"]) == b"hop-2-token"
+    )
+    assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
+        "Host: Corrected.",
+        "Host: Hello.",
+    ]
     assert [path.name for path in workdirs()[0].iterdir()] == [pipeline.LOCK_NAME]
 
 
