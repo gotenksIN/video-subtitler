@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from modules import core, io, media
 
-_INLINE_VIDEO_WARNING_BYTES = 20 * 1024 * 1024
+_INLINE_VIDEO_WARNING_BYTES = 50 * 1024 * 1024
 THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 DEFAULT_CHUNK_MODEL = "gemini-4-hydrogen"
 DEFAULT_REFINE_MODEL = "gemini-4-hydrogen"
@@ -239,8 +239,9 @@ def process_chunk(
             video_data = f.read()
         if len(video_data) > _INLINE_VIDEO_WARNING_BYTES:
             io.log(
-                f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
-                "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
+                f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MiB. "
+                "Keep inline video below 50 MiB to allow base64 overhead toward "
+                "the 100 MB total inline request limit; reduce --chunk-dur if requests fail."
             )
 
         io.log(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
@@ -1179,8 +1180,9 @@ def _run_audio_refinement_request(
         audio_bytes = handle.read()
     if len(audio_bytes) > _INLINE_VIDEO_WARNING_BYTES:
         io.log(
-            f"Warning: {audio_path} is {len(audio_bytes) / 1024 / 1024:.1f} MB. "
-            "Gemini docs recommend inline audio below 20 MB; it will still be sent."
+            f"Warning: {audio_path} is {len(audio_bytes) / 1024 / 1024:.1f} MiB. "
+            "Keep inline audio below 50 MiB to allow base64 overhead toward "
+            "the 100 MB total inline request limit; it will still be sent."
         )
     with create_client(api_key, base_url) as client:
         io.log("Sending complete audio and script for boundary audio refinement...")

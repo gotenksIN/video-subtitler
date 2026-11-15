@@ -201,7 +201,8 @@ Single-chunk runs follow the audio-disabled rows regardless of `--disable-audio-
 - Boundary audio refinement requires an audio stream.
   Generation fails before splitting when the source has no audio and audio refinement is enabled.
   Pass `--disable-audio-refine` for silent video.
-- Keep inline chunk video and extracted audio payloads below 20 MiB.
+- Keep inline chunk video and extracted audio payloads below 50 MiB.
+  Base64 overhead counts toward the 100 MB total inline request limit.
   Reduce `--chunk-dur` if chunk uploads fail.
 - Create the output parent directory before running either CLI mode.
   The CLI writes errors to standard error, and failed runs keep the work directory under `temp_video_chunks/` for retry.
