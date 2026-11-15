@@ -14,7 +14,7 @@ MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 _SPEAKER_LABEL_BODY = r"[A-Z][\w'. -]{1,30}"
 _LINE_LABEL_PATTERN = rf"^[ \t]*(?i:{_SPEAKER_LABEL_BODY}):[ \t]*"
-_INLINE_LABEL_PATTERN = r"(?<!\S)[A-Z][\w'.-]*:[ \t]*"
+_INLINE_LABEL_PATTERN = r"(?<!\S)[A-Z](?:[\w'.-]*[\w.])?:[ \t]+(?=[^\n]*\w)"
 SPEAKER_LABEL_RE = re.compile(rf"^([ \t]*)({_SPEAKER_LABEL_BODY})(:[ \t]*)")
 REFINEMENT_LABEL_RE = re.compile(rf"(?m){_LINE_LABEL_PATTERN}|{_INLINE_LABEL_PATTERN}")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
@@ -222,7 +222,8 @@ def _refinement_dialogue_labels(text, cue_id, source_labels=()):
             re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
         )
         label_re = re.compile(
-            rf"(?m){_LINE_LABEL_PATTERN}|(?<!\S)(?i:{names}):[ \t]*|{_INLINE_LABEL_PATTERN}",
+            rf"(?m){_LINE_LABEL_PATTERN}|"
+            rf"(?<!\S)(?i:{names}):[ \t]+(?=[^\n]*\w)|{_INLINE_LABEL_PATTERN}",
         )
     else:
         label_re = REFINEMENT_LABEL_RE
