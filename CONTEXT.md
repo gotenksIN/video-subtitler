@@ -419,6 +419,9 @@ Publication boundary:
 
 Stitching offsets chunk-relative timestamps by each segment's actual `start` from `segments.csv` and sorts by start time.
 It loads each cached chunk through `gemini.load_cached_captions()` and uses its validated, clamped timestamps.
+Before boundary merging, it clamps each cue's end to the next segment's start and rounds absolute timestamps to milliseconds.
+It rejects intervals that become non-positive, without publishing the VTT.
+Pure-editorial boundary merges retain the later fragment's end after this clamp.
 If a required result cannot load, stitching fails before publishing the VTT.
 
 `merge_visual_boundary_fragments()` merges case-insensitive pure-editorial cues split at keyframe cuts:

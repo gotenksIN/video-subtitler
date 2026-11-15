@@ -80,6 +80,49 @@ def assert_wire_config(request):
         assert config["responseMimeType"] == "application/json"
 
 
+def test_stitch_clamps_rounded_boundaries_before_editorial_merging(
+    tmp_path, media_files
+):
+    rows = []
+    for index, (start, end) in enumerate(
+        ((0, 1.0006), (1.0006, 2.0012), (2.0012, 3.0012))
+    ):
+        name = f"chunk_{index:03d}.mp4"
+        shutil.copyfile(media_files["h264"], tmp_path / name)
+        rows.append(f"{name},{start},{end}\n")
+        captions = [
+            {"id": 0, "start": "0", "end": "1.001", "text": "[Banner]"},
+            {"id": 1, "start": "0", "end": "1.001", "text": f"Host: Chunk {index}"},
+        ]
+        if index == 1:
+            captions.append(
+                {"id": 2, "start": "0.999", "end": "1.001", "text": "Host: Brief"}
+            )
+        io.atomic_write_json(tmp_path / f"subtitle_chunk_{index:03d}.json", captions)
+    (tmp_path / "segments.csv").write_text("".join(rows), encoding="ascii")
+    output = tmp_path / "stitched.vtt"
+    pipeline.stitch(tmp_path, output)
+    cues = io.read_plain_vtt(output)
+    assert [(cue.start, cue.end) for cue in cues] == [
+        ("00:00:00.000", "00:00:03.001"),
+        ("00:00:00.000", "00:00:01.001"),
+        ("00:00:01.001", "00:00:02.001"),
+        ("00:00:02.000", "00:00:02.001"),
+        ("00:00:02.001", "00:00:03.001"),
+    ]
+    assert cues[0].raw_text == "[Banner]"
+    assert all(core.parse_time(cue.end) > core.parse_time(cue.start) for cue in cues)
+
+    previous = output.read_bytes()
+    io.atomic_write_json(
+        tmp_path / "subtitle_chunk_001.json",
+        [{"id": 0, "start": "1.000", "end": "1.001", "text": "Too late"}],
+    )
+    with pytest.raises(ValueError, match="non-positive stitched interval"):
+        pipeline.stitch(tmp_path, output)
+    assert output.read_bytes() == previous
+
+
 def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(
     config, media_files, monkeypatch
 ):
