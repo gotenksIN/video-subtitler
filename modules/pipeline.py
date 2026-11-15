@@ -340,7 +340,8 @@ def run_generation(config: GenerationConfig) -> None:
                     if not chunks:
                         raise RuntimeError("No video chunks were created")
                     boundaries = [chunk["start"] for chunk in chunks[1:]]
-                    if config.audio_refine and boundaries:
+                    audio_path = None
+                    if config.audio_refine and (boundaries or config.refine_text):
                         audio_path, audio_duration, source_duration, _cached = (
                             media.extract_complete_audio(
                                 config.video_path,
@@ -406,6 +407,7 @@ def run_generation(config: GenerationConfig) -> None:
                         source_title=source_title,
                         context_urls=context_urls,
                         preflight_context=preflight_context,
+                        audio_path=audio_path,
                     )
                 else:
                     published = core.canonicalize_speaker_casing(

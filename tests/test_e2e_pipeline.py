@@ -387,6 +387,11 @@ def test_refinement_toggle_matrix_and_programmatic_model_fallback(config, monkey
             *({"text"} if text else set()),
         }
         assert {r.model for r in client.requests} == {"generation-model"}
+        for request in client.requests:
+            if request.kind == "text":
+                parts = request.body["contents"][0]["parts"]
+                assert any("inlineData" in part for part in parts) is audio
+                assert_wire_config(request)
         assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
             ("Host: " if text else "HOST: ") + ("Repaired." if audio else "Hello."),
             "Host: Hello." if text else "HOST: Hello.",
@@ -414,9 +419,157 @@ def test_single_chunk_skips_audio_request_but_runs_text_refinement(config, monke
         ],
     )
     assert [r.kind for r in client.requests] == ["research", "chunk", "text"]
+    assert (
+        client.requests[-1].contents[0].inline_data.mime_type == media.AUDIO_MIME_TYPE
+    )
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
         "Car, the Garden: Hello.\nOPUS: Codec."
     ]
+
+
+@pytest.mark.parametrize(
+    "retry_conflict", [False, True], ids=["parse", "delete-conflict"]
+)
+def test_audio_text_refinement_retains_deletes_and_edits_across_surgical_retries(
+    config, monkeypatch, retry_conflict
+):
+    texts = [
+        "HOST: First.",
+        "HOST: First.",
+        "HOST: Secnd.",
+        "HOST: Third.",
+        "HOST: Third.",
+        "[?????]",
+        "HOST: Fourth.",
+    ]
+    client = run(
+        monkeypatch,
+        replace(config, chunk_dur=60),
+        [
+            research_call(),
+            StreamCall(
+                "chunk",
+                [
+                    json.dumps(
+                        {
+                            "captions": [
+                                {
+                                    "id": i,
+                                    "start": str(i / 10),
+                                    "end": str((i + 1) / 10),
+                                    "text": text,
+                                }
+                                for i, text in enumerate(texts)
+                            ]
+                        }
+                    )
+                ],
+            ),
+            StreamCall(
+                "text",
+                [
+                    json.dumps(
+                        {
+                            "changes": [
+                                {"id": 2, "text": "HOST: Second."},
+                                {"id": 4, "text": "Missing label"},
+                                {"id": 6, "text": "Missing label"},
+                            ],
+                            "deletedIds": [0, 3, 5],
+                        }
+                    )
+                ],
+            ),
+            StreamCall(
+                "text",
+                [
+                    json.dumps(
+                        {
+                            "changes": [{"id": 6, "text": "HOST: Fourth!"}],
+                            "deletedIds": [4],
+                        }
+                    )
+                    if retry_conflict
+                    else "not JSON"
+                ],
+            ),
+            StreamCall(
+                "text",
+                [
+                    json.dumps(
+                        {
+                            "changes": [
+                                {"id": 2, "text": "HOST: Stray overwrite."},
+                                {"id": 6, "text": "HOST: Fourth!"},
+                            ],
+                            "deletedIds": [],
+                        }
+                    )
+                ],
+            ),
+        ],
+    )
+    captions = io.read_plain_vtt(config.output_path)
+    assert [cue.raw_text for cue in captions] == [
+        "Host: First.",
+        "Host: Second.",
+        "Host: Third.",
+        "[?????]",
+        "Host: Fourth!",
+    ]
+    assert [cue.start for cue in captions] == [
+        core.format_time(i / 10) for i in (1, 2, 4, 5, 6)
+    ]
+    requests = [request for request in client.requests if request.kind == "text"]
+    assert len(requests) == 3
+    for request in requests:
+        assert_wire_config(request)
+        assert request.contents[0] == requests[0].contents[0]
+        assert request.contents[0].inline_data.mime_type == media.AUDIO_MIME_TYPE
+        assert request.contents[1].startswith(requests[0].contents[1])
+        assert (
+            "deletedIds"
+            in request.body["generationConfig"]["responseSchema"]["properties"]
+        )
+
+
+def test_text_only_refinement_retries_deletes_without_attaching_audio(
+    config, monkeypatch
+):
+    source = config.output_path.with_name("input.vtt")
+    source.write_text(
+        "WEBVTT\n\n00:00:00.000 --> 00:00:00.500\nHost: Hello.\n\n"
+        "00:00:00.500 --> 00:00:01.000\nHost: Hello.\n",
+        encoding="ascii",
+    )
+    client = ScriptedGeminiClient(
+        [
+            StreamCall("text", ['{"changes": [], "deletedIds": [0]}']),
+            text_call(),
+        ]
+    )
+    use_client(monkeypatch, client)
+    benchmark.run_text_refinement(
+        config,
+        "text-model",
+        source,
+        config.output_path,
+        "Source",
+        [],
+        core.PreflightContext(),
+    )
+    assert not client.pending
+    assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
+        "Host: Hello.",
+        "Host: Hello.",
+    ]
+    for request in client.requests:
+        assert_wire_config(request)
+        assert all(
+            "inlineData" not in part
+            for content in request.body["contents"]
+            for part in content["parts"]
+        )
 
 
 def test_silent_video_fails_before_api_when_audio_refinement_is_enabled(
@@ -663,11 +816,12 @@ def test_stream_and_validation_retries_discard_partial_answers(
             StreamCall(
                 "chunk", ['{"captions":[{"id":0,"start":"1","end":"0","text":"Bad"}]}']
             ),
+            chunk_call("Host: Too\nmany\nlines"),
             chunk_call(),
             chunk_call(),
         ],
     )
-    assert [r.kind for r in client.requests].count("chunk") == 5
+    assert [r.kind for r in client.requests].count("chunk") == 6
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
         "HOST: Hello.",
         "HOST: Hello.",
@@ -959,6 +1113,11 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
         "gen-b",
     }
     assert len(list(output.glob("*.vtt"))) == 4
+    text_request = next(
+        request for request in client.requests if request.kind == "text"
+    )
+    assert text_request.contents[0].inline_data.mime_type == media.AUDIO_MIME_TYPE
+    assert_wire_config(text_request)
     results = json.loads((output / "benchmark-results.json").read_text())
     assert len(results) == 2
     for result in results:
@@ -999,6 +1158,25 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
     assert all(not result["generation_cached"] for result in results)
     assert all(not result["preflight_cached"] for result in results)
     assert results[0]["audio_refine_cached"] is False
+
+    single = type(args)(
+        **{
+            **vars(args),
+            "chunk_dur": 60,
+            "output_dir": output.with_name("single-benchmark"),
+        }
+    )
+    single_client = ScriptedGeminiClient(
+        [research_call(), research_call(), chunk_call(), chunk_call(), text_call()]
+    )
+    use_client(monkeypatch, single_client)
+    benchmark.run_full_matrix(single)
+    assert not single_client.pending
+    assert not any(request.kind == "audio" for request in single_client.requests)
+    assert (
+        single_client.requests[-1].contents[0].inline_data.mime_type
+        == media.AUDIO_MIME_TYPE
+    )
     generation_cache = next(
         path
         for path in (output / "work").rglob("subtitle_chunk_000.json")

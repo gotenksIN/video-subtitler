@@ -38,6 +38,9 @@ def test_text_refinement_rejects_structural_mutations():
         ("Host: Hello world", "Host: Hello\n \nworld"),
         ("Host: Hello world", "Host: Hello\rworld"),
         ("Host: Hello", "Host: Hello\n\n"),
+        ("Host: Hello world again", "Host: Hello\nworld\nagain"),
+        ("[One]\n[Two]\n[Three]", "[One]\n[Two]\n[Three]\n[Four]"),
+        ("[One]\n[Two]\n[Three]", "[One]\n[Two]\n[Th\nree]"),
     ):
         with pytest.raises(ValueError):
             core.validate_refinement_changes(
@@ -180,6 +183,8 @@ def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
             "Na Young-seok: Reason for that\nactivity: preferring...",
         ),
         ("Host: Hello world", "Host: Hello\nworld\n"),
+        ("Host: Hello\nworld\nagain", "Host: Hello world\nagain"),
+        ("[One]\n[Two]\n[Three]", "[One]\n[Two]\n[Three]"),
     ):
         core.validate_refinement_changes(
             [core.RefinedCaption(id=0, text=replacement)], [source]
@@ -198,6 +203,37 @@ def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
         core.validate_refinement_changes(
             [core.RefinedCaption(id=0, text=replacement)], sources
         )
+
+
+def test_refinement_deletions_require_audio_and_surviving_adjacent_dialogue():
+    for sources, deleted, changes, has_audio, expected_deleted, expected_invalid in (
+        (["Host: Hello!", "Guest: HELLO."], [0], [], True, {0}, []),
+        (["A", "A", "A"], [0, 2], [], True, {0, 2}, []),
+        (["A", "A"], [0], [], False, set(), [0]),
+        (["[?????]", "[?????]"], [0], [], True, set(), [0]),
+        (["[...] Hello", "[...] Hello"], [0], [], True, set(), [0]),
+        (["[Echo] Hello", "[Echo] Hello"], [0], [], True, set(), [0]),
+        (["---", "---"], [0], [], True, set(), [0]),
+        (["Hello", "Goodbye"], [0], [], True, set(), [0]),
+        (["Hello", "[Title]", "Hello"], [0], [], True, set(), [0]),
+        (["A", "A", "A"], [0, 1, 2], [], True, set(), [0, 1, 2]),
+        (["Hello", "Hello"], [0, 0], [], True, set(), [0]),
+        (["Hello", "Hello"], [0], [(0, "Hello")], True, set(), [0]),
+        (["Hello"], [-1, 1], [], True, set(), []),
+    ):
+        response = core.RefinementResponse.model_validate(
+            {
+                "changes": [{"id": cue_id, "text": text} for cue_id, text in changes],
+                "deletedIds": deleted,
+            }
+        )
+        valid_changes, valid_deleted, invalid, error = (
+            core.partition_refinement_response(response, sources, has_audio=has_audio)
+        )
+        assert valid_deleted == expected_deleted
+        assert invalid == expected_invalid
+        assert bool(error) is (not bool(expected_deleted))
+        assert not valid_changes
 
 
 @pytest.mark.parametrize(
@@ -312,6 +348,13 @@ def test_caption_validation_clamps_sorts_and_preserves_text():
             "text": "  Host: Hello\nworld  ",
         },
     ]
+    visual = "[[One] Detail]\n[Two]\n[Three]"
+    assert (
+        core.validate_captions(
+            [core.Caption(id=0, start="0", end="1", text=visual)], 2
+        )[0]["text"]
+        == visual
+    )
 
 
 def test_caption_validation_rejects_invalid_intervals_ids_and_text():
@@ -327,6 +370,9 @@ def test_caption_validation_rejects_invalid_intervals_ids_and_text():
         ("0", "1", "A --> B"),
         ("0", "1", "[A"),
         ("0", "1", "A]"),
+        ("0", "1", "Host: One\ntwo\nthree"),
+        ("0", "1", "[One]\n[Two]\nHost: Three"),
+        ("0", "1", "[[One] Detail]\nHost: Two\nthree"),
     ):
         with pytest.raises(ValueError):
             core.validate_captions(

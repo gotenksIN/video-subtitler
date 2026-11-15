@@ -9,7 +9,7 @@ It uses an audio-first pipeline with four Gemini passes:
 1. A preflight pass researches participant identities and topic terminology before chunk generation.
 2. Stream-copy video chunks are subtitled concurrently with Gemini 4 Hydrogen.
 3. A boundary-limited audio pass listens to the complete extracted audio and repairs faults near chunk boundaries.
-4. A grounded text pass improves the complete subtitle script with the preflight research context.
+4. A grounded refinement pass improves the complete subtitle script with the preflight research context and optional complete audio.
 
 The design targets accurate speech timing, faithful translation, and useful on-screen text.
 It favors throughput and resumability.
@@ -41,7 +41,7 @@ flowchart TD
     C --> D[Validate first audio stream and source duration when enabled]
     D --> E[Parallel web research and YouTube analysis: store preflight_context.json]
     D --> F[Stream-copy contiguous video chunks]
-    F --> Q[Extract mono Opus when audio refinement has boundaries]
+    F --> Q[Extract mono Opus when audio is needed for Pass 2 or Pass 3]
     Q --> G[Generate chunk subtitles concurrently]
     E --> G
     G --> H[Stitch at actual segment offsets]
@@ -51,7 +51,7 @@ flowchart TD
     J -->|No| L[Use stitched VTT]
     K --> M{Text refinement enabled?}
     L --> M
-    M -->|Yes| N[Grounded text refinement with the preflight context]
+    M -->|Yes| N[Grounded refinement with preflight context and optional audio]
     M -->|No| O[Publish selected artifact atomically]
     N --> O
     O --> P[Clean completed work files]
@@ -153,9 +153,9 @@ Direct CLI defaults:
 - Text refinement enabled.
 - No `--context-url` values.
 
-`--disable-audio-refine` disables boundary audio repair.
+`--disable-audio-refine` disables boundary audio repair and makes Pass 3 text-only.
 `--disable-text-refine` disables global text refinement.
-`--refine-only` runs global text refinement directly on an input VTT file.
+`--refine-only` runs text-only global refinement directly on an input VTT file.
 
 ## Artifact publication matrix
 
@@ -168,7 +168,9 @@ Generation publishes one artifact based on the refinement toggles:
 | Disabled (`--disable-audio-refine`) | Enabled | Text-refined `stitched.vtt` |
 | Disabled (`--disable-audio-refine`) | Disabled (`--disable-text-refine`) | `stitched.vtt` |
 
-Single-chunk runs use the audio-disabled rows because they have no repair boundaries.
+Single-chunk runs skip Pass 2 because they have no repair boundaries.
+They pass stitched subtitles to Pass 3 with complete audio when audio refinement is enabled.
+Without Pass 3, they publish stitched subtitles directly.
 
 ## Video support
 
@@ -198,8 +200,11 @@ Audio refinement always selects the first audio stream, `0:a:0`.
 When audio refinement is enabled, the pipeline validates the inspected audio streams and duration while holding the work lock.
 The run fails before splitting or API calls when the source has no audio stream.
 It also rejects an invalid source duration before API calls.
-After splitting, a single-chunk run skips audio extraction and Pass 2 because it has no repair boundaries.
-It publishes stitched subtitles or passes them to text refinement.
+After splitting, the pipeline extracts audio when audio refinement is enabled and either repair boundaries exist or Pass 3 is enabled.
+A single-chunk run skips Pass 2, but still extracts audio for enabled Pass 3.
+When both repair boundaries and Pass 3 are absent, it publishes stitched subtitles without extracting audio.
+Passes 2 and 3 send audio inline with MIME type `audio/ogg`; they never upload files.
+Each request warns when inline audio exceeds 50 MiB and still sends the audio.
 
 Extraction command:
 
@@ -335,8 +340,9 @@ class RefinedCaption(BaseModel):
 
 
 class RefinementResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     changes: list[RefinedCaption]
+    deleted_ids: list[int] = Field(default_factory=list, alias="deletedIds")
 ```
 
 ### Preflight context: `PreflightContext` (`preflight-v1`)
@@ -373,7 +379,9 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - Rejects cues that collapse to non-positive intervals after rounding.
 - Rejects empty text, blank lines, reserved `-->` separators, and unmatched square brackets.
 - Removes one trailing newline and rejects additional trailing blank lines.
-- Preserves valid multiline cue text.
+- Rejects more than two lines unless the cue contains more than two complete outer bracketed visual fragments.
+  Chunk validation retries let the video worker split long spoken turns into separate timed cues.
+- Preserves valid multiline cue text within this guard.
 - Sorts captions by start time and ID.
 - Overlapping cues keep their canonical timing.
 
@@ -513,13 +521,15 @@ Only a validated response reaches the cache or output file.
 
 ## Global text refinement
 
-Refines the full script using grounded identity and terminology research.
+Refines the full script using grounded identity and terminology research, with complete audio when enabled.
+The pass receives no video.
+An omitted `audio_path`, `--disable-audio-refine`, or `--refine-only` keeps it text-only.
 
 ### Preflight context (Pass 0)
 
 `gemini.load_or_run_preflight_context()` produces and caches one `PreflightContext` before chunk generation.
 `pipeline.run_generation()` runs it after source validation, concurrently with splitting.
-As soon as splitting finishes, audio extraction runs alongside any remaining preflight work when audio refinement is enabled and boundaries exist.
+As soon as splitting finishes, audio extraction runs alongside any remaining preflight work when audio refinement is enabled and either boundaries exist or Pass 3 is enabled.
 Chunk generation waits for both media preparation and preflight context.
 It stores the result as `preflight_context.json` in the work directory.
 A valid cached file is reused on retry, so no research request repeats.
@@ -573,6 +583,10 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    Speaker identity follows this evidence hierarchy: explicit script evidence > Direct Video Identity Analysis > Grounded Identity Context.
    Direct video evidence overrides conflicting web summaries.
    Both context blocks rank below explicit script introductions and title cards.
+   When complete audio is available, its inline Part precedes the prompt on every attempt for implicit prefix cache reuse.
+   Audio voice continuity ranks below Pass 1 visual attribution, Pass 0 direct video analysis, and grounded identity context.
+   Audio may confirm an established `1:1` identity, but never establishes identity from voice timbre alone.
+   Ambiguous guests, cast members, unintroduced cameos, crew, and unlabeled dialogue keep their identity protections.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
     `--refine-only` works this way.
@@ -580,6 +594,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
 5. Tasks:
    1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
+      With audio, correct phonetic mishearings when audio and grounded names or terminology clearly establish the spoken content.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
       An existing single-person role or kinship label, such as `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Father:`, or `Daughter:`, may become a canonical name under the evidence hierarchy.
       Direct Video Identity Analysis, unambiguous Grounded Identity Context, or script continuity must establish an unambiguous `1:1` correspondence globally or within that timestamped scene.
@@ -598,8 +613,12 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
       Change proper-name romanization only when Pass 0 identity or terminology context establishes the canonical spelling under the evidence hierarchy, or when needed to correct an inconsistency clearly established within the script.
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
       Keep bracketed variety reactions, echo captions, punctuation graphics such as `[?????]`, and inline `[...]` markers intact rather than stripping them for reading speed.
-   6. Forbids retiming, merging, splitting, adding, or deleting cues.
+   6. Forbids retiming, merging, splitting, and adding cues.
+      Text-only runs also forbid deletions.
+      With audio, `deletedIds` may remove hallucinated adjacent duplicate dialogue cues, never genuine spoken repeats or editorial and mixed cues.
    7. Leave untouched cues unchanged, even when they exceed line-length guidance.
+      Exception: re-wrap source cues with more than two lines to at most two lines while preserving words, visual fragments, labels, and separate speaker turns.
+      More than two outer visual fragments may force extra lines, capped at the source fragment count.
       When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to at most two lines of no more than 42 characters each.
       Mixed cues and multi-speaker cues retain their visual content and separate turns within the two-line cue limit; the wrapping exception never permits a third line.
 6. Output: `RefinementResponse` applied atomically to target.
@@ -613,10 +632,18 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    Lowercase prose on continuation lines, including colon-ending text, does not introduce labels.
    Changed dialogue must not duplicate either adjacent source cue after removing graphics, speaker labels, punctuation, and casing.
    Unchanged dialogue and normalized dialogue shorter than four characters remain exempt.
+   Every replacement stays within two lines, or within the source outer visual fragment count when that count exceeds two.
+   Deletions require attached audio, unique in-range IDs, and no overlap with `changes`.
+   Every deleted source must classify as dialogue and have a nonempty normalized dialogue body matching an adjacent dialogue cue.
+   At least one cue in each contiguous duplicate run must remain undeleted.
+   Pure editorial cues such as `[?????]` and mixed cues with `[...]` markers cannot be deleted.
+   The host applies retained changes first, deletes retained IDs in reverse order, then canonicalizes speaker casing and saves atomically.
 7. The host makes up to 3 validation attempts, matching the chunk validation retry pattern.
    Malformed JSON, schema violations, and structural validation failures trigger corrective feedback on the next request.
    Structural feedback lists every invalid change with its cue ID, source text, proposed text, and validation error.
-   The host retains valid changes across retries and requests corrections only for failing in-range cue IDs.
+   The host retains valid changes and deletions across retries and requests corrections only for failing in-range cue IDs.
+   It validates the combined retained patch against the original script, including duplicate-run survival across attempts.
+   A retry deletion that removes the last survivor fails without discarding retained valid deletions.
    Omitted requested IDs keep their original source text, and unrelated retry edits cannot overwrite retained changes.
    Duplicate IDs invalidate both entries; out-of-range IDs remain validation failures.
    Parse failures preserve the pending correction scope.
@@ -684,7 +711,8 @@ Each generation model runs Pass 0 with thinking level `high`, including chunk-on
 Chunk prompts receive that model's grounded names as candidate identities.
 Text refinement reuses the context for its case's generation model.
 Chunk-only and audio-refined artifacts canonicalize speaker casing without grounded names.
-Single-chunk cases skip audio extraction and Pass 2.
+Audio-enabled cases pass complete audio to text refinement.
+Single-chunk cases skip Pass 2 but still extract audio for text refinement.
 Manifest hashing and generation input validation reuse pipeline helpers.
 Output filenames truncate sanitized model stems before their hash suffix so combined multi-model names stay within filesystem limits.
 Benchmark JSON records preflight, generation, audio, and text stage timings (summing them into `total_seconds`) alongside `preflight_cached`, `generation_cached`, and `audio_refine_cached` flags.

@@ -259,6 +259,7 @@ def run_text_refinement(
     source_title,
     context_urls,
     preflight_context,
+    audio_path=None,
 ):
     """Run global text refinement on input subtitles."""
     started = time.perf_counter()
@@ -272,6 +273,7 @@ def run_text_refinement(
         source_title=source_title,
         context_urls=context_urls,
         preflight_context=preflight_context,
+        audio_path=audio_path,
     )
     return time.perf_counter() - started
 
@@ -378,14 +380,13 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
         source_duration = source_inspection.duration
         if source_duration <= 0:
             raise RuntimeError("Source video duration must be positive and finite")
-        if boundaries:
-            audio_path, audio_duration, source_duration, _reused = (
-                media.extract_complete_audio(
-                    str(args.video_file),
-                    str(work_dir),
-                    source_inspection=source_inspection,
-                )
+        audio_path, audio_duration, source_duration, _reused = (
+            media.extract_complete_audio(
+                str(args.video_file),
+                str(work_dir),
+                source_inspection=source_inspection,
             )
+        )
 
     # 3. Chunk generation per unique generation model.
     generated_vtts = {}
@@ -503,6 +504,7 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
             source_title,
             context_urls,
             preflight_contexts[gen_model],
+            audio_path=audio_path if audio_model is not None else None,
         )
         gen_seconds = generation_timings[gen_model]
         audio_seconds = audio_refine_timings[(gen_model, audio_model)]

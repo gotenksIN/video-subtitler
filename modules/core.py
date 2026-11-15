@@ -55,11 +55,12 @@ class RefinedCaption(BaseModel):
 
 
 class RefinementResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     changes: list[RefinedCaption] = Field(
         description="List of subtitles to change. Only include ones that need changes."
     )
+    deleted_ids: list[int] = Field(default_factory=list, alias="deletedIds")
 
 
 class AudioRefinedCue(BaseModel):
@@ -209,12 +210,15 @@ def validate_captions(captions, chunk_duration):
                 f"{cap.start} --> {cap.end}"
             )
 
+        text = _validate_caption_text(cap.text)
+        if len(text.splitlines()) > 2 and len(_visual_fragment_strings(text)) <= 2:
+            raise ValueError(f"Caption id={cap.id} exceeds two lines")
         validated.append(
             {
                 "id": cap.id,
                 "start": canonical_start,
                 "end": canonical_end,
-                "text": _validate_caption_text(cap.text),
+                "text": text,
             }
         )
 
@@ -323,6 +327,10 @@ def partition_refinement_changes(changes, source_texts, allowed_ids=None):
             if not change.text.strip():
                 raise ValueError(f"subtitle ID {change.id} has empty text")
             change.text = _validate_caption_text(change.text)
+            if len(change.text.splitlines()) > max(
+                2, len(_visual_fragment_strings(source))
+            ):
+                raise ValueError(f"subtitle ID {change.id} exceeds the line limit")
             if _has_unmatched_brackets(change.text):
                 raise ValueError(f"subtitle ID {change.id} has unmatched brackets")
             if classify_cue_text(change.text) != classify_cue_text(source):
@@ -374,6 +382,59 @@ def partition_refinement_changes(changes, source_texts, allowed_ids=None):
                 f"Source text: {source!r}\nProposed text: {proposed!r}"
             )
     return valid_by_id, invalid_ids, "\n\n".join(failures) or None
+
+
+def partition_refinement_response(
+    response, source_texts, *, has_audio=False, retained_deleted_ids=()
+):
+    """Partition edits and audio-backed duplicate deletions against source cues."""
+    valid_changes, invalid_ids, change_error = partition_refinement_changes(
+        response.changes, source_texts
+    )
+    failures = [change_error] if change_error else []
+    valid_deleted = set()
+    retained_deleted_ids = set(retained_deleted_ids)
+    counts = Counter(response.deleted_ids)
+    changed_ids = {change.id for change in response.changes}
+    kinds = [classify_cue_text(text) for text in source_texts]
+    keys = [_dialogue_body_key(text) for text in source_texts]
+    for cue_id in counts:
+        try:
+            if not 0 <= cue_id < len(source_texts):
+                raise ValueError("is out of range")
+            if counts[cue_id] > 1:
+                raise ValueError("is duplicated in deletedIds")
+            if cue_id in changed_ids:
+                raise ValueError("appears in both changes and deletedIds")
+            if not has_audio:
+                raise ValueError("requires attached audio for deletion")
+            if kinds[cue_id] != "dialogue":
+                raise ValueError("cannot delete editorial or mixed cues")
+            key = keys[cue_id]
+            left = right = cue_id
+            while left > 0 and kinds[left - 1] == "dialogue" and keys[left - 1] == key:
+                left -= 1
+            while (
+                right + 1 < len(source_texts)
+                and kinds[right + 1] == "dialogue"
+                and keys[right + 1] == key
+            ):
+                right += 1
+            if not key or left == right:
+                raise ValueError("has no adjacent duplicate dialogue")
+            run_ids = range(left, right + 1)
+            if all(index in counts for index in run_ids) and (
+                cue_id not in retained_deleted_ids
+                or all(index in retained_deleted_ids for index in run_ids)
+            ):
+                raise ValueError("cannot delete every cue in a duplicate run")
+            valid_deleted.add(cue_id)
+        except ValueError as error:
+            valid_changes.pop(cue_id, None)
+            if 0 <= cue_id < len(source_texts) and cue_id not in invalid_ids:
+                invalid_ids.append(cue_id)
+            failures.append(f"subtitle ID {cue_id} in deletedIds: {error}")
+    return valid_changes, valid_deleted, invalid_ids, "\n\n".join(failures) or None
 
 
 def validate_context_urls(urls):

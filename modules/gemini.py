@@ -464,6 +464,7 @@ def _build_refinement_prompt(
     identity_context=None,
     terminology_context=None,
     youtube_context=None,
+    has_audio=False,
 ):
     source_block = ""
     if source_title:
@@ -508,12 +509,51 @@ def _build_refinement_prompt(
             "and canonical proper-name spelling only. It must never change "
             "dialogue meaning, events, or facts.\n"
         )
-    return f"""You are a conservative subtitle proofreader applying a minimal text-only patch.
+    evidence_rules = (
+        "The supplied subtitle script is authoritative. You cannot hear the source "
+        "audio or see the source video. Do not reconstruct source content that is "
+        "not established by the script.\n"
+        "For speaker identity, rank evidence: Explicit script evidence > "
+        "Direct Video Identity Analysis > Grounded Identity Context."
+    )
+    deletion_rule = "Do not merge, split, reorder, add, or remove subtitle entries."
+    deletion_output = (
+        'Return an empty "deletedIds" list. Text-only runs cannot delete cues.'
+    )
+    if has_audio:
+        evidence_rules = (
+            "Listen to the attached complete audio alongside the authoritative "
+            "subtitle script. You have no video in this pass.\n"
+            "For speaker identity, rank evidence: Pass 1 visual attribution and "
+            "explicit script evidence > Pass 0 Direct Video Identity Analysis > "
+            "Grounded Identity Context > audio voice continuity.\n"
+            "Correct off-script phonetic mishearings only when the audio and "
+            "grounded names or terminology clearly establish the correction. "
+            "Audio may confirm 1:1 speaker continuity for an already established "
+            "identity, but cannot override visual attribution or guess identities "
+            "from voice timbre alone. Never use voice timbre to name Guest:, "
+            "Cast Member:, unintroduced cameos such as Officer:, or crew. "
+            "Never label unlabeled lines."
+        )
+        deletion_rule = (
+            "Do not merge, split, reorder, or add entries. The sole deletion "
+            'exception is "deletedIds": delete an adjacent duplicate dialogue cue '
+            "only when the audio confirms it is hallucinated, not a genuine "
+            "spoken repeat. Its dialogue body must match an adjacent dialogue "
+            "cue after ignoring labels, punctuation, and casing. Keep at least "
+            "one cue in each contiguous duplicate run. Never delete editorial "
+            "or mixed cues, including [?????], [...] or bracketed echo captions. "
+            'A deleted ID must not also appear in "changes".'
+        )
+        deletion_output = (
+            'Return "deletedIds" with only audio-confirmed hallucinated adjacent '
+            "duplicate dialogue IDs, or an empty list."
+        )
+    return f"""You are a conservative subtitle proofreader applying a minimal patch.
 
 Below is the complete subtitle script for a video.
 
-The supplied subtitle script is authoritative. You cannot hear the source audio or see the source video. Do not reconstruct source content that is not established by the script.
-For speaker identity, rank evidence: Explicit script evidence > Direct Video Identity Analysis > Grounded Identity Context.
+{evidence_rules}
 {source_block}{identity_block}{terminology_block}{youtube_block}For every cue, assume by default that no change is needed. Return a change only when the correction is objective, clearly supported, and necessary.
 
 A grammatical, intelligible, and faithful line must remain unchanged. Do not rewrite, paraphrase, summarize, embellish, or stylistically improve acceptable dialogue.
@@ -536,13 +576,13 @@ SEMANTIC AND TEXT PRESERVATION
 9. Do not replace words with synonyms.
 10. Do not make dialogue smoother, punchier, more literary, more conversational, or more idiomatic when the existing English is understandable.
 11. Do not add adjectives, claims, emphasis, explanations, or implied meaning.
-12. Do not remove repetition or conversational fragments.
-13. Do not change text merely to satisfy subtitle line-length guidance.
-14. Never delete a question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
+12. Do not remove genuine spoken repetition or conversational fragments.
+13. Do not change text merely to satisfy subtitle line-length guidance. Exception: re-wrap any source cue with more than two lines to at most two lines, preserving words, [bracketed] fragments, labels, and separate speaker turns. If more than two outer visual fragments force extra lines, use no more lines than that fragment count.
+14. Never delete a genuine question, answer, joke, reaction, product detail, qualification, or meaningful on-screen caption.
 15. Never replace a line with a duplicate or paraphrase of an adjacent line.
 16. Never add dialogue, facts, product qualities, marketing claims, relationships, jokes, or events.
 17. If a proposed correction is uncertain, leave the line unchanged.
-18. Do not merge, split, reorder, add, or remove subtitle entries.
+18. {deletion_rule}
 19. Do not alter IDs or timestamps.
 
 TERMINOLOGY AND LOCALIZATION
@@ -563,7 +603,7 @@ SPEAKER LABELS
 30. Do not propagate a speaker label from one cue to another, even when you rename a role label such as "Host:" on one cue and the next cue continues that same speaker's sentence or turn without a label.
 31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate or resolve existing labels only under Rule 32, never create labels or serve as an attribution map for unlabeled dialogue.
 32. Correct an existing label only when its spelling, casing, or identity is clearly established under the evidence hierarchy above. Resolve an existing single-person role or kinship label (Coach:, Chef:, Judge:, Prosecutor:, Father:, Daughter:) to its canonical named speaker when DIRECT VIDEO IDENTITY ANALYSIS, unambiguous GROUNDED IDENTITY CONTEXT, or script continuity establishes an unambiguous 1:1 correspondence globally or within that timestamped scene. Unify isolated chunk-level roles (Host:, Referee:), alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same 1:1 correspondence; a chunk boundary alone does not justify retaining an inconsistent label. Never resolve a role label such as Host: to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange. When the named host is already active in that scene, require script and turn continuity to resolve Host:, not Pass 0's Host title alone. When an isolated chunk misapplies a generic fallback such as Host: to another speaker even though the program's actual host is already attributed by name in that scene, unify it only if cross-boundary turn continuity and neighboring chunks unambiguously establish that same named speaker rather than an off-camera Producer: or Staff:. Never replace shared or ambiguous multi-person roles (Guest: with multiple guests, Cast Member:, Panelist:, Student:, Member:), collective labels (Audience:, Fans:), unintroduced incidental speakers or cameos (Officer:, Passerby:), or unverified crew (Producer:, PD:, Staff:, Interviewer:) with personal names. Keep unlabeled lines unlabeled.
-33. Never remove an existing speaker label from any cue, even when that cue continues a sentence mid-phrase from the preceding cue with the same speaker label repeated. Correct existing labels only as authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. This exception remains subordinate to the two-line cue limit for mixed cues ("[Editorial]" followed by "Speaker: Dialogue") and multi-speaker cues; never add a third line or combine distinct turns. Do not add or remove labels for formatting convenience.
+33. Never remove an existing speaker label from a retained cue, even when that cue continues a sentence mid-phrase from the preceding cue with the same speaker label repeated. Correct existing labels only as authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. Also apply Rule 13's required re-wrap exception to every source cue with more than two lines, preserving [bracketed] fragments and separate speaker turns. Do not add or remove labels for formatting convenience.
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.
 
@@ -582,11 +622,12 @@ ON-SCREEN AND MIXED CUES
 FORMATTING AND OUTPUT
 
 45. Preserve line breaks when they distinguish multiple speakers.
-46. Rule 13 forbids changes solely for line length: leave untouched cues unchanged. When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to no more than 42 characters per line and at most two lines. The two-line limit for the whole cue takes precedence for mixed cues and multi-speaker cues; preserve their visual content and separate turns, and never add a third line.
+46. Rule 13 forbids changes solely for line length, except that every source cue with more than two lines must be re-wrapped to at most two lines while preserving [bracketed] fragments and separate speaker turns. More than two outer visual fragments may force extra lines, capped at that fragment count. When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to no more than 42 characters per line and at most two lines. Preserve mixed-cue visual content and separate speaker turns.
 47. Return a JSON object containing a "changes" list with only entries that genuinely require correction.
 48. Each change must contain the existing numeric subtitle "id" and the complete corrected "text".
 49. Do not return unchanged entries.
 50. Do not return timestamps, markdown, or explanations.
+51. {deletion_output}
 
 SCRIPT
 
@@ -951,6 +992,7 @@ def global_refine_subtitles(
     source_title=None,
     context_urls=None,
     preflight_context: core.PreflightContext | None = None,
+    audio_path=None,
 ):
     """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
@@ -980,11 +1022,17 @@ def global_refine_subtitles(
         identity_context=preflight_context.identity_context,
         terminology_context=preflight_context.terminology_context,
         youtube_context=preflight_context.youtube_context,
+        has_audio=bool(audio_path),
     )
     source_texts = [cue.raw_text for cue in vtt]
     request_prompt = prompt
     retained: dict[int, core.RefinedCaption] = {}
+    retained_deleted: set[int] = set()
     pending_ids: list[int] | None = None
+    audio_part = _inline_audio_part(audio_path) if audio_path else None
+    empty_response = (
+        '{"changes": [], "deletedIds": []}' if audio_path else '{"changes": []}'
+    )
 
     with create_client(api_key, base_url) as client:
         io.log(
@@ -994,7 +1042,7 @@ def global_refine_subtitles(
             full_json_text, _, _, _ = _read_stream(
                 client,
                 model=model_name,
-                contents=request_prompt,
+                contents=[audio_part, request_prompt] if audio_part else request_prompt,
                 config=_build_refinement_config(model_name, thinking_level),
             )
             try:
@@ -1005,17 +1053,32 @@ def global_refine_subtitles(
                 error = str(parse_error)
                 invalid_ids = []
             else:
-                valid_by_id, invalid_ids, error = core.partition_refinement_changes(
-                    refinements.changes, source_texts, allowed_ids=pending_ids
+                if pending_ids is not None:
+                    refinements = core.RefinementResponse(
+                        changes=list(retained.values())
+                        + [
+                            change
+                            for change in refinements.changes
+                            if change.id in pending_ids
+                            or not 0 <= change.id < len(source_texts)
+                        ],
+                        deleted_ids=list(retained_deleted)
+                        + [
+                            cue_id
+                            for cue_id in refinements.deleted_ids
+                            if cue_id in pending_ids
+                            or not 0 <= cue_id < len(source_texts)
+                        ],
+                    )
+                retained, retained_deleted, invalid_ids, error = (
+                    core.partition_refinement_response(
+                        refinements,
+                        source_texts,
+                        has_audio=bool(audio_path),
+                        retained_deleted_ids=retained_deleted,
+                    )
                 )
-                retained.update(valid_by_id)
-                if pending_ids is None:
-                    if invalid_ids or retained:
-                        pending_ids = invalid_ids
-                else:
-                    pending_ids = [
-                        cue_id for cue_id in pending_ids if cue_id in invalid_ids
-                    ]
+                pending_ids = invalid_ids
                 if error is None:
                     break
             if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
@@ -1037,10 +1100,11 @@ def global_refine_subtitles(
             )
             if pending_ids:
                 request_prompt += (
-                    "Valid changes from the previous response are already retained. "
+                    "Valid changes and deletedIds from previous responses are retained. "
                     "Fix all reported violations against the original source cues. "
-                    'Return only a valid RefinementResponse JSON object whose "changes" '
-                    f"list contains corrected entries only for subtitle ID(s) {pending_ids}, "
+                    'Return a valid RefinementResponse whose "changes" '
+                    f"{'and deletedIds lists contain' if audio_path else 'list contains'} "
+                    f"corrected entries only for subtitle ID(s) {pending_ids}, "
                     "omitting any of those IDs that should remain unchanged. "
                     "Do not include any other subtitle IDs."
                 )
@@ -1048,7 +1112,7 @@ def global_refine_subtitles(
                 request_prompt += (
                     "All valid changes are already retained. "
                     "No pending subtitle IDs remain. "
-                    'Return only {"changes": []}. '
+                    f"Return only {empty_response}. "
                     "Do not include out-of-range or other subtitle IDs."
                 )
             else:
@@ -1056,7 +1120,8 @@ def global_refine_subtitles(
                     "Fix all reported violations against the original source cues. "
                     "Do not emit out-of-range subtitle IDs. "
                     "Return only a valid RefinementResponse JSON object with a "
-                    '"changes" list containing the complete corrected patch.'
+                    f'"changes" {"and deletedIds lists" if audio_path else "list"} '
+                    "containing the complete corrected patch."
                 )
             time.sleep(delay)
 
@@ -1065,6 +1130,8 @@ def global_refine_subtitles(
 
     for change in changes:
         vtt[change.id].text = change.text
+    for cue_id in sorted(retained_deleted, reverse=True):
+        del vtt.captions[cue_id]
 
     core.canonicalize_speaker_casing(vtt, preflight_context.grounded_names)
     io.atomic_save_vtt(vtt, output_vtt)
