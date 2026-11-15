@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -123,10 +124,10 @@ def _collect_api_results(futures):
         except errors.ClientError as error:
             if error.code in {400, 401, 403}:
                 raise
-            print(f"ERROR processing {chunk_name}: {error}")
+            io.log(f"ERROR processing {chunk_name}: {error}")
             failed.append(chunk_name)
         except Exception as e:  # noqa: BLE001 - Convert worker failures to results.
-            print(f"ERROR processing {chunk_name}: {e}")
+            io.log(f"ERROR processing {chunk_name}: {e}")
             failed.append(chunk_name)
     return failed
 
@@ -144,7 +145,7 @@ def process_chunks(
     candidate_names=None,
 ):
     """Process video chunks concurrently with a thread pool and collect failures."""
-    print(f"Processing {len(chunks)} chunks using {api_workers} workers...")
+    io.log(f"Processing {len(chunks)} chunks using {api_workers} workers...")
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=api_workers)
     try:
         futures = {
@@ -169,7 +170,7 @@ def process_chunks(
 
 def stitch(chunk_dir, output_vtt):
     """Stitch stream-copy chunk results into one VTT at segment offsets."""
-    print("Stitching chunks into final VTT...")
+    io.log("Stitching chunks into final VTT...")
     chunks = media.list_chunks(chunk_dir)
     boundary_starts = [chunk["start"] for chunk in chunks[1:]]
     chunk_by_index = {chunk["idx"]: chunk for chunk in chunks}
@@ -233,7 +234,7 @@ def stitch(chunk_dir, output_vtt):
         )
 
     io.atomic_save_vtt(final_vtt, output_vtt)
-    print(
+    io.log(
         f"Successfully saved to {output_vtt} with {len(final_vtt.captions)} total captions."
     )
     return output_vtt
@@ -285,119 +286,129 @@ def run_generation(config: GenerationConfig) -> None:
 
     try:
         lock_file = acquire_lock(chunk_dir)
-        print(f"Using work directory: {chunk_dir}")
+        with io.work_log(chunk_dir):
+            try:
+                io.log(f"Using work directory: {chunk_dir}")
 
-        if config.audio_refine:
-            if not source_inspection.audio_streams:
-                raise RuntimeError(
-                    "Failed to extract complete audio. "
-                    "The source may not contain an audio stream."
-                )
-            source_duration = source_inspection.duration
-            if source_duration <= 0:
-                raise RuntimeError("Source video duration must be positive and finite")
+                if config.audio_refine:
+                    if not source_inspection.audio_streams:
+                        raise RuntimeError(
+                            "Failed to extract complete audio. "
+                            "The source may not contain an audio stream."
+                        )
+                    source_duration = source_inspection.duration
+                    if source_duration <= 0:
+                        raise RuntimeError(
+                            "Source video duration must be positive and finite"
+                        )
 
-        # Pass 0: Preflight identity and research context
-        preflight_identity = {
-            "source_title": source_title,
-            "context_urls": context_urls,
-            "model_name": config.model,
-            "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
-        }
+                # Pass 0: Preflight identity and research context
+                preflight_identity = {
+                    "source_title": source_title,
+                    "context_urls": context_urls,
+                    "model_name": config.model,
+                    "thinking_level": gemini.REFINEMENT_THINKING_LEVEL,
+                }
 
-        # Settle preflight workers before the outer finally releases the lock.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            preflight_future = executor.submit(
-                gemini.load_or_run_preflight_context,
-                chunk_dir,
-                api_key=config.api_key,
-                base_url=config.base_url,
-                **preflight_identity,
-            )
-            media.split_video(
-                str(config.video_path), chunk_dir, config.chunk_dur, manifest
-            )
-
-            chunks = media.list_chunks(chunk_dir)
-            if not chunks:
-                raise RuntimeError("No video chunks were created")
-            boundaries = [chunk["start"] for chunk in chunks[1:]]
-            if config.audio_refine and boundaries:
-                audio_path, audio_duration, source_duration, _cached = (
-                    media.extract_complete_audio(
-                        config.video_path,
+                # Settle preflight workers before closing the log and releasing the lock.
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    preflight_future = executor.submit(
+                        gemini.load_or_run_preflight_context,
                         chunk_dir,
-                        source_inspection=source_inspection,
+                        api_key=config.api_key,
+                        base_url=config.base_url,
+                        **preflight_identity,
                     )
+                    media.split_video(
+                        str(config.video_path), chunk_dir, config.chunk_dur, manifest
+                    )
+
+                    chunks = media.list_chunks(chunk_dir)
+                    if not chunks:
+                        raise RuntimeError("No video chunks were created")
+                    boundaries = [chunk["start"] for chunk in chunks[1:]]
+                    if config.audio_refine and boundaries:
+                        audio_path, audio_duration, source_duration, _cached = (
+                            media.extract_complete_audio(
+                                config.video_path,
+                                chunk_dir,
+                                source_inspection=source_inspection,
+                            )
+                        )
+                    preflight_context = preflight_future.result()
+
+                # 2. Process chunks concurrently through one API worker pool.
+                failed = process_chunks(
+                    config.api_key,
+                    config.base_url,
+                    chunk_dir,
+                    chunks,
+                    config.workers,
+                    config.model,
+                    manifest["chunk_mime"],
+                    config.chunk_thinking_level,
+                    source_title,
+                    candidate_names=preflight_context.grounded_names,
                 )
-            preflight_context = preflight_future.result()
+                if failed:
+                    raise RuntimeError(
+                        f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
+                        f"Keeping {chunk_dir} so you can retry."
+                    )
 
-        # 2. Process chunks concurrently through one API worker pool.
-        failed = process_chunks(
-            config.api_key,
-            config.base_url,
-            chunk_dir,
-            chunks,
-            config.workers,
-            config.model,
-            manifest["chunk_mime"],
-            config.chunk_thinking_level,
-            source_title,
-            candidate_names=preflight_context.grounded_names,
-        )
-        if failed:
-            raise RuntimeError(
-                f"Failed to process {len(failed)} chunk(s): {', '.join(sorted(failed))}. "
-                f"Keeping {chunk_dir} so you can retry."
-            )
+                # 3. Stitch chunks at actual segment offsets into a work artifact.
+                stitched_vtt = Path(chunk_dir) / "stitched.vtt"
+                stitch(chunk_dir, stitched_vtt)
+                current_vtt = stitched_vtt
 
-        # 3. Stitch chunks at actual segment offsets into a work artifact.
-        stitched_vtt = Path(chunk_dir) / "stitched.vtt"
-        stitch(chunk_dir, stitched_vtt)
-        current_vtt = stitched_vtt
+                # 4. Boundary-limited audio refinement over the complete audio.
+                if config.audio_refine and boundaries:
+                    audio_refined_vtt = Path(chunk_dir) / "audio_refined.vtt"
+                    gemini.boundary_audio_refine_subtitles(
+                        stitched_vtt=stitched_vtt,
+                        audio_path=audio_path,
+                        audio_duration=audio_duration,
+                        source_duration=source_duration,
+                        boundaries=boundaries,
+                        work_dir=chunk_dir,
+                        output_vtt=audio_refined_vtt,
+                        api_key=config.api_key,
+                        base_url=config.base_url,
+                        model_name=config.audio_refine_model or config.model,
+                        source_title=source_title,
+                    )
+                    current_vtt = audio_refined_vtt
 
-        # 4. Boundary-limited audio refinement over the complete audio.
-        if config.audio_refine and boundaries:
-            audio_refined_vtt = Path(chunk_dir) / "audio_refined.vtt"
-            gemini.boundary_audio_refine_subtitles(
-                stitched_vtt=stitched_vtt,
-                audio_path=audio_path,
-                audio_duration=audio_duration,
-                source_duration=source_duration,
-                boundaries=boundaries,
-                work_dir=chunk_dir,
-                output_vtt=audio_refined_vtt,
-                api_key=config.api_key,
-                base_url=config.base_url,
-                model_name=config.audio_refine_model or config.model,
-                source_title=source_title,
-            )
-            current_vtt = audio_refined_vtt
+                # 5. Global text refinement or direct atomic publication.
+                if config.refine_text:
+                    gemini.global_refine_subtitles(
+                        input_vtt=str(current_vtt),
+                        output_vtt=str(config.output_path),
+                        api_key=config.api_key,
+                        base_url=config.base_url,
+                        model_name=config.refine_model or config.model,
+                        thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
+                        source_title=source_title,
+                        context_urls=context_urls,
+                        preflight_context=preflight_context,
+                    )
+                else:
+                    published = core.canonicalize_speaker_casing(
+                        io.read_plain_vtt(current_vtt)
+                    )
+                    io.atomic_save_vtt(published, config.output_path)
 
-        # 5. Global text refinement or direct atomic publication.
-        if config.refine_text:
-            gemini.global_refine_subtitles(
-                input_vtt=str(current_vtt),
-                output_vtt=str(config.output_path),
-                api_key=config.api_key,
-                base_url=config.base_url,
-                model_name=config.refine_model or config.model,
-                thinking_level=gemini.REFINEMENT_THINKING_LEVEL,
-                source_title=source_title,
-                context_urls=context_urls,
-                preflight_context=preflight_context,
-            )
-        else:
-            published = core.canonicalize_speaker_casing(io.read_plain_vtt(current_vtt))
-            io.atomic_save_vtt(published, config.output_path)
-
-        completed = True
+                completed = True
+            except BaseException as error:
+                io.log(f"ERROR: {error}")
+                io.log_file(traceback.format_exc())
+                raise
 
     finally:
         try:
             # 6. Cleanup.
             if completed and os.path.exists(chunk_dir):
-                print(f"Cleaning up temporary directory: {chunk_dir}")
+                io.log(f"Cleaning up temporary directory: {chunk_dir}")
                 _clean_completed_work(chunk_dir)
         finally:
             release_lock(lock_file)

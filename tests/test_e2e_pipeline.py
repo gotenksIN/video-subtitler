@@ -691,6 +691,17 @@ def test_text_validation_retries_report_all_invalid_cues(
         assert config.output_path.read_text() == "previous"
         assert (workdirs()[0] / "subtitle_chunk_000.json").is_file()
         assert (workdirs()[0] / "preflight_context.json").is_file()
+        run_log = (workdirs()[0] / io.LOG_NAME).read_text(encoding="utf-8")
+        for expected in (
+            "Warning: Global refinement attempt 1 failed",
+            "Warning: Global refinement attempt 2 failed",
+            "ERROR:",
+            "Traceback (most recent call last):",
+            "Raw response:\n",
+            '{"changes":',
+            json.dumps({"changes": invalid}),
+        ):
+            assert expected in run_log
     else:
         pipeline.run_generation(selected)
         captions = io.read_plain_vtt(config.output_path)
@@ -705,6 +716,7 @@ def test_text_validation_retries_report_all_invalid_cues(
             (core.format_time(index * 0.3), core.format_time((index + 1) * 0.3))
             for index in range(len(sources))
         ]
+        assert {path.name for path in workdirs()[0].iterdir()} == {pipeline.LOCK_NAME}
     assert not client.pending
     requests = [request for request in client.requests if request.kind == "text"]
     assert len(requests) == 3
@@ -722,7 +734,10 @@ def test_text_validation_retries_report_all_invalid_cues(
         schema = json.dumps(request.body["generationConfig"]["responseSchema"])
         for keyword in ("additionalProperties", "$defs", "$ref"):
             assert keyword not in schema
-    assert "retrying in 1s" in capsys.readouterr().out
+    console = capsys.readouterr().out
+    assert "retrying in 1s" in console
+    if not exhaust:
+        assert "Raw response:" not in console
 
 
 def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(
@@ -751,6 +766,9 @@ def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(
         pipeline.run_generation(config)
     assert config.output_path.read_text() == "previous"
     assert not (workdirs()[0] / "audio_refinement.json").exists()
+    run_log = (workdirs()[0] / io.LOG_NAME).read_text(encoding="utf-8")
+    assert "unknown source IDs" in run_log
+    assert "Raw response:" in run_log
     assert not any(r.kind == "text" for r in client.requests)
 
 

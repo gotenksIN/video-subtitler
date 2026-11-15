@@ -136,18 +136,18 @@ def extract_complete_audio(
         cached_duration = _extracted_audio_duration(target)
         if cached_duration:
             if _audio_duration_consistent(cached_duration, source_duration):
-                print("Complete audio already exists, skipping extraction.")
+                io.log("Complete audio already exists, skipping extraction.")
                 return str(target), cached_duration, source_duration, True
-            print(
+            io.log(
                 "Cached extracted audio is inconsistent with the source; removing it."
             )
         else:
-            print("Cached extracted audio is invalid; removing it.")
+            io.log("Cached extracted audio is invalid; removing it.")
         target.unlink(missing_ok=True)
 
     tmp_path = Path(f"{target}.tmp")
     tmp_path.unlink(missing_ok=True)
-    print("Extracting complete mono Ogg Opus audio...")
+    io.log("Extracting complete mono Ogg Opus audio...")
     cmd = [
         "ffmpeg",
         "-y",
@@ -204,7 +204,7 @@ def extract_complete_audio(
         tmp_path.unlink(missing_ok=True)
         raise
 
-    print("Complete audio extraction finished.")
+    io.log("Complete audio extraction finished.")
     return str(target), duration, source_duration, False
 
 
@@ -222,7 +222,7 @@ def _clean_incomplete_split(chunk_dir):
 
 def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
     """Split video into stream-copy chunks and record segments.csv."""
-    print(f"Splitting video into {chunk_dur_sec}-second chunks (stream copy mode)...")
+    io.log(f"Splitting video into {chunk_dur_sec}-second chunks (stream copy mode)...")
     os.makedirs(chunk_dir, exist_ok=True)
     io.atomic_write_json(os.path.join(chunk_dir, io.MANIFEST_NAME), manifest)
 
@@ -244,7 +244,7 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
         )
     )
     if os.path.exists(complete_marker) and split_is_valid:
-        print("Chunks already exist, skipping splitting.")
+        io.log("Chunks already exist, skipping splitting.")
         return
 
     if os.path.exists(complete_marker):
@@ -278,7 +278,7 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
         cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     Path(complete_marker).write_text("ok\n", encoding="utf-8")
-    print("Splitting complete.")
+    io.log("Splitting complete.")
 
 
 def list_chunks(chunk_dir):

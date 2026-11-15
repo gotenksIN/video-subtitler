@@ -69,7 +69,7 @@ Every tracked file in this repository has a defined responsibility.
 | --- | --- |
 | `gemini_subs.py` | CLI entry point: dotenv loading, argument parsing, validation, and dispatch. |
 | `modules/core.py` | Core schemas, timestamp handling, source titles, context URL policy, caption validation, cue classification, speaker label casing canonicalization, sparse audio-patch filtering, reconstruction, and validation, and pure-editorial boundary merging. |
-| `modules/io.py` | Atomic JSON and VTT publication and manifest file I/O. |
+| `modules/io.py` | Atomic JSON and VTT publication, manifest file I/O, and work-directory logging. |
 | `modules/media.py` | FFmpeg and FFprobe operations for probing, complete audio extraction, and stream-copy splitting. |
 | `modules/gemini.py` | Gemini clients, prompts, request configs, chunk requests, preflight research, boundary audio refinement, and global text refinement. |
 | `modules/pipeline.py` | Generation configuration, locking, scheduling, stitching, and the run lifecycle. |
@@ -570,6 +570,11 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
 ## Work state, locking, and recovery
 
 Work directory: `temp_video_chunks/<manifest-sha256-prefix>/` (first 16 hex chars).
+`pipeline.log` appends timestamped run diagnostics in real time while the work lock is held.
+Concurrent workers write complete lines and flush each message.
+Failed runs keep the log, including errors, tracebacks, and failed refinement response payloads, for debugging.
+Successful runs close the log before cleanup removes it.
+Direct refinement and benchmark calls do not create a work log.
 
 Manifest contains:
 - `video`: `{path, size, mtime_ns}`

@@ -204,7 +204,7 @@ def load_cached_captions(out_json, chunk_duration):
         captions = _CAPTIONS_ADAPTER.validate_json(Path(out_json).read_bytes())
         return core.validate_captions(captions, chunk_duration)
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
-        print(f"Ignoring invalid cached output {out_json}: {e}")
+        io.log(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
         return None
 
@@ -229,7 +229,7 @@ def process_chunk(
 
     cached = load_cached_captions(out_json, chunk_duration)
     if cached is not None:
-        print(f"Skipping {chunk_name} - already processed.")
+        io.log(f"Skipping {chunk_name} - already processed.")
         return True
 
     prompt = _build_generation_prompt(chunk_duration, source_title, candidate_names)
@@ -238,12 +238,12 @@ def process_chunk(
         with open(chunk_path, "rb") as f:
             video_data = f.read()
         if len(video_data) > _INLINE_VIDEO_WARNING_BYTES:
-            print(
+            io.log(
                 f"[Worker-{chunk_idx:03d}] Warning: {chunk_name} is {len(video_data) / 1024 / 1024:.1f} MB. "
                 "Gemini docs recommend inline video below 20 MB; reduce --chunk-dur if requests fail."
             )
 
-        print(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
+        io.log(f"[Worker-{chunk_idx:03d}] Generating {chunk_name} using Gemini API...")
 
         with create_client(api_key, base_url) as client:
             for attempt in range(_STREAM_REQUEST_ATTEMPTS):
@@ -266,13 +266,13 @@ def process_chunk(
                     )
                 except ValueError as error:
                     if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
-                        print(
+                        io.log(
                             f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: "
                             f"{error}"
                         )
                         return False
                     delay = 2**attempt
-                    print(
+                    io.log(
                         f"[Worker-{chunk_idx:03d}] Warning: Attempt {attempt + 1} failed "
                         f"for {chunk_name} ({error}); retrying in {delay}s..."
                     )
@@ -280,15 +280,15 @@ def process_chunk(
                     continue
 
                 io.atomic_write_json(out_json, validated)
-                print(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
+                io.log(f"[Worker-{chunk_idx:03d}] Finished {chunk_name}.")
                 return True
     except errors.ClientError as error:
         if error.code in {400, 401, 403}:
             raise
-        print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {error}")
+        io.log(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {error}")
         return False
     except Exception as e:  # noqa: BLE001 - A chunk failure must keep the run resumable.
-        print(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
+        io.log(f"[Worker-{chunk_idx:03d}] ERROR processing {chunk_name}: {e}")
         return False
 
 
@@ -643,7 +643,7 @@ def _read_stream(client, **request):
             if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
                 raise
             delay = 2**attempt
-            print(f"Interrupted Gemini stream ({error}); retrying in {delay}s...")
+            io.log(f"Interrupted Gemini stream ({error}); retrying in {delay}s...")
             time.sleep(delay)
 
 
@@ -732,16 +732,16 @@ def _print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=
     """Print summary of search queries, grounded sources, and URL retrieval."""
     unique_queries = list(dict.fromkeys(queries))
     if unique_queries:
-        print("Search queries:")
+        io.log("Search queries:")
         for query in unique_queries:
-            print(f"  - {query}")
+            io.log(f"  - {query}")
     unique_sources = list(dict.fromkeys(sources))
     if unique_sources:
-        print("Grounded sources:")
+        io.log("Grounded sources:")
         for title, uri in unique_sources:
-            print(f"  - {title or 'Untitled'}: {uri}")
+            io.log(f"  - {title or 'Untitled'}: {uri}")
     if ordinary_urls:
-        print("Context URL retrieval:")
+        io.log("Context URL retrieval:")
         retrieved_by_identity = {
             core.url_identity(url): (url, status)
             for url, status in retrieved_urls.items()
@@ -749,7 +749,7 @@ def _print_refinement_grounding(queries, sources, retrieved_urls, ordinary_urls=
         for url in ordinary_urls:
             entry = retrieved_by_identity.get(core.url_identity(url))
             status = _retrieval_status_value(entry[1]) if entry else "NOT RETRIEVED"
-            print(f"  - {url}: {status}")
+            io.log(f"  - {url}: {status}")
 
 
 def _run_preflight_context(
@@ -798,7 +798,7 @@ def _run_preflight_context(
         return research_text
 
     def analyze_youtube():
-        print(
+        io.log(
             "Analyzing YouTube video directly for participants and "
             f"proper-name observations ({len(youtube_urls)} URL(s))..."
         )
@@ -853,7 +853,7 @@ def _load_cached_preflight_context(
     try:
         payload = json.loads(path.read_bytes())
     except (ValueError, OSError) as error:
-        print(f"Ignoring invalid cached preflight context {path}: {error}")
+        io.log(f"Ignoring invalid cached preflight context {path}: {error}")
         path.unlink(missing_ok=True)
         return None
     identity = _preflight_cache_identity(
@@ -878,7 +878,7 @@ def _load_cached_preflight_context(
         ]
         return context
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
-        print(f"Ignoring invalid cached preflight context {path}: {e}")
+        io.log(f"Ignoring invalid cached preflight context {path}: {e}")
         path.unlink(missing_ok=True)
         return None
 
@@ -939,7 +939,7 @@ def global_refine_subtitles(
 ):
     """Run the global refinement pipeline on an input WebVTT file."""
     context_urls = core.validate_context_urls(context_urls)
-    print(f"Loading {input_vtt} for global refinement...")
+    io.log(f"Loading {input_vtt} for global refinement...")
     vtt = io.read_plain_vtt(input_vtt)
 
     script_lines = []
@@ -970,7 +970,7 @@ def global_refine_subtitles(
     request_prompt = prompt
 
     with create_client(api_key, base_url) as client:
-        print(
+        io.log(
             "Sending script to Gemini for global refinement (this may take a minute)..."
         )
         for attempt in range(_STREAM_REQUEST_ATTEMPTS):
@@ -986,13 +986,18 @@ def global_refine_subtitles(
                 )
                 core.validate_refinement_changes(refinements.changes, source_texts)
             except ValueError as error:
+                if attempt < _STREAM_REQUEST_ATTEMPTS - 1:
+                    io.log_file(
+                        f"Global refinement attempt {attempt + 1} failed: {error}\n"
+                        f"Raw response:\n{full_json_text}"
+                    )
                 if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
                     raise RuntimeError(
                         "Parsing or validating the model refinement response failed: "
                         f"{error}\nRaw response:\n{full_json_text}"
                     ) from error
                 delay = 2**attempt
-                print(
+                io.log(
                     f"Warning: Global refinement attempt {attempt + 1} failed "
                     f"({error}); retrying in {delay}s..."
                 )
@@ -1007,14 +1012,14 @@ def global_refine_subtitles(
             break
 
     changes = refinements.changes
-    print(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")
+    io.log(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")
 
     for change in changes:
         vtt[change.id].text = change.text
 
     core.canonicalize_speaker_casing(vtt, preflight_context.grounded_names)
     io.atomic_save_vtt(vtt, output_vtt)
-    print(f"Saved refined subtitles to {output_vtt}")
+    io.log(f"Saved refined subtitles to {output_vtt}")
 
 
 def _load_script_entries(vtt_path):
@@ -1139,12 +1144,12 @@ def _run_audio_refinement_request(
     with open(audio_path, "rb") as handle:
         audio_bytes = handle.read()
     if len(audio_bytes) > _INLINE_VIDEO_WARNING_BYTES:
-        print(
+        io.log(
             f"Warning: {audio_path} is {len(audio_bytes) / 1024 / 1024:.1f} MB. "
             "Gemini docs recommend inline audio below 20 MB; it will still be sent."
         )
     with create_client(api_key, base_url) as client:
-        print("Sending complete audio and script for boundary audio refinement...")
+        io.log("Sending complete audio and script for boundary audio refinement...")
         full_json_text, _, _, _ = _read_stream(
             client,
             model=model,
@@ -1211,7 +1216,7 @@ def _load_cached_audio_refinement(work_dir, identity):
             response_path.read_bytes()
         )
     except (ValueError, OSError) as error:
-        print(f"Ignoring invalid audio refinement cache {response_path}: {error}")
+        io.log(f"Ignoring invalid audio refinement cache {response_path}: {error}")
         _discard_audio_refinement_cache(work_dir)
         return None
     return response
@@ -1239,12 +1244,12 @@ def _validated_cached_audio_refinement(
             source_duration=source_duration,
         )
     except ValueError as error:
-        print(
+        io.log(
             f"Ignoring semantically invalid cached audio refinement response: {error}"
         )
         _discard_audio_refinement_cache(work_dir)
         return None
-    print("Reusing cached boundary audio refinement response.")
+    io.log("Reusing cached boundary audio refinement response.")
     return validated
 
 
@@ -1316,5 +1321,5 @@ def boundary_audio_refine_subtitles(
     except Exception:
         _discard_audio_refinement_cache(work_dir)
         raise
-    print(f"Saved boundary audio-refined subtitles to {output_vtt}")
+    io.log(f"Saved boundary audio-refined subtitles to {output_vtt}")
     return response_to_cache is None

@@ -1,15 +1,55 @@
-"""Atomic artifact publication and manifest file I/O."""
+"""Atomic artifact publication, manifest file I/O, and work-directory logging."""
 
+import contextlib
 import copy
 import html
 import json
 import os
 import tempfile
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import webvtt
 
 MANIFEST_NAME = "manifest.json"
+LOG_NAME = "pipeline.log"
+_log_lock = threading.Lock()
+_log_handle = None
+
+
+@contextlib.contextmanager
+def work_log(chunk_dir):
+    """Append run diagnostics until all work-directory workers settle."""
+    global _log_handle
+    with open(Path(chunk_dir) / LOG_NAME, "a", encoding="utf-8") as handle:
+        with _log_lock:
+            previous_handle = _log_handle
+            _log_handle = handle
+        try:
+            yield
+        finally:
+            with _log_lock:
+                try:
+                    handle.flush()
+                finally:
+                    _log_handle = previous_handle
+
+
+def log_file(message):
+    """Write timestamped lines only when a work log is active."""
+    with _log_lock:
+        if _log_handle is not None:
+            timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            for line in str(message).splitlines():
+                _log_handle.write(f"{timestamp} {line}\n")
+            _log_handle.flush()
+
+
+def log(message):
+    """Keep console diagnostics and append them to the active work log."""
+    print(message)
+    log_file(message)
 
 
 def atomic_write_json(path, data):
