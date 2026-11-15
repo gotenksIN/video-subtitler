@@ -235,12 +235,22 @@ A reusable index must match stored `chunk_NNN` files exactly.
 
 Each chunk prompt carries optional context blocks before the timing rules.
 `SOURCE CONTEXT` holds the derived source title with candidate-identity warnings.
-`CANDIDATE SPEAKER IDENTITIES` holds the preflight grounded names as a candidate roster.
+`CANDIDATE SPEAKER IDENTITIES` holds only the bare preflight grounded names as a candidate roster, without appended role details.
 The roster permits a candidate's canonical English name only when direct in-clip evidence, such as a visible name banner, lower-third, title card, or spoken introduction, establishes attribution in the clip.
 It never assigns identities from appearance alone.
-When candidate-name attribution is uncertain, generation uses a clear descriptive role, such as `Host:`, `Official:`, or `Guide:`.
+When candidate-name attribution is uncertain, generation prefers a specific, stable role that reflects the speaker's function in the scene.
+Examples include `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Referee:`, `Interviewer:`, `Father:`, `Daughter:`, `Shop Owner:`, and `Producer:`.
+When an individual speaker's role is clear, generation prefers a concrete single-person role over vague umbrella labels such as `Cast Member:`, `Participant:`, and `Person:`.
+Generation reserves `Host:` for an actual program host or studio MC, not an instructor, specialist, or activity leader.
+It keeps one consistent name or role prefix for each attributed speaker throughout the entire clip.
+It does not switch the same speaker between role labels such as `Referee:` and `Host:`.
+When speakers address each other by role, generation keeps consistent role or kinship prefixes across turns instead of reverting to unlabeled dialogue.
+It repeats the speaker's prefix on each consecutive cue in that speaker's turn.
 It leaves dialogue unlabeled only when neither a candidate name nor a clear descriptive role can be distinguished.
 When simultaneous speech and meaningful editorial text cannot be sequenced without loss, generation permits a two-line mixed cue with bracketed editorial text followed by dialogue.
+Generation intentionally keeps bracketed variety captions, echo captions, punctuation graphics such as `[?????]`, and bracketed ellipsis or silence graphics such as `[...]` when they appear on screen, rather than filtering them out to lower reading speed.
+Generation never uses `[...]` as a placeholder for spoken dialogue.
+In mixed cues, these graphics stay on the editorial line, separate from the dialogue line.
 
 ### Chunk generation retry
 
@@ -514,6 +524,9 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Tool: Google Search + optional URL Context.
    - Output: Plain text with two sections:
      - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
+       Keep the format `Canonical Name: aliases, role, cited evidence`, with role details after the colon so name extraction keeps bare names.
+       State whether each speaker's role in the video is unique (`1:1`) or shared across multiple participants, and cite the evidence.
+       State when the evidence does not establish role uniqueness.
        When a speaker performs in character under an established recurring stage or character persona, use the active persona name as the canonical English speaker name.
        This rule applies when the speaker does not appear as themselves.
        List any performer legal or real name as an alias.
@@ -526,6 +539,12 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Runs concurrently with grounded web research when YouTube URLs are present.
    - Each request creates, uses, and closes its own client on its calling thread.
    - Attached video Parts for public YouTube URLs.
+   - Output includes each attributed participant's canonical English name and role, with timestamped visible-label, title-card, and spoken-introduction evidence.
+   - For participants already attributed by that evidence, output includes timestamped scene-level role continuity.
+     Each range states whether one attributed participant holds a role `1:1` or multiple speakers share it.
+     The analysis states when continuity is uncertain.
+   - Never identify speakers from appearance or voice alone.
+     Leave unintroduced incidental speakers, cameos, and off-camera crew unnamed.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
 3. **Context assembly:**
    - Section splitting: The host splits the research text into identity and terminology sections at the section headers.
@@ -541,6 +560,9 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
 1. Model: `gemini-4-hydrogen` (thinking level `high`, `max_output_tokens: 1048576`).
    Long decode permits up to 1,048,576 output tokens minus input tokens.
 2. Input: Full script with separate `GROUNDED IDENTITY CONTEXT`, `GROUNDED TERMINOLOGY CONTEXT`, and `DIRECT VIDEO IDENTITY ANALYSIS` blocks.
+   Speaker identity follows this evidence hierarchy: explicit script evidence > Direct Video Identity Analysis > Grounded Identity Context.
+   Direct video evidence overrides conflicting web summaries.
+   Both context blocks rank below explicit script introductions and title cards.
 3. Pipeline runs pass the cached `PreflightContext`, so no research or video analysis request repeats.
 4. Direct runs without a preflight context execute Pass 0 first.
     `--refine-only` works this way.
@@ -549,12 +571,23 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
-      A generic role or kinship label may become a canonical name only when the script establishes an unambiguous one-to-one correspondence globally or within that scene.
-      Unify isolated chunk-level roles, alternate titles, and abbreviations, such as `Host:`, `Referee:`, `Producer Na:`, and `Na PD:`, when neighboring chunks or the broader script unambiguously establish the same speaker.
+      An existing single-person role or kinship label, such as `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Father:`, or `Daughter:`, may become a canonical name under the evidence hierarchy.
+      Direct Video Identity Analysis, unambiguous Grounded Identity Context, or script continuity must establish an unambiguous `1:1` correspondence globally or within that timestamped scene.
+      Unify isolated chunk-level roles, alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same `1:1` correspondence.
       A chunk boundary alone does not justify retaining an inconsistent label.
-      Shared or ambiguous multi-person roles, collective labels, and unverified incidental roles must not become personal names.
+      Never resolve a role label such as `Host:` to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange.
+      When the named host is already active in that scene, require script and turn continuity to resolve `Host:`, not Pass 0's `Host` title alone.
+      An isolated chunk can misapply a generic fallback such as `Host:` to another speaker while the script already names the actual program host in that scene.
+      Unify that fallback only when cross-boundary turn continuity and neighboring chunks unambiguously establish the same named speaker, not an off-camera `Producer:` or `Staff:`.
+      Shared or ambiguous multi-person roles must not become personal names.
+      Examples include `Guest:` with multiple guests, `Cast Member:`, `Panelist:`, `Student:`, and `Member:`.
+      Preserve collective labels such as `Audience:` and `Fans:`.
+      Do not name unintroduced incidental speakers or cameos such as `Officer:` and `Passerby:`, or unverified crew such as `Producer:`, `PD:`, `Staff:`, and `Interviewer:`.
+      Identity research and video analysis can resolve existing labels only; they never authorize labels on unlabeled dialogue.
    4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
+      Change proper-name romanization only when Pass 0 identity or terminology context establishes the canonical spelling under the evidence hierarchy, or when needed to correct an inconsistency clearly established within the script.
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
+      Keep bracketed variety reactions, echo captions, punctuation graphics such as `[?????]`, and inline `[...]` markers intact rather than stripping them for reading speed.
    6. Forbids retiming, merging, splitting, adding, or deleting cues.
    7. Leave untouched cues unchanged, even when they exceed line-length guidance.
       When an authorized label or text correction pushes a single-turn dialogue line past 42 characters, re-wrap that speaker's dialogue without changing words to at most two lines of no more than 42 characters each.

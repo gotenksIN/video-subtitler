@@ -133,8 +133,15 @@ def _build_generation_prompt(chunk_duration, source_title=None, candidate_names=
             "(such as a visible name banner, lower-third, title card, or spoken "
             "introduction) establishes attribution in this clip. Never assign candidate "
             "identities from appearance alone. When candidate-name attribution is "
-            "uncertain, use a clear descriptive role per Rule 18, such as Host:, "
-            "Official:, or Guide:. Leave dialogue unlabeled only when neither a "
+            "uncertain, use a clear functional or relational role per Rule 18, "
+            "such as Coach:, Chef:, Judge:, Prosecutor:, Referee:, Interviewer:, "
+            "Father:, Daughter:, Shop Owner:, or Producer:. Prefer a concrete "
+            "single-person role over Cast Member:, Participant:, or Person: when "
+            "the speaker's role is clear. Keep consistent role or kinship prefixes "
+            "across turns when speakers address each other by role; do not fall "
+            "back to unlabeled dialogue. Reserve Host: for an actual "
+            "program host or studio MC, not an instructor, specialist, or activity "
+            "leader. Leave dialogue unlabeled only when neither a "
             "candidate name nor a clear descriptive role can be distinguished.\n\n"
         )
     return f"""You are an expert subtitle generator and translator.
@@ -168,20 +175,20 @@ SPEAKER LABELS
 
 16. Use a person's name only when the clip itself establishes attribution: a visible name label or title card, a spoken introduction, or other direct in-clip evidence.
 17. Never identify a speaker from appearance alone.
-18. When a name cannot be established, prefer a stable descriptive role such as "Host:", "Resident:", "Shop Owner:", or "Producer:" when the role is clear from the clip.
+18. When a name cannot be established, prefer a specific, stable functional or relational role that is clear from the clip, such as "Coach:", "Chef:", "Judge:", "Prosecutor:", "Referee:", "Interviewer:", "Father:", "Daughter:", "Shop Owner:", or "Producer:". Prefer a concrete single-person role over vague umbrella labels such as "Cast Member:", "Participant:", or "Person:" when the speaker's role is clear. Reserve "Host:" for an actual program host or studio MC, not an instructor, specialist, or activity leader. Keep consistent role or kinship prefixes across turns when speakers address each other by role rather than falling back to unlabeled dialogue.
 19. Leave dialogue unlabeled when neither a name nor a stable role can be distinguished.
 20. Do not use generic numbered labels such as "Speaker 1:".
-21. Use the exact format "Name: Dialogue". When a single attributed speaker's turn spans consecutive cues, repeat that speaker's name or role prefix on each cue. Do not switch between repeated labels and unlabeled continuations within the chunk.
+21. Use the exact format "Name: Dialogue". Keep one consistent name or role prefix for each attributed speaker throughout the entire clip. Do not switch the same speaker between different role labels such as "Referee:" and "Host:". When a single attributed speaker's turn spans consecutive cues, repeat that speaker's name or role prefix on each cue. Do not switch between repeated labels and unlabeled continuations within the chunk.
 22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line.
 23. Do not assign speaker labels to on-screen text.
 
 ON-SCREEN TEXT
 
-24. Include meaningful on-screen editorial text when it contributes information, context, humor, branding, or narrative meaning.
+24. Include meaningful on-screen editorial text when it contributes information, context, humor, branding, or narrative meaning. Preserve bracketed variety reactions, echo captions, punctuation graphics such as [?????], and bracketed ellipsis or silence graphics such as [...] intact when they appear on screen. Do not drop them to lower reading speed. Never use [...] as a placeholder for spoken dialogue.
 25. Ignore decorative text, logos, persistent watermarks, repeated UI, and text unrelated to understanding the video.
 26. Keep on-screen text distinct from spoken dialogue.
 27. Render on-screen text in square brackets, without mechanical prefixes such as "On-screen text:".
-28. When spoken dialogue and meaningful on-screen text occur simultaneously and cannot be sequenced without dropping speech or converting captions into dialogue, use a two-line mixed cue: "[Editorial text]" on the first line and "Speaker: Dialogue" on the second. Otherwise keep unrelated content separate.
+28. When spoken dialogue and meaningful on-screen text occur simultaneously and cannot be sequenced without dropping speech or converting captions into dialogue, use a two-line mixed cue: "[Editorial text]" on the first line and "Speaker: Dialogue" on the second. Preserve bracketed variety reactions, echo captions, punctuation graphics such as [?????], and bracketed ellipsis or silence graphics such as [...] in the editorial line when they appear on screen; never strip them for reading speed. Keep the editorial and dialogue lines separate. Otherwise keep unrelated content separate.
 29. Do not describe visible actions such as "(walks)", "(rings bell)", or "(sprays product)" unless corresponding written editorial text actually appears in the video.
 30. Translate source-language editorial idioms and visual-caption metaphors into understandable English rather than preserving an incomprehensible literal translation.
 31. Do not wrap ordinary spoken dialogue in quotation marks.
@@ -353,6 +360,8 @@ Canonical English public names, aliases, and roles for the people who speak in t
 When a speaker performs in character under an established recurring stage or character persona rather than appearing as themselves, use the active persona name as the canonical English speaker name.
 List any performer legal or real name as an alias.
 Begin each entry on its own line with the canonical English public name or the stable role, followed by a colon, then give the aliases, the role, and the cited evidence.
+Keep the format "Canonical Name: aliases, role, cited evidence"; put role details after the colon, not in the name.
+State whether each speaker's role in this video is unique (1:1) or shared across multiple participants, and cite the evidence. If the evidence does not establish this, state that it is uncertain.
 
 {_TERMINOLOGY_RESEARCH_SECTION}:
 Canonical English spelling of the recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or the context URLs.
@@ -438,11 +447,13 @@ def _build_youtube_analysis_prompt(source_title=None):
 
 Watch the attached video content.
 Return concise plain text with:
-- Each participant's name in official English styling and their role.
+- Each attributed participant's name in official English styling and their role.
 - Timestamped speaker-identification observations: when a visible label, title card, or spoken introduction establishes attribution, give the video timestamp and the evidence.
+- Timestamped scene-level role continuity for participants already attributed by visible labels, title cards, or spoken introductions. Give each timestamp range and state whether one attributed participant holds a role 1:1 in that range or multiple speakers share it. State when continuity is uncertain.
 
 These observations may establish speaker identity and canonical proper-name spelling only.
 They must never infer or change dialogue content, meaning, or events.
+Never identify speakers from appearance or voice alone; leave unintroduced incidental speakers, cameos, and off-camera crew unnamed.
 {title_block}Return plain text only, with no markdown formatting.
 """
 
@@ -468,9 +479,10 @@ def _build_refinement_prompt(
             "\nGROUNDED IDENTITY CONTEXT\n\n"
             f"{identity_context}\n"
             "The identity context above was researched with grounded web "
-            "evidence. It ranks below explicit script introductions and title "
-            "cards. It may establish speaker identity and canonical "
-            "proper-name spelling only. It must never change dialogue "
+            "evidence. It ranks below explicit script evidence, including "
+            "introductions and title cards, and below DIRECT VIDEO IDENTITY "
+            "ANALYSIS when they conflict. It may establish speaker identity "
+            "and canonical proper-name spelling only. It must never change dialogue "
             "meaning, events, or facts.\n"
         )
     terminology_block = ""
@@ -490,8 +502,9 @@ def _build_refinement_prompt(
             "\nDIRECT VIDEO IDENTITY ANALYSIS\n\n"
             f"{youtube_context}\n"
             "The analysis above was produced by a separate pass that watched "
-            "the source video content. It ranks below explicit script "
-            "introductions and title cards. It may establish speaker identity "
+            "the source video content. It ranks below explicit script evidence, "
+            "including introductions and title cards, but overrides conflicting "
+            "GROUNDED IDENTITY CONTEXT. It may establish speaker identity "
             "and canonical proper-name spelling only. It must never change "
             "dialogue meaning, events, or facts.\n"
         )
@@ -500,13 +513,14 @@ def _build_refinement_prompt(
 Below is the complete subtitle script for a video.
 
 The supplied subtitle script is authoritative. You cannot hear the source audio or see the source video. Do not reconstruct source content that is not established by the script.
+For speaker identity, rank evidence: Explicit script evidence > Direct Video Identity Analysis > Grounded Identity Context.
 {source_block}{identity_block}{terminology_block}{youtube_block}For every cue, assume by default that no change is needed. Return a change only when the correction is objective, clearly supported, and necessary.
 
 A grammatical, intelligible, and faithful line must remain unchanged. Do not rewrite, paraphrase, summarize, embellish, or stylistically improve acceptable dialogue.
 
 Change text only for:
 
-1. Existing speaker labels that have incorrect spelling, casing, or identity established by the script. This includes replacing a generic role or kinship label with the speaker's canonical name only under the unambiguous one-to-one correspondence required by Rule 32.
+1. Existing speaker labels that have incorrect spelling, casing, or identity established by script evidence or the Pass 0 identity context under the evidence hierarchy above. This includes resolving an existing single-person role or kinship label to the speaker's canonical name only under the unambiguous 1:1 correspondence required by Rule 32. Never add a label to an unlabeled line.
 2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
 3. Objective grammar, spelling, punctuation, or OCR errors.
 4. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
@@ -535,7 +549,7 @@ TERMINOLOGY AND LOCALIZATION
 
 20. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
 21. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organization names, and location names.
-22. Do not change proper-name romanization unless needed to correct an inconsistency clearly established within the script.
+22. Change proper-name romanization only when Pass 0 identity or terminology context establishes the canonical spelling under the evidence hierarchy above, or when needed to correct an inconsistency clearly established within the script.
 23. Do not replace understandable English with unexplained romanized source-language terms.
 24. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
 25. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
@@ -547,19 +561,19 @@ SPEAKER LABELS
 28. Never add a speaker label to an unlabeled line.
 29. An unlabeled line remains unlabeled, even when adjacent lines, timestamps, speaker turns, the source title, identity research, or video analysis suggest a possible speaker.
 30. Do not propagate a speaker label from one cue to another, even when you rename a role label such as "Host:" on one cue and the next cue continues that same speaker's sentence or turn without a label.
-31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate the spelling of an existing label, but they are not an attribution map.
-32. Correct an existing label only when its spelling, casing, or identity is clearly established by the script. Unify isolated chunk-level role labels (Host:, Referee:), alternate titles or abbreviations (Producer Na:, Na PD:), and generic role or kinship labels (Father:, Daughter:, Official:, Son-in-law:) to the speaker's canonical name when neighboring chunks or the broader script unambiguously establish that same speaker. Require an unambiguous one-to-one correspondence globally or within that scene; a chunk boundary alone does not justify retaining an inconsistent label. Never replace shared or ambiguous multi-person roles (Guest: when multiple guests exist), collective labels (Audience:, Fans:), or unverified incidental roles (Producer:, Staff:, Shop Owner:) with a person's name. Keep unlabeled lines unlabeled.
+31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate or resolve existing labels only under Rule 32, never create labels or serve as an attribution map for unlabeled dialogue.
+32. Correct an existing label only when its spelling, casing, or identity is clearly established under the evidence hierarchy above. Resolve an existing single-person role or kinship label (Coach:, Chef:, Judge:, Prosecutor:, Father:, Daughter:) to its canonical named speaker when DIRECT VIDEO IDENTITY ANALYSIS, unambiguous GROUNDED IDENTITY CONTEXT, or script continuity establishes an unambiguous 1:1 correspondence globally or within that timestamped scene. Unify isolated chunk-level roles (Host:, Referee:), alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same 1:1 correspondence; a chunk boundary alone does not justify retaining an inconsistent label. Never resolve a role label such as Host: to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange. When the named host is already active in that scene, require script and turn continuity to resolve Host:, not Pass 0's Host title alone. When an isolated chunk misapplies a generic fallback such as Host: to another speaker even though the program's actual host is already attributed by name in that scene, unify it only if cross-boundary turn continuity and neighboring chunks unambiguously establish that same named speaker rather than an off-camera Producer: or Staff:. Never replace shared or ambiguous multi-person roles (Guest: with multiple guests, Cast Member:, Panelist:, Student:, Member:), collective labels (Audience:, Fans:), unintroduced incidental speakers or cameos (Officer:, Passerby:), or unverified crew (Producer:, PD:, Staff:, Interviewer:) with personal names. Keep unlabeled lines unlabeled.
 33. Never remove an existing speaker label from any cue, even when that cue continues a sentence mid-phrase from the preceding cue with the same speaker label repeated. Correct existing labels only as authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. This exception remains subordinate to the two-line cue limit for mixed cues ("[Editorial]" followed by "Speaker: Dialogue") and multi-speaker cues; never add a third line or combine distinct turns. Do not add or remove labels for formatting convenience.
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.
 
 ON-SCREEN AND MIXED CUES
 
-36. Treat every complete outer [bracketed fragment] as protected on-screen editorial content.
-37. In mixed cues containing both on-screen text and spoken dialogue (for example, "[Graphic text] Spoken dialogue"), preserve both the bracketed fragment and the dialogue in the same cue.
-38. A mixed cue must never become dialogue-only or graphic-only. Never drop the spoken dialogue or the bracketed on-screen text.
+36. Treat every complete outer [bracketed fragment] as protected on-screen editorial content, including variety reaction cards, echo captions, punctuation graphics such as [?????], and inline [...] markers.
+37. In mixed cues containing both on-screen text and spoken dialogue (for example, "[Graphic text] Spoken dialogue"), preserve both the bracketed fragment and the dialogue in the same cue, including inline [...] markers.
+38. A mixed cue must never become dialogue-only or graphic-only. Never drop the spoken dialogue or the bracketed on-screen text. Never strip variety reaction cards, echo captions, [?????], or inline [...] markers to lower reading speed.
 39. Edit only the dialogue outside brackets unless an objective visual-text error requires correction.
-40. For an editorial cue (bracket-only), preserve every bracketed fragment and its outer brackets.
+40. For an editorial cue (bracket-only), preserve every bracketed fragment and its outer brackets, including variety reaction cards, echo captions, and [?????]. Do not strip them for reading speed.
 41. For a dialogue cue, do not introduce bracketed text.
 42. Keep on-screen text distinct from dialogue. Do not convert on-screen text into spoken dialogue or accessibility-style action descriptions.
 43. Remove mechanical prefixes such as "On-screen text:" while preserving the translated text itself.
