@@ -204,7 +204,7 @@ It publishes stitched subtitles or passes them to text refinement.
 Extraction command:
 
 ```bash
-ffmpeg -y -i <video_file> -map 0:a:0 -vn -sn -c:a libopus -b:a 64k -ac 1 -ar 48000 -f ogg extracted_audio.ogg.tmp
+ffmpeg -y -i <video_file> -map 0:a:0 -vn -sn -c:a libopus -b:a 32k -ac 1 -ar 48000 -f ogg extracted_audio.ogg.tmp
 ```
 
 The temporary file is published atomically with `os.replace()`.

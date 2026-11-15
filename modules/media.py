@@ -160,7 +160,7 @@ def extract_complete_audio(
         "-c:a",
         "libopus",
         "-b:a",
-        "64k",
+        "32k",
         "-ac",
         "1",
         "-ar",
