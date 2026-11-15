@@ -55,6 +55,12 @@ def _max_output_tokens_for_model(model_name):
     return MAX_OUTPUT_TOKENS
 
 
+def _supports_agentic_video(model_name):
+    return _normalize_model_name(model_name).startswith(
+        ("gemini-4", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+    )
+
+
 def _build_content_config(*, model_name=None, thinking_level=None, **kwargs):
     """Build a config with AFC disabled for direct Models requests."""
     kwargs.setdefault("max_output_tokens", _max_output_tokens_for_model(model_name))
@@ -661,8 +667,15 @@ def _collect_stream_metadata(response_stream):
         block_reason_text = getattr(block_reason, "value", block_reason)
         if block_reason_text and block_reason_text != "BLOCKED_REASON_UNSPECIFIED":
             raise RuntimeError(f"Gemini request blocked: {block_reason_text}")
-        if chunk.text:
-            full_text += chunk.text
+        candidates = getattr(chunk, "candidates", None) or []
+        if candidates:
+            content = getattr(candidates[0], "content", None)
+            for part in getattr(content, "parts", None) or []:
+                if getattr(part, "thought", None) is True:
+                    continue
+                part_text = getattr(part, "text", None)
+                if isinstance(part_text, str):
+                    full_text += part_text
         for candidate in getattr(chunk, "candidates", None) or []:
             saw_candidate = True
             reason = getattr(candidate, "finish_reason", None)
@@ -805,7 +818,14 @@ def _run_preflight_context(
         )
         youtube_prompt = _build_youtube_analysis_prompt(source_title)
         youtube_contents = [
-            types.Part.from_uri(file_uri=url, mime_type="video/*")
+            types.Part(
+                file_data=types.FileData(file_uri=url, mime_type="video/*"),
+                media_processing=(
+                    types.MediaProcessing.AGENTIC
+                    if _supports_agentic_video(model_name)
+                    else None
+                ),
+            )
             for url in youtube_urls
         ] + [youtube_prompt]
         youtube_config = _build_youtube_analysis_config(model_name, thinking_level)
