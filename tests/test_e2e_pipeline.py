@@ -14,7 +14,7 @@ import httpx2
 import pytest
 from google.genai import errors, types
 
-from modules import core, io, pipeline
+from modules import core, io, media, pipeline
 from scripts import benchmark
 from tests.support.gemini_fakes import (
     ScriptedGeminiClient,
@@ -809,16 +809,19 @@ def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(
             research_call(),
             chunk_call(),
             chunk_call(),
-            audio_call(
-                [
-                    {
-                        "sourceIds": [99],
-                        "start": "00:00:00.000",
-                        "end": "00:00:01.000",
-                        "text": "Unknown",
-                    }
-                ]
-            ),
+            *[
+                audio_call(
+                    [
+                        {
+                            "sourceIds": [99],
+                            "start": "00:00:00.000",
+                            "end": "00:00:01.000",
+                            "text": "Unknown",
+                        }
+                    ]
+                )
+            ]
+            * 3,
         ]
     )
     use_client(monkeypatch, client)
@@ -830,6 +833,59 @@ def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(
     assert "unknown source IDs" in run_log
     assert "Raw response:" in run_log
     assert not any(r.kind == "text" for r in client.requests)
+
+
+def test_audio_context_cache_and_validation_retries(config, monkeypatch):
+    work = config.output_path.parent
+    audio_path, duration, source_duration, _ = media.extract_complete_audio(
+        config.video_path, work
+    )
+    stitched = work / "stitched.vtt"
+    stitched.write_text(
+        "WEBVTT\n\n00:00:00.100 --> 00:00:00.500\nHost: Opus.\n",
+        encoding="ascii",
+    )
+    client = ScriptedGeminiClient(
+        [
+            StreamCall("audio", ["not JSON"]),
+            audio_call(deleted=[99]),
+            audio_call(),
+            audio_call(),
+            audio_call(),
+        ]
+    )
+    use_client(monkeypatch, client)
+    for names, terms, expected_cached in (
+        (["Host"], "Opus", False),
+        (["Host"], "Opus", True),
+        (["Presenter"], "Opus", False),
+        (["Presenter"], "Opus codec", False),
+    ):
+        _, cached = benchmark.run_audio_refinement(
+            config,
+            "audio-model",
+            stitched,
+            config.output_path,
+            audio_path,
+            duration,
+            source_duration,
+            [1],
+            work,
+            "Source",
+            grounded_names=names,
+            terminology_context=terms,
+        )
+        assert cached is expected_cached
+    assert not client.pending
+    assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
+        "Host: Opus."
+    ]
+    for request in client.requests:
+        assert_wire_config(request)
+        assert request.contents[0].inline_data.mime_type == media.AUDIO_MIME_TYPE
+    assert client.requests[0].contents[:2] == client.requests[1].contents[:2]
+    assert client.requests[1].contents[:2] == client.requests[2].contents[:2]
+    assert len(client.requests[1].contents) == 3
 
 
 def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(

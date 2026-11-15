@@ -1089,7 +1089,12 @@ def _load_script_entries(vtt_path):
 
 
 def _build_audio_refinement_prompt(
-    source_entries, boundaries, audio_duration, source_title=None
+    source_entries,
+    boundaries,
+    audio_duration,
+    source_title=None,
+    grounded_names=None,
+    terminology_context="",
 ):
     boundary_lines = "\n".join(
         f"- {core.format_time(boundary)}" for boundary in boundaries
@@ -1122,7 +1127,16 @@ def _build_audio_refinement_prompt(
 
 Listen to the complete attached audio and compare it with the complete subtitle script below.
 
-{title_block}COMPLETE AUDIO DURATION
+{title_block}GROUNDED SPELLING CONTEXT
+
+Speaker names: {", ".join(grounded_names or []) or "(none)"}
+Terminology: {terminology_context or "(none)"}
+
+Use canonical spellings on boundary-repaired or recovered cues only when clearly established.
+Script visual attribution outranks this context. Never guess speaker names from voice timbre alone.
+This context establishes spelling, not spoken content or permission to relabel speakers.
+
+COMPLETE AUDIO DURATION
 
 {audio_duration:.3f} seconds
 
@@ -1176,20 +1190,8 @@ def _audio_refinement_config(model_name):
     )
 
 
-def _run_audio_refinement_request(
-    api_key,
-    base_url,
-    model,
-    source_entries,
-    boundaries,
-    audio_duration,
-    audio_path,
-    source_title=None,
-):
-    """Run one streamed audio-refinement request and return (raw_text, response)."""
-    prompt = _build_audio_refinement_prompt(
-        source_entries, boundaries, audio_duration, source_title
-    )
+def _inline_audio_part(audio_path):
+    """Read inline audio and warn when its payload exceeds the size guidance."""
     with open(audio_path, "rb") as handle:
         audio_bytes = handle.read()
     if len(audio_bytes) > _INLINE_VIDEO_WARNING_BYTES:
@@ -1198,35 +1200,23 @@ def _run_audio_refinement_request(
             "Keep inline audio below 50 MiB to allow base64 overhead toward "
             "the 100 MB total inline request limit; it will still be sent."
         )
-    with create_client(api_key, base_url) as client:
-        io.log("Sending complete audio and script for boundary audio refinement...")
-        full_json_text, _, _, _ = _read_stream(
-            client,
-            model=model,
-            contents=[
-                types.Part.from_bytes(
-                    data=audio_bytes, mime_type=media.AUDIO_MIME_TYPE
-                ),
-                prompt,
-            ],
-            config=_audio_refinement_config(model),
-        )
-    try:
-        return full_json_text, core.AudioRefinementResponse.model_validate_json(
-            full_json_text
-        )
-    except ValidationError as error:
-        raise RuntimeError(
-            "Parsing or validating the audio refinement response failed: "
-            f"{error}\nRaw response:\n{full_json_text}"
-        ) from error
+    return types.Part.from_bytes(data=audio_bytes, mime_type=media.AUDIO_MIME_TYPE)
 
 
 def _audio_refinement_cache_identity(
-    script_path, audio_path, audio_duration, boundaries, model
+    script_path,
+    audio_path,
+    audio_duration,
+    boundaries,
+    model,
+    grounded_names=None,
+    terminology_context="",
 ):
     """Return cache identity of one audio-refinement response."""
     return {
+        "cache_version": 2,
+        "grounded_names": list(grounded_names or []),
+        "terminology_context": terminology_context,
         "script_sha256": hashlib.sha256(Path(script_path).read_bytes()).hexdigest(),
         "audio_sha256": hashlib.sha256(Path(audio_path).read_bytes()).hexdigest(),
         "audio_duration": audio_duration,
@@ -1316,11 +1306,19 @@ def boundary_audio_refine_subtitles(
     source_duration,
     model_name=DEFAULT_AUDIO_REFINE_MODEL,
     source_title=None,
+    grounded_names=None,
+    terminology_context="",
 ):
     """Run or reuse boundary audio refinement and publish atomically."""
     source_entries = _load_script_entries(stitched_vtt)
     identity = _audio_refinement_cache_identity(
-        stitched_vtt, audio_path, audio_duration, boundaries, model_name
+        stitched_vtt,
+        audio_path,
+        audio_duration,
+        boundaries,
+        model_name,
+        grounded_names,
+        terminology_context,
     )
     validated = _validated_cached_audio_refinement(
         work_dir,
@@ -1331,34 +1329,64 @@ def boundary_audio_refine_subtitles(
         source_duration=source_duration,
     )
     response_to_cache = None
-    raw_json = None
     if validated is None:
-        raw_json, response = _run_audio_refinement_request(
-            api_key,
-            base_url,
-            model_name,
+        prompt = _build_audio_refinement_prompt(
             source_entries,
             boundaries,
             audio_duration,
-            audio_path,
-            source_title=source_title,
+            source_title,
+            grounded_names,
+            terminology_context,
         )
-        response_to_cache = response
-    try:
-        if response_to_cache is not None:
-            try:
-                validated = core.validate_audio_refinement_response(
-                    response_to_cache,
-                    source_entries,
-                    audio_duration,
-                    boundaries,
-                    source_duration=source_duration,
+        audio_part = _inline_audio_part(audio_path)
+        feedback = None
+        with create_client(api_key, base_url) as client:
+            for attempt in range(_STREAM_REQUEST_ATTEMPTS):
+                contents = [audio_part, prompt]
+                if feedback:
+                    contents.append(feedback)
+                raw_json, _, _, _ = _read_stream(
+                    client,
+                    model=model_name,
+                    contents=contents,
+                    config=_audio_refinement_config(model_name),
                 )
-            except ValueError as error:
-                raise RuntimeError(
-                    "boundary audio refinement response failed validation: "
-                    f"{error}\nRaw response:\n{raw_json}"
-                ) from error
+                try:
+                    response = core.AudioRefinementResponse.model_validate_json(
+                        raw_json
+                    )
+                    validated = core.validate_audio_refinement_response(
+                        response,
+                        source_entries,
+                        audio_duration,
+                        boundaries,
+                        source_duration=source_duration,
+                    )
+                except (ValidationError, ValueError) as error:
+                    io.log_file(
+                        f"Boundary audio refinement attempt {attempt + 1} failed: "
+                        f"{error}\nRaw response:\n{raw_json}"
+                    )
+                    if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
+                        raise RuntimeError(
+                            "boundary audio refinement response failed validation: "
+                            f"{error}\nRaw response:\n{raw_json}"
+                        ) from error
+                    delay = 2**attempt
+                    io.log(
+                        f"Warning: Boundary audio refinement attempt {attempt + 1} "
+                        f"failed ({error}); retrying in {delay}s..."
+                    )
+                    feedback = (
+                        f"CORRECTIVE VALIDATION FEEDBACK\n\n{error}\n\n"
+                        "Return the complete corrected sparse-patch-v1 patch "
+                        "against the original source script."
+                    )
+                    time.sleep(delay)
+                else:
+                    response_to_cache = response
+                    break
+    try:
         output_entries = validated
         candidate_vtt = webvtt.WebVTT()
         for entry in output_entries:

@@ -389,6 +389,8 @@ def run_generation(config: GenerationConfig) -> None:
                         base_url=config.base_url,
                         model_name=config.audio_refine_model or config.model,
                         source_title=source_title,
+                        grounded_names=preflight_context.grounded_names,
+                        terminology_context=preflight_context.terminology_context,
                     )
                     current_vtt = audio_refined_vtt
 

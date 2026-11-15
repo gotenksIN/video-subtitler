@@ -222,6 +222,8 @@ def run_audio_refinement(
     boundaries,
     work_dir,
     source_title,
+    grounded_names=None,
+    terminology_context="",
 ):
     """Run boundary audio refinement on stitched subtitles."""
     started = time.perf_counter()
@@ -240,6 +242,8 @@ def run_audio_refinement(
         base_url=args.base_url,
         model_name=audio_model,
         source_title=source_title,
+        grounded_names=grounded_names,
+        terminology_context=terminology_context,
     )
     io.atomic_save_vtt(
         core.canonicalize_speaker_casing(io.read_plain_vtt(output_vtt)), output_vtt
@@ -476,6 +480,8 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
             boundaries,
             audio_work,
             source_title,
+            grounded_names=preflight_contexts[gen_model].grounded_names,
+            terminology_context=preflight_contexts[gen_model].terminology_context,
         )
         audio_refined_vtts[(gen_model, audio_model)] = audio_output
         audio_refine_timings[(gen_model, audio_model)] = audio_seconds

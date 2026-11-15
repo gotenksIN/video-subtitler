@@ -461,6 +461,9 @@ Request configuration:
 - Automatic function calling disabled explicitly via `_build_content_config()`.
 
 ### Prompt structure
+- Grounded speaker names and terminology provide canonical spellings for clearly established boundary repairs and recovered dialogue.
+  Script visual attribution takes precedence.
+  Voice timbre never establishes a speaker name.
 - Header with audio duration and segment boundaries.
 - Numbered script entries: `[0] 00:00:00.000 --> 00:00:05.000 [dialogue]: Text`.
 - Boundary rules:
@@ -476,6 +479,13 @@ Request configuration:
     Wrap rewritten, split, merged, or recovered spoken dialogue to no more than 42 characters per line and two lines per cue, including mixed cues.
     Never emit a patch solely to re-wrap an unchanged cue.
     Never alter whitespace or line breaks inside bracketed visual fragments.
+
+The audio response cache uses identity version 2.
+Its identity includes the grounded names and terminology context, so older responses without that context do not match.
+The host makes up to three validation attempts for malformed JSON, schema violations, or invalid sparse patches.
+Each retry keeps the inline audio and original prompt first and appends corrective validation feedback.
+The host reuses one client, waits one second and then two seconds, and logs failed raw responses.
+Only a validated response reaches the cache or output file.
 
 ### Candidate reconstruction and publication
 1. Host filters the sparse patch to repair authority before reconstruction.
