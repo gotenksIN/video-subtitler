@@ -631,8 +631,11 @@ def test_stream_and_validation_retries_discard_partial_answers(
 
 
 @pytest.mark.parametrize("exhaust", [False, True], ids=["corrected", "exhausted"])
+@pytest.mark.parametrize(
+    "parse_first", [True, False], ids=["parse-first", "parse-retry"]
+)
 def test_text_validation_retries_report_all_invalid_cues(
-    config, monkeypatch, fast_retries, capsys, exhaust
+    config, monkeypatch, fast_retries, capsys, exhaust, parse_first
 ):
     selected = replace(config, chunk_dur=60, audio_refine=False)
     sources = [
@@ -649,6 +652,7 @@ def test_text_validation_retries_report_all_invalid_cues(
         {"id": 4, "text": "The ending."},
     ]
     corrected = [
+        {"id": 0, "text": "Host: This is indeed"},
         {"id": 1, "text": "Host: the test."},
         {"id": 4, "text": "Host: The ending."},
     ]
@@ -673,9 +677,21 @@ def test_text_validation_retries_report_all_invalid_cues(
                     )
                 ],
             ),
-            StreamCall("text", ['{"changes":']),
-            text_call(invalid),
-            text_call(invalid if exhaust else corrected),
+            StreamCall("text", ['{"changes":'])
+            if parse_first
+            else text_call([corrected[0], *invalid]),
+            text_call([corrected[0], *invalid])
+            if parse_first
+            else StreamCall("text", ['{"changes":']),
+            text_call(
+                invalid
+                if exhaust
+                else [
+                    *corrected[1:],
+                    {"id": 0, "text": "Host: Stray 1."},
+                    {"id": 0, "text": "Host: Stray 2."},
+                ]
+            ),
         ]
     )
     use_client(monkeypatch, client)
@@ -699,18 +715,19 @@ def test_text_validation_retries_report_all_invalid_cues(
             "Traceback (most recent call last):",
             "Raw response:\n",
             '{"changes":',
-            json.dumps({"changes": invalid}),
+            json.dumps({"changes": [corrected[0], *invalid]}),
         ):
             assert expected in run_log
+        assert "Global refinement attempt 3 failed:" not in run_log
     else:
         pipeline.run_generation(selected)
         captions = io.read_plain_vtt(config.output_path)
         assert [cue.raw_text for cue in captions] == [
-            sources[0],
             corrected[0]["text"],
+            corrected[1]["text"],
             sources[2],
             sources[3],
-            corrected[1]["text"],
+            corrected[2]["text"],
         ]
         assert [(cue.start, cue.end) for cue in captions] == [
             (core.format_time(index * 0.3), core.format_time((index + 1) * 0.3))
@@ -720,24 +737,23 @@ def test_text_validation_retries_report_all_invalid_cues(
     assert not client.pending
     requests = [request for request in client.requests if request.kind == "text"]
     assert len(requests) == 3
-    assert "json_invalid" in requests[1].contents
+    assert "json_invalid" in requests[1 if parse_first else 2].contents
+    assert all(
+        request.contents.startswith(requests[0].contents) for request in requests
+    )
+    feedback = requests[2 if parse_first else 1].contents
     for change in invalid:
         cue_id = change["id"]
-        assert (
-            f"subtitle ID {cue_id} changes dialogue turns or labels"
-            in requests[2].contents
-        )
-        assert f"Source text: {sources[cue_id]!r}" in requests[2].contents
-        assert f"Proposed text: {change['text']!r}" in requests[2].contents
+        assert f"subtitle ID {cue_id} changes dialogue turns or labels" in feedback
+        assert f"Source text: {sources[cue_id]!r}" in feedback
+        assert f"Proposed text: {change['text']!r}" in feedback
     for request in requests:
-        assert request.config.automatic_function_calling.disable is True
-        schema = json.dumps(request.body["generationConfig"]["responseSchema"])
-        for keyword in ("additionalProperties", "$defs", "$ref"):
-            assert keyword not in schema
+        assert_wire_config(request)
     console = capsys.readouterr().out
     assert "retrying in 1s" in console
     if not exhaust:
         assert "Raw response:" not in console
+        assert "Model proposed changes to 3 lines out of 5." in console
 
 
 def test_audio_validation_failure_preserves_existing_output_and_no_valid_cache(

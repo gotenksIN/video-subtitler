@@ -968,6 +968,8 @@ def global_refine_subtitles(
     )
     source_texts = [cue.raw_text for cue in vtt]
     request_prompt = prompt
+    retained: dict[int, core.RefinedCaption] = {}
+    pending_ids: list[int] | None = None
 
     with create_client(api_key, base_url) as client:
         io.log(
@@ -984,34 +986,66 @@ def global_refine_subtitles(
                 refinements = core.RefinementResponse.model_validate_json(
                     full_json_text
                 )
-                core.validate_refinement_changes(refinements.changes, source_texts)
-            except ValueError as error:
-                if attempt < _STREAM_REQUEST_ATTEMPTS - 1:
-                    io.log_file(
-                        f"Global refinement attempt {attempt + 1} failed: {error}\n"
-                        f"Raw response:\n{full_json_text}"
-                    )
-                if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
-                    raise RuntimeError(
-                        "Parsing or validating the model refinement response failed: "
-                        f"{error}\nRaw response:\n{full_json_text}"
-                    ) from error
-                delay = 2**attempt
-                io.log(
-                    f"Warning: Global refinement attempt {attempt + 1} failed "
-                    f"({error}); retrying in {delay}s..."
+            except ValueError as parse_error:
+                error = str(parse_error)
+                invalid_ids = []
+            else:
+                valid_by_id, invalid_ids, error = core.partition_refinement_changes(
+                    refinements.changes, source_texts, allowed_ids=pending_ids
                 )
-                request_prompt = (
-                    f"{prompt}\n\nCORRECTIVE VALIDATION FEEDBACK\n\n{error}\n\n"
+                retained.update(valid_by_id)
+                if pending_ids is None:
+                    if invalid_ids or retained:
+                        pending_ids = invalid_ids
+                else:
+                    pending_ids = [
+                        cue_id for cue_id in pending_ids if cue_id in invalid_ids
+                    ]
+                if error is None:
+                    break
+            if attempt == _STREAM_REQUEST_ATTEMPTS - 1:
+                raise RuntimeError(
+                    "Parsing or validating the model refinement response failed: "
+                    f"{error}\nRaw response:\n{full_json_text}"
+                )
+            io.log_file(
+                f"Global refinement attempt {attempt + 1} failed: {error}\n"
+                f"Raw response:\n{full_json_text}"
+            )
+            delay = 2**attempt
+            io.log(
+                f"Warning: Global refinement attempt {attempt + 1} failed "
+                f"({error}); retrying in {delay}s..."
+            )
+            request_prompt = (
+                f"{prompt}\n\nCORRECTIVE VALIDATION FEEDBACK\n\n{error}\n\n"
+            )
+            if pending_ids:
+                request_prompt += (
+                    "Valid changes from the previous response are already retained. "
                     "Fix all reported violations against the original source cues. "
+                    'Return only a valid RefinementResponse JSON object whose "changes" '
+                    f"list contains corrected entries only for subtitle ID(s) {pending_ids}, "
+                    "omitting any of those IDs that should remain unchanged. "
+                    "Do not include any other subtitle IDs."
+                )
+            elif pending_ids is not None:
+                request_prompt += (
+                    "All valid changes are already retained. "
+                    "No pending subtitle IDs remain. "
+                    'Return only {"changes": []}. '
+                    "Do not include out-of-range or other subtitle IDs."
+                )
+            else:
+                request_prompt += (
+                    "Fix all reported violations against the original source cues. "
+                    "Do not emit out-of-range subtitle IDs. "
                     "Return only a valid RefinementResponse JSON object with a "
                     '"changes" list containing the complete corrected patch.'
                 )
-                time.sleep(delay)
-                continue
-            break
+            time.sleep(delay)
 
-    changes = refinements.changes
+    changes = [retained[cue_id] for cue_id in sorted(retained)]
     io.log(f"Model proposed changes to {len(changes)} lines out of {len(vtt)}.")
 
     for change in changes:

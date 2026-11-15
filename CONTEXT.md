@@ -564,7 +564,11 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
 7. The host makes up to 3 validation attempts, matching the chunk validation retry pattern.
    Malformed JSON, schema violations, and structural validation failures trigger corrective feedback on the next request.
    Structural feedback lists every invalid change with its cue ID, source text, proposed text, and validation error.
-   Each retry uses the original script and asks for a complete corrected changes list.
+   The host retains valid changes across retries and requests corrections only for failing in-range cue IDs.
+   Omitted requested IDs keep their original source text, and unrelated retry edits cannot overwrite retained changes.
+   Duplicate IDs invalidate both entries; out-of-range IDs remain validation failures.
+   Parse failures preserve the pending correction scope.
+   Each retry keeps the initial prompt as an exact prefix for implicit caching and validates corrections against the original script.
    The host reuses one client and waits 1 second after the first failure and 2 seconds after the second.
    The final validation failure raises an error without publishing the refined output.
 

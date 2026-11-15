@@ -287,17 +287,35 @@ def _dialogue_body_key(text, source_labels=()):
 
 def validate_refinement_changes(changes, source_texts):
     """Validate all replacements against the structure of their source cues."""
+    _valid_by_id, _invalid_ids, error = partition_refinement_changes(
+        changes, source_texts
+    )
+    if error:
+        raise ValueError(error)
+
+
+def partition_refinement_changes(changes, source_texts, allowed_ids=None):
+    """Return valid replacements, failed in-range IDs, and validation feedback."""
+    valid_by_id = {}
+    invalid_ids = []
     seen_ids = set()
     failures = []
     for change in changes:
         source = source_texts[change.id] if 0 <= change.id < len(source_texts) else None
         proposed = change.text
         try:
-            if source is None:
-                raise ValueError(f"subtitle ID {change.id} is out of range")
+            if (
+                source is not None
+                and allowed_ids is not None
+                and change.id not in allowed_ids
+            ):
+                continue
             if change.id in seen_ids:
+                valid_by_id.pop(change.id, None)
                 raise ValueError(f"subtitle ID {change.id} is duplicated")
             seen_ids.add(change.id)
+            if source is None:
+                raise ValueError(f"subtitle ID {change.id} is out of range")
             if not change.text.strip():
                 raise ValueError(f"subtitle ID {change.id} has empty text")
             change.text = _validate_caption_text(change.text)
@@ -339,13 +357,19 @@ def validate_refinement_changes(changes, source_texts):
                         raise ValueError(
                             f"subtitle ID {change.id} duplicates adjacent cue dialogue"
                         )
+            valid_by_id[change.id] = change
         except ValueError as error:
+            if (
+                source is not None
+                and (allowed_ids is None or change.id in allowed_ids)
+                and change.id not in invalid_ids
+            ):
+                invalid_ids.append(change.id)
             failures.append(
                 f"subtitle ID {change.id}: {error}\n"
                 f"Source text: {source!r}\nProposed text: {proposed!r}"
             )
-    if failures:
-        raise ValueError("\n\n".join(failures))
+    return valid_by_id, invalid_ids, "\n\n".join(failures) or None
 
 
 def validate_context_urls(urls):

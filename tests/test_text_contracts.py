@@ -72,6 +72,25 @@ def test_text_refinement_rejects_structural_mutations():
     assert "subtitle ID 0 is duplicated" in message
     assert "subtitle ID 3 has empty text" in message
     assert "subtitle ID 4: Caption text must contain nonempty lines" in message
+    valid, invalid_ids, error = core.partition_refinement_changes(
+        [
+            core.RefinedCaption(id=0, text="Unlabeled stray edit"),
+            core.RefinedCaption(id=0, text="Host: Duplicate stray edit"),
+            core.RefinedCaption(id=1, text="Host: the test."),
+            core.RefinedCaption(id=2, text="and the continuation."),
+            core.RefinedCaption(id=2, text="and another continuation."),
+            core.RefinedCaption(id=5, text="Unknown"),
+        ],
+        sources,
+        allowed_ids=[1, 2],
+    )
+    assert {cue_id: change.text for cue_id, change in valid.items()} == {
+        1: "Host: the test."
+    }
+    assert invalid_ids == [2]
+    assert "subtitle ID 2 is duplicated" in error
+    assert "subtitle ID 5 is out of range" in error
+    assert "subtitle ID 0" not in error
     for sources, cue_id, replacement in (
         (["Host: First.", "Host: Second."], 1, "Host: First."),
         (["[Bad OCR] host: First.", "Host: Second."], 1, "Host: First."),
