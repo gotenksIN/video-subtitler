@@ -403,18 +403,19 @@ def test_single_chunk_skips_audio_request_but_runs_text_refinement(config, monke
                 [
                     stream_chunk(
                         "**PARTICIPANTS AND SPEAKERS:**\nHost: Presenter\n"
+                        "Car, the Garden: Singer\n"
                         "## TOPIC TERMINOLOGY AND PROPER NOUNS:\nOpus: Audio codec",
                         grounding=True,
                     )
                 ],
             ),
-            chunk_call("HOST: Hello.\nOPUS: Codec."),
+            chunk_call("CAR, THE GARDEN: Hello.\nOPUS: Codec."),
             text_call(),
         ],
     )
     assert [r.kind for r in client.requests] == ["research", "chunk", "text"]
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
-        "Host: Hello.\nOPUS: Codec."
+        "Car, the Garden: Hello.\nOPUS: Codec."
     ]
 
 

@@ -389,7 +389,11 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - Reject any source or candidate audio-refinement cue with an unmatched opening or closing bracket.
 
 ### Speaker label pattern
-`SPEAKER_LABEL_RE` matches `^([ \t]*)([A-Z][\w'. -]{1,30})(:[ \t]*)` from the start of a cue line.
+`SPEAKER_LABEL_RE` matches a leading label with `^([ \t]*)(label)(:[ \t]*)`.
+Ordinary labels use `[A-Z][\w'. -]{1,30}`.
+Comma-containing labels use one title-cased token before `, ` and one to four title-cased tokens after it, with optional case-insensitive `the` before the second group.
+This accepts `Car, the Garden:` and `CAR, THE GARDEN:` without treating `Wait, what:` or `Yes, I know:` as labels.
+Refinement validation uses the same comma-label pattern for line-leading and inline turns, including empty-turn guards.
 The pattern captures leading indentation, the label, and the colon with its trailing spacing.
 Periods in titles and initials, such as `Mr. Kim:`, `Dr. Lee:`, and `J.Y. Park:`, remain part of the label.
 
@@ -528,7 +532,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
      Header matching strips surrounding Markdown heading or emphasis markers (`#`, `*`), ignores case and an optional trailing colon, and keeps text before the first header in the identity section so research output without headers keeps working as identity context.
    - `grounded_names` collects the canonical name entries (leading `Name:` lines) from the identity section.
      Extraction excludes placeholder and summary labels, catch-all prefixes, and plural speaker or participant groups.
-     Dotted titles and initials, such as `Mr. Kim` and `J.Y. Park`, and concrete roles, such as `Host` and `Shop Owner`, remain valid.
+     Dotted titles and initials, such as `Mr. Kim` and `J.Y. Park`, comma-containing stage names, such as `Car, the Garden`, and concrete roles, such as `Host` and `Shop Owner`, remain valid.
      Cached `grounded_names` use the same filter on load without changing cache format or identity.
    - `youtube_context` keeps the direct analysis text when the response is non-blank.
 
@@ -546,6 +550,8 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
       A generic role or kinship label may become a canonical name only when the script establishes an unambiguous one-to-one correspondence globally or within that scene.
+      Unify isolated chunk-level roles, alternate titles, and abbreviations, such as `Host:`, `Referee:`, `Producer Na:`, and `Na PD:`, when neighboring chunks or the broader script unambiguously establish the same speaker.
+      A chunk boundary alone does not justify retaining an inconsistent label.
       Shared or ambiguous multi-person roles, collective labels, and unverified incidental roles must not become personal names.
    4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.

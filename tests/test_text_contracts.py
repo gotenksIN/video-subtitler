@@ -15,6 +15,15 @@ def test_text_refinement_rejects_structural_mutations():
         ("Host: Hello", "Hello"),
         ("Hello", "host: Hello"),
         ("Hello", "Shop owner: Hello"),
+        ("Hello", "Car, the Garden: Hello"),
+        ("Car, the Garden: Hello", "Hello"),
+        ("Car, the Garden: Hello", "Car, the Garden:"),
+        ("Host: Hello", "Host: Hello Car, the Garden:"),
+        ("Host: Hello", "Host: Hello Car, the Garden: \n"),
+        ("Host: Hello\nGuest: Yes", "Host: Hello\nCar, the Garden:"),
+        ("Host: Hello\nworld", "Host: Hello\nCar, the Garden: world"),
+        ("Wait, what: Hello", "Car, the Garden: Hello"),
+        ("Yes, I know: Hello", "Car, the Garden: Hello"),
         ("Host: Hello", "Host:"),
         ("Host: Hello\nGuest: Yes", "Host:\nGuest: Yes"),
         ("Host: Hello\nGuest: Yes", "Host: Guest: Yes"),
@@ -93,6 +102,7 @@ def test_text_refinement_rejects_structural_mutations():
     assert "subtitle ID 0" not in error
     for sources, cue_id, replacement in (
         (["Host: First.", "Host: Second."], 1, "Host: First."),
+        (["Car, the Garden: First.", "Host: Second."], 1, "Host: First."),
         (["[Bad OCR] host: First.", "Host: Second."], 1, "Host: First."),
         (["[Title] Host: First.", "Host: Second."], 0, "[Title] Guest: SECOND!"),
         (
@@ -117,6 +127,16 @@ def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
         ("[Bad OCR] host: Helo\nGuest: Yess", "[Correct OCR] Host: Hello\nGuest: Yes"),
         ("[Bad\nOCR]\nhost: Helo", "[Good OCR]\nHost: Hello"),
         ("Shop owner: Hello", "Shop Owner: Hello"),
+        ("Host: Hello", "Car, the Garden: Hello"),
+        ("Car, the Garden: Hello", "Host: Hello"),
+        ("CAR, THE GARDEN: Helo", "Car, the Garden: Hello"),
+        (
+            "Host: Hello\nCar, the Garden: Yes",
+            "Host: Hello Car, the Garden: Yes",
+        ),
+        ("[Title] Host: Hello", "[Title] Car, the Garden: Hello"),
+        ("Wait, what: Helo", "Wait, what: Hello"),
+        ("Yes, I know: Helo", "Yes, I know: Hello"),
         ("[Bad\nOCR]", "[Correct OCR]"),
         ("Host: Hello world", "Host: Hello\nworld"),
         ("Host: Hello\nGuest: Yes", "Host: Hello Guest: Yes"),
@@ -227,6 +247,27 @@ def test_speaker_casing_preserves_visual_and_non_label_text(texts, names, expect
         mixed = [webvtt.Caption("00:00:00.000", "00:00:01.000", visual)]
         core.canonicalize_speaker_casing(mixed, grounded_names)
         assert mixed[0].raw_text == visual
+
+    comma_texts = [
+        "  CAR, THE GARDEN:\tHello",
+        "Car, the Garden: Yes",
+        "[Profile\nCAR, THE GARDEN: Graphic]\nCAR, THE GARDEN: Hi",
+        "Wait, what: Hello",
+        "Yes, I know: Hello",
+    ]
+    comma_cues = [
+        webvtt.Caption("00:00:00.000", "00:00:01.000", text) for text in comma_texts
+    ]
+    core.canonicalize_speaker_casing(
+        comma_cues, ["Car, the Garden", "WAIT, WHAT", "YES, I KNOW"]
+    )
+    assert [cue.raw_text for cue in comma_cues] == [
+        "  Car, the Garden:\tHello",
+        "Car, the Garden: Yes",
+        "[Profile\nCAR, THE GARDEN: Graphic]\nCar, the Garden: Hi",
+        "Wait, what: Hello",
+        "Yes, I know: Hello",
+    ]
 
 
 def test_only_matching_editorial_fragments_merge_at_adjacent_boundaries():

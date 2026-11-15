@@ -12,16 +12,20 @@ from pydantic import BaseModel, ConfigDict, Field
 SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
-_SPEAKER_LABEL_BODY = r"[A-Z][\w'. -]{1,30}"
 _LABEL_TOKEN = r"[A-Z](?:[\w'.-]*[\w.])?"
 _TITLE_LABEL_BODY = rf"{_LABEL_TOKEN}(?: {_LABEL_TOKEN}){{0,3}}"
 _MIXED_LABEL_BODY = rf"{_LABEL_TOKEN}(?: (?i:{_LABEL_TOKEN})){{0,2}}"
+_COMMA_LABEL_BODY = rf"{_LABEL_TOKEN}, (?:(?i:the) )?{_TITLE_LABEL_BODY}"
+_SPEAKER_LABEL_BODY = rf"(?:[A-Z][\w'. -]{{1,30}}|{_COMMA_LABEL_BODY})"
 _LINE_LABEL_PATTERN = (
     rf"\A\s*(?i:{_LABEL_TOKEN}):(?:[ \t]+(?=[^\n]*\S)|[ \t]*\Z)"
-    rf"|^[ \t]*(?:(?:{_TITLE_LABEL_BODY}|{_MIXED_LABEL_BODY}):[ \t]+(?=[^\n]*\S)"
-    rf"|{_TITLE_LABEL_BODY}:[ \t]*$)"
+    rf"|^[ \t]*(?:(?:{_TITLE_LABEL_BODY}|{_MIXED_LABEL_BODY}|{_COMMA_LABEL_BODY}):[ \t]+(?=[^\n]*\S)"
+    rf"|(?:{_TITLE_LABEL_BODY}|{_COMMA_LABEL_BODY}):[ \t]*$)"
 )
-_INLINE_LABEL_PATTERN = rf"(?<!\S){_LABEL_TOKEN}:[ \t]+(?=[^\n]*\w)"
+_INLINE_LABEL_PATTERN = (
+    rf"(?<!\S)(?:{_COMMA_LABEL_BODY}:(?:[ \t]+(?=[^\n]*\w)|[ \t]*$)"
+    rf"|{_LABEL_TOKEN}:[ \t]+(?=[^\n]*\w))"
+)
 SPEAKER_LABEL_RE = re.compile(rf"^([ \t]*)({_SPEAKER_LABEL_BODY})(:[ \t]*)")
 REFINEMENT_LABEL_RE = re.compile(rf"(?m){_LINE_LABEL_PATTERN}|{_INLINE_LABEL_PATTERN}")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
