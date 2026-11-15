@@ -14,11 +14,16 @@ def test_text_refinement_rejects_structural_mutations():
         ("Host: Hello\nGuest: Yes", "Host: Hello and yes"),
         ("Host: Hello", "Hello"),
         ("Hello", "host: Hello"),
+        ("Hello", "Shop owner: Hello"),
         ("Host: Hello", "Host:"),
+        ("Host: Hello\nGuest: Yes", "Host:\nGuest: Yes"),
+        ("Host: Hello\nGuest: Yes", "Host: Guest: Yes"),
+        ("Host: Hello", "Host:\n"),
         ("Host: Hello\nGuest: Yes", "Host: Hello\nGuest:"),
         ("Host: Hello\nGuest: Yes", "Host: Hello Guest:"),
         ("Host: Hello\nGuest:", "Host: Hello\nGuest: Yes"),
         ("Host: Hello\nworld", "Host: Hello\nGuest: world"),
+        ("Host: Hello\nworld", "Host: Hello\nShop owner: world"),
         ("Hello\nHost: Yes", "Host: Hello\nHost: Yes"),
         ("Host: Hello world", "Host: Hello\n\nworld"),
         ("Host: Hello world", "Host: Hello\n \nworld"),
@@ -67,11 +72,32 @@ def test_text_refinement_rejects_structural_mutations():
     assert "subtitle ID 0 is duplicated" in message
     assert "subtitle ID 3 has empty text" in message
     assert "subtitle ID 4: Caption text must contain nonempty lines" in message
+    for sources, cue_id, replacement in (
+        (["Host: First.", "Host: Second."], 1, "Host: First."),
+        (["[Bad OCR] host: First.", "Host: Second."], 1, "Host: First."),
+        (["[Title] Host: First.", "Host: Second."], 0, "[Title] Guest: SECOND!"),
+        (
+            ["Host: Other.\nKim Won-sik: Words.", "Host: Hello\nKim Won-sik: Yes"],
+            0,
+            "Host: Hello Kim Won-sik: Yes",
+        ),
+    ):
+        with pytest.raises(ValueError, match="duplicates adjacent cue dialogue"):
+            core.validate_refinement_changes(
+                [core.RefinedCaption(id=cue_id, text=replacement)],
+                sources,
+            )
+    core.validate_refinement_changes(
+        [core.RefinedCaption(id=0, text="Host: First.")],
+        ["Host: First.", "Host: First."],
+    )
 
 
 def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
     for source, replacement in (
         ("[Bad OCR] host: Helo\nGuest: Yess", "[Correct OCR] Host: Hello\nGuest: Yes"),
+        ("[Bad\nOCR]\nhost: Helo", "[Good OCR]\nHost: Hello"),
+        ("Shop owner: Hello", "Shop Owner: Hello"),
         ("[Bad\nOCR]", "[Correct OCR]"),
         ("Host: Hello world", "Host: Hello\nworld"),
         ("Host: Hello\nGuest: Yes", "Host: Hello Guest: Yes"),
@@ -91,10 +117,47 @@ def test_text_refinement_accepts_corrections_and_same_turn_rewrapping():
         ("Host: Re:Zero", "LookSam: Re:Zero"),
         ("Host: Wait: ...", "LookSam: Wait: ..."),
         ("well, she asked:", "well, she asks:"),
+        ("she asked:", "she asks:"),
+        ("Host: Name: Yoon Dowoon.", "Yoon Dowoon: Name: Yoon Dowoon."),
+        (
+            "Host: Other: communicating while gaming.",
+            "Kim Won-sik: Other: communicating while gaming.",
+        ),
+        ("Host: Du: When two become one.", "Kim Won-sik: Du: When two become one."),
+        (
+            "Host: Anyway, a place you want to go\nif you get a vacation:",
+            "Na Young-seok: Anyway, a place you want to go\nif you get a vacation:",
+        ),
+        (
+            "Host: I just liked this title here:",
+            "Na Young-seok: I just liked this title\nhere:",
+        ),
+        (
+            "Host: Reason for choosing that activity:\npreferring...",
+            "Na Young-seok: Reason for choosing\nthat activity: preferring...",
+        ),
+        (
+            "Host: Reason for that activity:\npreferring...",
+            "Na Young-seok: Reason for that\nactivity: preferring...",
+        ),
         ("Host: Hello world", "Host: Hello\nworld\n"),
     ):
         core.validate_refinement_changes(
             [core.RefinedCaption(id=0, text=replacement)], [source]
+        )
+    for sources, replacement in (
+        (["host: First.", "Host: First."], "Host: First."),
+        (
+            ["Host: Hello Guest: Yes", "Host: Hello\nGuest: Yes"],
+            "Host: Hello\nGuest: Yes",
+        ),
+        (
+            ["Host: Hello Kim Won-sik: Yes", "Host: Hello\nKim Won-sik: Yes"],
+            "Host: Hello\nKim Won-sik: Yes",
+        ),
+    ):
+        core.validate_refinement_changes(
+            [core.RefinedCaption(id=0, text=replacement)], sources
         )
 
 

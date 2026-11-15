@@ -13,8 +13,15 @@ SUBTITLE_SUFFIXES = (".vtt", ".srt", ".sub", ".sbv")
 MEDIA_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov", ".avi", ".m4v")
 LANGUAGE_TAG_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,4})?$")
 _SPEAKER_LABEL_BODY = r"[A-Z][\w'. -]{1,30}"
-_LINE_LABEL_PATTERN = rf"^[ \t]*(?i:{_SPEAKER_LABEL_BODY}):[ \t]*"
-_INLINE_LABEL_PATTERN = r"(?<!\S)[A-Z](?:[\w'.-]*[\w.])?:[ \t]+(?=[^\n]*\w)"
+_LABEL_TOKEN = r"[A-Z](?:[\w'.-]*[\w.])?"
+_TITLE_LABEL_BODY = rf"{_LABEL_TOKEN}(?: {_LABEL_TOKEN}){{0,3}}"
+_MIXED_LABEL_BODY = rf"{_LABEL_TOKEN}(?: (?i:{_LABEL_TOKEN})){{0,2}}"
+_LINE_LABEL_PATTERN = (
+    rf"\A\s*(?i:{_LABEL_TOKEN}):(?:[ \t]+(?=[^\n]*\S)|[ \t]*\Z)"
+    rf"|^[ \t]*(?:(?:{_TITLE_LABEL_BODY}|{_MIXED_LABEL_BODY}):[ \t]+(?=[^\n]*\S)"
+    rf"|{_TITLE_LABEL_BODY}:[ \t]*$)"
+)
+_INLINE_LABEL_PATTERN = rf"(?<!\S){_LABEL_TOKEN}:[ \t]+(?=[^\n]*\w)"
 SPEAKER_LABEL_RE = re.compile(rf"^([ \t]*)({_SPEAKER_LABEL_BODY})(:[ \t]*)")
 REFINEMENT_LABEL_RE = re.compile(rf"(?m){_LINE_LABEL_PATTERN}|{_INLINE_LABEL_PATTERN}")
 AUDIO_REFINE_RESPONSE_CONTRACT = "sparse-patch-v1"
@@ -214,23 +221,40 @@ def validate_captions(captions, chunk_duration):
     return validated
 
 
+def _source_labels(text):
+    return {
+        match.group(2)
+        for line in text.splitlines()
+        if (match := SPEAKER_LABEL_RE.match(line))
+        and match.group(3) != ":"
+        and line[match.end() :].strip()
+    }
+
+
+def _refinement_label_re(source_labels=()):
+    if not source_labels:
+        return REFINEMENT_LABEL_RE
+    names = "|".join(
+        re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
+    )
+    return re.compile(
+        rf"(?m)^[ \t]*(?i:{names}):(?:[ \t]+(?=[^\n]*\S)|[ \t]*$)|"
+        rf"{_LINE_LABEL_PATTERN}|"
+        rf"(?<!\S)(?i:{names}):[ \t]+(?=[^\n]*\w)|{_INLINE_LABEL_PATTERN}",
+    )
+
+
 def _refinement_dialogue_labels(text, cue_id, source_labels=()):
     labels = []
     outside_text, _fragments, _unmatched = _parse_bracketed_text(text)
-    if source_labels:
-        names = "|".join(
-            re.escape(name) for name in sorted(source_labels, key=len, reverse=True)
-        )
-        label_re = re.compile(
-            rf"(?m){_LINE_LABEL_PATTERN}|"
-            rf"(?<!\S)(?i:{names}):[ \t]+(?=[^\n]*\w)|{_INLINE_LABEL_PATTERN}",
-        )
-    else:
-        label_re = REFINEMENT_LABEL_RE
+    label_re = _refinement_label_re(source_labels)
     previous_end = 0
     for label in label_re.finditer(outside_text):
         before = outside_text[previous_end : label.start()]
         if labels and not re.search(r"\w", before):
+            if "\n" not in before:
+                previous_end = label.end()
+                continue
             raise ValueError(f"subtitle ID {cue_id} has empty dialogue")
         if not labels and re.search(r"\w", before):
             labels.append(False)
@@ -241,6 +265,24 @@ def _refinement_dialogue_labels(text, cue_id, source_labels=()):
     if not labels and re.search(r"\w", outside_text):
         labels.append(False)
     return labels
+
+
+def _dialogue_body_key(text, source_labels=()):
+    outside_text, _fragments, _unmatched = _parse_bracketed_text(text)
+    label_re = _refinement_label_re(_source_labels(text) | set(source_labels))
+    pieces = []
+    cursor = 0
+    previous_end = None
+    for label in label_re.finditer(outside_text):
+        if previous_end is not None:
+            before = outside_text[previous_end : label.start()]
+            if "\n" not in before and not re.search(r"\w", before):
+                previous_end = label.end()
+                continue
+        pieces.append(outside_text[cursor : label.start()])
+        cursor = previous_end = label.end()
+    pieces.append(outside_text[cursor:])
+    return re.sub(r"\W+", "", "".join(pieces)).casefold()
 
 
 def validate_refinement_changes(changes, source_texts):
@@ -270,17 +312,33 @@ def validate_refinement_changes(changes, source_texts):
                     f"subtitle ID {change.id} changes visual fragment count"
                 )
 
-            source_labels = {
-                match.group(2)
-                for line in source.splitlines()
-                if (match := SPEAKER_LABEL_RE.match(line))
-            }
+            source_labels = _source_labels(source)
             if _refinement_dialogue_labels(
                 change.text, change.id, source_labels
             ) != _refinement_dialogue_labels(source, change.id, source_labels):
                 raise ValueError(
                     f"subtitle ID {change.id} changes dialogue turns or labels"
                 )
+            shared_labels = source_labels | _source_labels(change.text)
+            body_key = _dialogue_body_key(change.text, shared_labels)
+            if len(body_key) >= 4 and body_key != _dialogue_body_key(
+                source, shared_labels
+            ):
+                for adjacent in (change.id - 1, change.id + 1):
+                    if not 0 <= adjacent < len(source_texts):
+                        continue
+                    adjacent_text = source_texts[adjacent]
+                    adjacent_labels = shared_labels | _source_labels(adjacent_text)
+                    adjacent_body = _dialogue_body_key(change.text, adjacent_labels)
+                    if (
+                        len(adjacent_body) >= 4
+                        and adjacent_body
+                        == _dialogue_body_key(adjacent_text, adjacent_labels)
+                        and adjacent_body != _dialogue_body_key(source, adjacent_labels)
+                    ):
+                        raise ValueError(
+                            f"subtitle ID {change.id} duplicates adjacent cue dialogue"
+                        )
         except ValueError as error:
             failures.append(
                 f"subtitle ID {change.id}: {error}\n"
@@ -634,7 +692,9 @@ def validate_audio_refinement_response(
         cue_ids = list(cue.source_ids)
         if not cue_ids and _visual_fragment_strings(cue.text):
             raise ValueError("Recovered cues must not contain bracketed text")
-        if not cue_ids and not re.search(r"\w", REFINEMENT_LABEL_RE.sub("", cue.text)):
+        if not cue_ids and not re.search(
+            r"\w", REFINEMENT_LABEL_RE.sub("", cue.text.removesuffix("\n"))
+        ):
             raise ValueError("Recovered cues must contain spoken dialogue")
         if cue_ids != sorted(set(cue_ids)):
             raise ValueError(

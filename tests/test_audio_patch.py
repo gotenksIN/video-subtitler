@@ -254,11 +254,16 @@ def test_changed_or_recovered_cues_clamp_grace_but_cannot_use_video_tail():
 
 
 def test_recovered_speech_and_brackets_must_be_well_formed():
-    assert (
-        validate([], [cue([], 12, 14, "well, she asked:")])[0]["text"]
-        == "well, she asked:"
-    )
-    for text in ("Host:", "[Visual] Talk", "Missing [bracket", "Bad]"):
+    for text in ("well, she asked:", "she asked:"):
+        assert validate([], [cue([], 12, 14, text)])[0]["text"] == text
+    for text in (
+        "Host:",
+        "host:",
+        "host:\n",
+        "[Visual] Talk",
+        "Missing [bracket",
+        "Bad]",
+    ):
         with pytest.raises(ValueError):
             validate([], [cue([], 12, 14, text)])
     for text in ("Hello\n\nworld", "Hello\n \nworld", "Hello\rworld", "Hello\n\n"):

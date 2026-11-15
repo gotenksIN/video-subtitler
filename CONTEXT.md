@@ -555,6 +555,12 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    Labeled turns retain labels at their original positions; unlabeled turns cannot gain labels.
    Existing label spelling and visual text within brackets may be corrected.
    Line wraps continue the same turn, and adjacent labeled turns remain separate even when written on one line.
+   Inline colon text immediately after a label on the same line stays within that turn.
+   Single-token lowercase labels match only at the start of dialogue outside graphics (`\A\s*`), including across leading blank lines.
+   Mixed-case multi-word labels, such as `Shop owner:`, also match on continuation lines.
+   Lowercase prose on continuation lines, including colon-ending text, does not introduce labels.
+   Changed dialogue must not duplicate either adjacent source cue after removing graphics, speaker labels, punctuation, and casing.
+   Unchanged dialogue and normalized dialogue shorter than four characters remain exempt.
 7. The host makes up to 3 validation attempts, matching the chunk validation retry pattern.
    Malformed JSON, schema violations, and structural validation failures trigger corrective feedback on the next request.
    Structural feedback lists every invalid change with its cue ID, source text, proposed text, and validation error.
