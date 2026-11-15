@@ -25,8 +25,8 @@ def test_supported_media_splits_into_decodable_stream_copy_chunks(
     media.split_video(str(source), work, 1, {"chunk_ext": ext})
     chunks = media.list_chunks(work)
     assert len(chunks) == 2
-    assert [chunk["start"] for chunk in chunks] == sorted(
-        chunk["start"] for chunk in chunks
+    assert (
+        0 == chunks[0]["start"] < chunks[1]["start"] == pytest.approx(chunks[0]["end"])
     )
     for chunk in chunks:
         path = work / chunk["name"]
@@ -121,8 +121,9 @@ def test_split_cache_damage_regenerates_real_media(media_files, tmp_path, damage
             encoding="ascii",
         )
     media.split_video(source, tmp_path, 1, manifest)
-    assert len(media.list_chunks(tmp_path)) == 2
-    for chunk in media.list_chunks(tmp_path):
+    rebuilt = media.list_chunks(tmp_path)
+    assert len(rebuilt) == 2
+    for chunk in rebuilt:
         assert media.inspect_media(tmp_path / chunk["name"]).duration > 0
 
 
