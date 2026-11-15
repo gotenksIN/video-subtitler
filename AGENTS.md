@@ -1,26 +1,12 @@
 # Agent specification
 
-## Agent skills
-
-### Issue tracker
-
-Track issues in GitHub Issues for `gotenksIN/video-subtitler`.
-See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the five default triage labels.
-See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Use the single-context domain layout.
-See `docs/agents/domain.md`.
+## Domain documentation
 
 `CONTEXT.md` is the authoritative technical and architectural specification for this repository.
 It describes the pipeline, schemas, authority rules, caching, and domain model from first principles.
 Read `CONTEXT.md` before changing code, tests, scripts, or documentation.
 Always keep `CONTEXT.md` up-to-date whenever architecture, schemas, pipeline flow, or domain concepts change.
+Use terms defined in `CONTEXT.md` rather than introducing synonyms.
 
 ## Development rules
 

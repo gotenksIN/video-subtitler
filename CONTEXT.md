@@ -86,7 +86,6 @@ Every tracked file in this repository has a defined responsibility.
 | `.env.example` | Environment variable template for credentials and model defaults. |
 | `.gitignore` | Ignores credentials, caches, generated media, work directories, and subtitle outputs. |
 | `.python-version` | Pins the Python interpreter version for `uv`. |
-| `docs/agents/` | Agent skill instructions for issue tracking, triage labels, and domain documentation. |
 
 Keep the five modules in `modules/` on an acyclic dependency graph:
 - `modules/core.py` and `modules/io.py` are foundations with no project-internal imports.
