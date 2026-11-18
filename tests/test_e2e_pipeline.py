@@ -559,8 +559,9 @@ def test_audio_text_refinement_retains_deletes_and_edits_across_surgical_retries
         )
 
 
+@pytest.mark.parametrize("deleted_id", [0, 99], ids=["in-range", "out-of-range"])
 def test_text_only_refinement_retries_deletes_without_attaching_audio(
-    config, monkeypatch
+    config, monkeypatch, deleted_id
 ):
     source = config.output_path.with_name("input.vtt")
     source.write_text(
@@ -568,9 +569,13 @@ def test_text_only_refinement_retries_deletes_without_attaching_audio(
         "00:00:00.500 --> 00:00:01.000\nHost: Hello.\n",
         encoding="ascii",
     )
+    parse_failure = [StreamCall("text", ['{"changes":'])] if deleted_id == 99 else []
     client = ScriptedGeminiClient(
         [
-            StreamCall("text", ['{"changes": [], "deletedIds": [0]}']),
+            StreamCall(
+                "text", [json.dumps({"changes": [], "deletedIds": [deleted_id]})]
+            ),
+            *parse_failure,
             text_call(),
         ]
     )
@@ -585,6 +590,10 @@ def test_text_only_refinement_retries_deletes_without_attaching_audio(
         core.PreflightContext(),
     )
     assert not client.pending
+    if deleted_id == 99:
+        feedback = client.requests[-1].contents
+        assert "json_invalid" in feedback
+        assert "subtitle ID 99 in deletedIds: is out of range" in feedback
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
         "Host: Hello.",
         "Host: Hello.",
@@ -992,12 +1001,15 @@ def test_text_validation_retries_report_all_invalid_cues(
     assert all(
         request.contents.startswith(requests[0].contents) for request in requests
     )
-    feedback = requests[2 if parse_first else 1].contents
-    for change in invalid:
-        cue_id = change["id"]
-        assert f"subtitle ID {cue_id} changes dialogue turns or labels" in feedback
-        assert f"Source text: {sources[cue_id]!r}" in feedback
-        assert f"Proposed text: {change['text']!r}" in feedback
+    corrective_requests = requests[2:] if parse_first else requests[1:]
+    for request in corrective_requests:
+        for change in invalid:
+            cue_id = change["id"]
+            assert f"subtitle ID {cue_id} changes dialogue turns or labels" in (
+                request.contents
+            )
+            assert f"Source text: {sources[cue_id]!r}" in request.contents
+            assert f"Proposed text: {change['text']!r}" in request.contents
     for request in requests:
         assert_wire_config(request)
     console = capsys.readouterr().out

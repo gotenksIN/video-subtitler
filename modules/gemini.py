@@ -1040,6 +1040,7 @@ def global_refine_subtitles(
     retained: dict[int, core.RefinedCaption] = {}
     retained_deleted: set[int] = set()
     pending_ids: list[int] | None = None
+    structural_error = None
     audio_part = _inline_audio_part(audio_path) if audio_path else None
     empty_response = (
         '{"changes": [], "deletedIds": []}' if audio_path else '{"changes": []}'
@@ -1062,7 +1063,8 @@ def global_refine_subtitles(
                 )
             except ValueError as parse_error:
                 error = str(parse_error)
-                invalid_ids = []
+                if structural_error:
+                    error = f"{error}\n\n{structural_error}"
             else:
                 if pending_ids is not None:
                     refinements = core.RefinementResponse(
@@ -1081,7 +1083,7 @@ def global_refine_subtitles(
                             or not 0 <= cue_id < len(source_texts)
                         ],
                     )
-                retained, retained_deleted, invalid_ids, error = (
+                retained, retained_deleted, pending_ids, structural_error = (
                     core.partition_refinement_response(
                         refinements,
                         source_texts,
@@ -1089,7 +1091,7 @@ def global_refine_subtitles(
                         retained_deleted_ids=retained_deleted,
                     )
                 )
-                pending_ids = invalid_ids
+                error = structural_error
                 if error is None:
                     break
             if attempt == _STREAM_REQUEST_ATTEMPTS - 1:

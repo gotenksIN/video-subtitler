@@ -649,7 +649,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    A retry deletion that removes the last survivor fails without discarding retained valid deletions.
    Omitted requested IDs keep their original source text, and unrelated retry edits cannot overwrite retained changes.
    Duplicate IDs invalidate both entries; out-of-range IDs remain validation failures.
-   Parse failures preserve the pending correction scope.
+   Parse failures preserve the pending correction scope and include its previous structural feedback alongside the parse error.
    Each retry keeps the initial prompt as an exact prefix for implicit caching and validates corrections against the original script.
    The host reuses one client and waits 1 second after the first failure and 2 seconds after the second.
    The final validation failure raises an error without publishing the refined output.
