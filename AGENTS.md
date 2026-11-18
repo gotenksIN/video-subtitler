@@ -32,10 +32,6 @@ Keep the five modules in `modules/` on an acyclic dependency graph:
 - `modules/pipeline.py` orchestrates media and Gemini and owns the run lifecycle.
 - `gemini_subs.py` stays CLI-only: dotenv loading, argument parsing, validation, and dispatch.
 
-Use semantic line breaks in Markdown prose: put each complete sentence on its own source line.
-Use active voice, present tense, ASD-STE100 short sentences, and sentence-case headings.
-Do not use exclamation points in documentation.
-
 ## Testing principles
 
 Keep the test suite small, fast, and pipeline-oriented (target 45 to 70 collected items across `tests/`).
@@ -59,19 +55,6 @@ Parametrize across all supported codecs (`vp9`, `h264`, `hevc`) only when testin
 
 Assert outputs, files, parsed WebVTT cues, persisted resume state, exit status, diagnostics, SDK config fields, and serialized wire schemas.
 Remove tests that only prove a feature, command, or symbol exists.
-Let the typechecker enforce static type relationships.
-
-## Simplicity (YAGNI)
-
-Implement only current, explicit requirements.
-Do not add speculative features, abstractions, configuration, dependencies, or extensibility for hypothetical future use.
-Prefer the smallest clear change that reuses existing code and standard facilities.
-Delete obsolete code when safe.
-
-Before writing a utility or adding a dependency, search the repository for an existing implementation and its callers.
-Then check the standard library and already-declared dependencies.
-Reuse an established option when it fits.
-Ask before adding a new dependency.
 
 ## Validation matrix
 
@@ -92,24 +75,3 @@ For documentation or instruction edits, do not run pytest, ruff, compileall, she
 | Python production or test files | `uv run ruff check <changed-file>` and `uv run ruff format --check <changed-file>`. |
 
 Run the full `uv run pytest` suite when the user requests it or when a change alters cross-module contracts.
-
-## Git workflow
-
-Never create commits unless the user explicitly asks for them.
-When the user requests per-task commits, commit each discrete task before starting the next one.
-Before every commit, run the exact full commands `git status`, `git diff`, and `git log -10`.
-Do not replace these required inspections with abbreviated variants such as `git status --short`, `git diff --stat`, or `git log --oneline`.
-Read the full commit messages from `git log -10`, including their bodies and trailers.
-Stage only files that belong to the current task.
-
-Format commit messages per repository conventions:
-- Use the subject format `<scope>: <Capitalized summary>`. Derive the lowercase scope from the component or directory you changed.
-- Write the summary in the imperative mood and do not end it with a period.
-- Keep the subject near 50 characters and never longer than 72 characters.
-- Add a concise, technical body when the subject does not provide enough context. Explain what changed and why.
-- Separate the subject from the body with a blank line and wrap body text at 72 characters.
-
-Check commit signing once per session with `git config commit.gpgsign` and `git config user.signingkey`.
-Remember the result for the rest of the session.
-If both are set, sign every commit with the configured method and use `git commit --signoff`.
-Do not amend commits, push, or rewrite history unless the user explicitly asks.
