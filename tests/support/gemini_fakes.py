@@ -31,6 +31,7 @@ class StreamCall:
     pieces: list = field(default_factory=list)
     error: Exception | None = None
     on_request: object = None
+    complete: bool = True
 
 
 class ScriptedGeminiClient:
@@ -119,16 +120,30 @@ class ScriptedGeminiClient:
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            stream=_EventStream(call.pieces),
+            stream=_EventStream(call.pieces, complete=call.complete),
         )
 
 
 class _EventStream(httpx2.SyncByteStream):
-    def __init__(self, pieces):
+    def __init__(self, pieces, *, complete):
         self.pieces = pieces
+        self.complete = complete
 
     def __iter__(self):
-        for piece in self.pieces:
+        final_candidate_index = (
+            next(
+                (
+                    index
+                    for index in range(len(self.pieces) - 1, -1, -1)
+                    if isinstance(self.pieces[index], str)
+                    or getattr(self.pieces[index], "candidates", None)
+                ),
+                None,
+            )
+            if self.complete
+            else None
+        )
+        for index, piece in enumerate(self.pieces):
             if isinstance(piece, errors.APIError):
                 data = {"error": {"code": piece.code, "message": piece.message}}
             elif isinstance(piece, Exception):
@@ -136,6 +151,9 @@ class _EventStream(httpx2.SyncByteStream):
             else:
                 chunk = stream_chunk(piece) if isinstance(piece, str) else piece
                 data = chunk.model_dump(mode="json", by_alias=True, exclude_none=True)
+                if index == final_candidate_index:
+                    for candidate in data["candidates"]:
+                        candidate.setdefault("finishReason", "STOP")
             yield f"data: {json.dumps(data)}\n\n".encode()
 
 
@@ -159,7 +177,9 @@ def stream_chunk(
                 finish_reason=finish_reason,
                 continuation_token=continuation_token,
                 grounding_metadata=types.GroundingMetadata(
-                    web_search_queries=["speaker identities"]
+                    web_search_queries=[
+                        "speaker identities" if grounding is True else grounding
+                    ]
                 )
                 if grounding
                 else None,

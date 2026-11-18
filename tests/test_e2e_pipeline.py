@@ -828,14 +828,39 @@ def test_lock_stays_held_until_preflight_settles_after_media_failure(
     assert (work / "preflight_context.json").is_file()
 
 
-def test_stream_and_validation_retries_discard_partial_answers(config, monkeypatch):
+def test_stream_and_validation_retries_discard_partial_answers(
+    config, monkeypatch, capsys
+):
     selected = replace(config, workers=1, audio_refine=False, refine_text=False)
+
+    def check_no_partial_cache(_request):
+        assert not (workdirs()[0] / "preflight_context.json").exists()
+
+    def check_completed_research(_request):
+        saved = (workdirs()[0] / "preflight_context.json").read_text(encoding="utf-8")
+        assert "Partial Speaker" not in saved
+        assert "Host: Presenter" in saved
+
     client = run(
         monkeypatch,
         selected,
         [
-            research_call(),
-            StreamCall("chunk", [errors.ServerError(503, {"message": "SSE error"})]),
+            StreamCall(
+                "research",
+                [
+                    stream_chunk(
+                        "Partial Speaker: Incomplete", grounding="incomplete query"
+                    ),
+                    stream_chunk("still thinking", thought=True),
+                ],
+                complete=False,
+            ),
+            research_call(on_request=check_no_partial_cache),
+            StreamCall(
+                "chunk",
+                [errors.ServerError(503, {"message": "SSE error"})],
+                on_request=check_completed_research,
+            ),
             StreamCall("chunk", ['{"captions":', httpx2.TransportError("interrupted")]),
             StreamCall(
                 "chunk", ['{"captions":[{"id":0,"start":"1","end":"0","text":"Bad"}]}']
@@ -845,7 +870,11 @@ def test_stream_and_validation_retries_discard_partial_answers(config, monkeypat
             chunk_call(),
         ],
     )
+    assert [r.kind for r in client.requests[:2]] == ["research", "research"]
     assert [r.kind for r in client.requests].count("chunk") == 6
+    out = capsys.readouterr().out
+    assert "incomplete query" not in out
+    assert "speaker identities" in out
     assert [cue.raw_text for cue in io.read_plain_vtt(config.output_path)] == [
         "HOST: Hello.",
         "HOST: Hello.",

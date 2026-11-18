@@ -273,6 +273,8 @@ The host does not enforce an aggregate token budget.
 Continuation is separate from automatic function calling, which stays disabled.
 All five request types use one host stream reader.
 Transport failures, malformed SSE JSON, rate limits, and 5xx errors during stream consumption restart the request within a limit of 3 host attempts.
+A stream with candidates that ends without a `STOP` finish reason from the first candidate also restarts within this limit.
+The reader uses only the first candidate in each chunk for answer text, finish reasons, and grounding metadata.
 Each restart discards partial answer text and grounding metadata and waits 1 second, then 2 seconds.
 All streams reject `MAX_TOKENS`, prompt-level blocks (`prompt_feedback.block_reason`), zero-candidate streams, and other failure finish reasons before parsing or publication.
 Chunk workers reuse one client across their retry attempts and close only their own client.

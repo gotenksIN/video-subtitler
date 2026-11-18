@@ -719,6 +719,7 @@ def _collect_stream_metadata(response_stream):
     grounded_sources = []
     retrieved_urls = {}
     saw_candidate = False
+    saw_stop = False
     for chunk in response_stream:
         feedback = getattr(chunk, "prompt_feedback", None)
         block_reason = getattr(feedback, "block_reason", None)
@@ -727,14 +728,13 @@ def _collect_stream_metadata(response_stream):
             raise RuntimeError(f"Gemini request blocked: {block_reason_text}")
         if chunk.text:
             full_text += chunk.text
-        for candidate in getattr(chunk, "candidates", None) or []:
+        for candidate in (getattr(chunk, "candidates", None) or [])[:1]:
             saw_candidate = True
             reason = getattr(candidate, "finish_reason", None)
-            reason_text = getattr(reason, "value", reason)
-            if reason_text and str(reason_text).upper() not in {
-                "STOP",
-                "FINISH_REASON_UNSPECIFIED",
-            }:
+            reason_text = str(getattr(reason, "value", reason) or "").upper()
+            if reason_text == "STOP":
+                saw_stop = True
+            elif reason_text and reason_text != "FINISH_REASON_UNSPECIFIED":
                 raise RuntimeError(
                     f"Gemini stream failed with finish reason {reason_text}"
                 )
@@ -756,6 +756,8 @@ def _collect_stream_metadata(response_stream):
                         retrieved_urls[url] = entry.url_retrieval_status
     if not saw_candidate:
         raise RuntimeError("Gemini stream returned no candidates")
+    if not saw_stop:
+        raise ConnectionError("Gemini stream ended without STOP finish reason")
     return full_text, search_queries, grounded_sources, retrieved_urls
 
 
