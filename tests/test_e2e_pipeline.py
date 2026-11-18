@@ -1166,6 +1166,19 @@ def test_benchmark_reuses_per_model_preflight_and_reports_stage_metrics(
         "gen-b",
     }
     assert len(list(output.glob("*.vtt"))) == 4
+    request_count = len(client.requests)
+    reference_alias = reference.with_name("reference-alias.vtt")
+    for stage_vtt in sorted(output.glob("*.vtt")):
+        reference_alias.unlink(missing_ok=True)
+        reference_alias.symlink_to(stage_vtt)
+        original = stage_vtt.read_bytes()
+        colliding_args = type(args)(**{**vars(args), "reference_vtt": reference_alias})
+        with pytest.raises(
+            RuntimeError, match="Reference VTT overlaps benchmark output"
+        ):
+            benchmark.run_full_matrix(colliding_args)
+        assert stage_vtt.read_bytes() == original
+    assert len(client.requests) == request_count
     text_request = next(
         request for request in client.requests if request.kind == "text"
     )

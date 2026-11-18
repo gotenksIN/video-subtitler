@@ -307,6 +307,33 @@ def run_full_matrix(args):
     selected_models = [*generation_models, *(model for case in cases for model in case)]
     if any(not model.strip() for model in selected_models):
         raise ValueError("Benchmark model names must not be empty")
+
+    generated_vtts = {
+        gen: output_dir / f"{safe_model_name(gen)}.generated.vtt"
+        for gen in generation_models
+    }
+    audio_refined_vtts = {
+        (gen, audio): output_dir
+        / f"{safe_model_name(gen)}_audio_{safe_model_name(audio)}.vtt"
+        for gen, audio, _ in cases
+        if audio is not None
+    }
+    final_vtts = {
+        (gen, audio, refine): output_dir
+        / f"{safe_model_name(gen)}_{safe_model_name(audio)}_to_{safe_model_name(refine)}.final.vtt"
+        for gen, audio, refine in cases
+    }
+    if args.reference_vtt:
+        planned_outputs = {
+            path.resolve()
+            for paths in (generated_vtts, audio_refined_vtts, final_vtts)
+            for path in paths.values()
+        }
+        if args.reference_vtt.resolve() in planned_outputs:
+            raise RuntimeError(
+                f"Reference VTT overlaps benchmark output: {args.reference_vtt}"
+            )
+
     thinking_level = args.thinking_level or gemini.DEFAULT_CHUNK_THINKING_LEVEL
     args.thinking_level = thinking_level
     context_urls = pipeline.validate_generation_config(
@@ -328,12 +355,29 @@ def run_full_matrix(args):
     lock_root.mkdir(parents=True, exist_ok=True)
     lock_file = pipeline.acquire_lock(lock_root)
     try:
-        _run_full_matrix(args, output_dir, cases, generation_models, context_urls)
+        _run_full_matrix(
+            args,
+            output_dir,
+            cases,
+            context_urls,
+            generated_vtts=generated_vtts,
+            audio_refined_vtts=audio_refined_vtts,
+            final_vtts=final_vtts,
+        )
     finally:
         pipeline.release_lock(lock_file)
 
 
-def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
+def _run_full_matrix(
+    args,
+    output_dir,
+    cases,
+    context_urls,
+    *,
+    generated_vtts,
+    audio_refined_vtts,
+    final_vtts,
+):
     """Run benchmark matrix across validated generation and refinement models."""
     thinking_level = args.thinking_level
     source_title = core.derive_source_title(args.video_file)
@@ -392,14 +436,12 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
         )
 
     # 3. Chunk generation per unique generation model.
-    generated_vtts = {}
     generation_timings = {}
     generation_cached = {}
     preflight_timings = {}
     preflight_cached = {}
     preflight_contexts = {}
-    for gen_model in generation_models:
-        gen_output = output_dir / f"{safe_model_name(gen_model)}.generated.vtt"
+    for gen_model, gen_output in generated_vtts.items():
         generation_identity = {
             "model": gen_model,
             "thinking_level": thinking_level,
@@ -452,22 +494,13 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
             source_title,
             preflight_contexts[gen_model],
         )
-        generated_vtts[gen_model] = gen_output
         generation_timings[gen_model] = gen_seconds
         generation_cached[gen_model] = cached
 
     # 4. Audio refinement per unique (gen_model, audio_model).
-    audio_refined_vtts = {}
     audio_refine_timings = {}
     audio_refine_cached = {}
-    unique_audio_pairs = dict.fromkeys(
-        (gen, audio) for gen, audio, _ in cases if audio is not None
-    ).keys()
-    for gen_model, audio_model in unique_audio_pairs:
-        audio_output = (
-            output_dir
-            / f"{safe_model_name(gen_model)}_audio_{safe_model_name(audio_model)}.vtt"
-        )
+    for (gen_model, audio_model), audio_output in audio_refined_vtts.items():
         audio_key = pipeline.manifest_digest(
             {"generation_model": gen_model, "audio_model": audio_model}
         )
@@ -487,7 +520,6 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
             grounded_names=preflight_contexts[gen_model].grounded_names,
             terminology_context=preflight_contexts[gen_model].terminology_context,
         )
-        audio_refined_vtts[(gen_model, audio_model)] = audio_output
         audio_refine_timings[(gen_model, audio_model)] = audio_seconds
         audio_refine_cached[(gen_model, audio_model)] = cached
 
@@ -495,10 +527,7 @@ def _run_full_matrix(args, output_dir, cases, generation_models, context_urls):
     results = []
     for gen_model, audio_model, refine_model in cases:
         input_vtt = audio_refined_vtts.get((gen_model, audio_model))
-        final_vtt = (
-            output_dir
-            / f"{safe_model_name(gen_model)}_{safe_model_name(audio_model)}_to_{safe_model_name(refine_model)}.final.vtt"
-        )
+        final_vtt = final_vtts[(gen_model, audio_model, refine_model)]
         refine_seconds = run_text_refinement(
             args,
             refine_model,

@@ -718,6 +718,7 @@ Audio-enabled cases pass complete audio to text refinement.
 Single-chunk cases skip Pass 2 but still extract audio for text refinement.
 Manifest hashing and generation input validation reuse pipeline helpers.
 Output filenames truncate sanitized model stems before their hash suffix so combined multi-model names stay within filesystem limits.
+The runner rejects a reference VTT whose resolved path matches a planned stage VTT before it locks the output directory.
 Benchmark JSON records preflight, generation, audio, and text stage timings (summing them into `total_seconds`) alongside `preflight_cached`, `generation_cached`, and `audio_refine_cached` flags.
 
 ### Comparison metrics
