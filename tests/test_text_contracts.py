@@ -392,7 +392,21 @@ def test_timestamps_accept_supported_shapes_and_round_to_milliseconds():
         assert core.parse_time(text) == seconds
     assert core.format_time(59.9996) == "00:01:00.000"
     assert core.format_time(3723.125) == "01:02:03.125"
-    for text in ("", "word", "1:2:3:4", "nan", "inf", "1::2"):
+    for text in (
+        "",
+        "word",
+        "1:2:3:4",
+        "nan",
+        "inf",
+        "1::2",
+        "+00:01:05",
+        "01:-01:05",
+        "00:01:-05",
+        "00:01:05.-5",
+        "00:01:05.",
+        "1_0",
+        "1: 02",
+    ):
         with pytest.raises(ValueError):
             core.parse_time(text)
 

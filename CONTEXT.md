@@ -372,7 +372,8 @@ The same file stores `source_title`, `context_urls`, `model_name`, and `thinking
 ## Timestamp rules
 
 Accepted input shapes: `SS`, `MM:SS`, or `HH:MM:SS`.
-The fractional-second part is optional in each shape.
+Each field contains unsigned decimal digits.
+The fractional-second part is optional in each shape, but a decimal separator requires at least one following digit.
 Decimal commas are converted to decimal points.
 Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 

@@ -136,13 +136,13 @@ def parse_time(time_str):
     else:
         raise ValueError(f"Invalid timestamp: {time_str}")
 
-    if "." in s_ms:
-        s, frac = s_ms.split(".", 1)
-        frac_seconds = int(frac) / (10 ** len(frac)) if frac else 0
-    else:
-        s = s_ms
-        frac_seconds = 0
+    s, decimal, frac = s_ms.partition(".")
+    if not (h.isdecimal() and m.isdecimal() and s.isdecimal()) or (
+        decimal and not frac.isdecimal()
+    ):
+        raise ValueError(f"Invalid timestamp: {time_str}")
 
+    frac_seconds = int(frac) / (10 ** len(frac)) if frac else 0
     return int(h) * 3600 + int(m) * 60 + int(s) + frac_seconds
 
 
