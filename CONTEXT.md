@@ -254,6 +254,10 @@ It does not switch the same speaker between role labels such as `Referee:` and `
 When speakers address each other by role, generation keeps consistent role or kinship prefixes across turns instead of reverting to unlabeled dialogue.
 It repeats the speaker's prefix on each consecutive cue in that speaker's turn.
 It leaves dialogue unlabeled only when neither a candidate name nor a clear descriptive role can be distinguished.
+When two unlabeled speakers share a rapid cue under 500 milliseconds, generation prefixes each turn line with `- ` rather than inventing speaker labels.
+Generation translates into natural English SVO phrasing, recovers omitted subjects and objects from clip context, renders direct named address to an on-scene interlocutor in the second person, and breaks multi-cue sentences at grammatical phrases without stranding bare function words or emitting punctuation-only cues.
+It preserves culturally specific foods, customs, relational terms, and metalinguistic word comparisons rather than domesticating or flattening them, while translating ordinary everyday nouns into standard English without ungrounded footnotes or raw source-script characters.
+It conveys sentence-final particles, clause-final polite softeners, and register through natural English tone, renders mimetics into vivid English manner verbs or adverbs, and translates routine social formulas by situational function.
 When simultaneous speech and meaningful editorial text cannot be sequenced without loss, generation permits a two-line mixed cue with bracketed editorial text followed by dialogue.
 Generation intentionally keeps bracketed variety captions, echo captions, punctuation graphics such as `[?????]`, and bracketed ellipsis or silence graphics such as `[...]` when they appear on screen, rather than filtering them out to lower reading speed.
 Generation never uses `[...]` as a placeholder for spoken dialogue.
@@ -483,6 +487,8 @@ Request configuration:
 - Boundary rules:
   - Outside repair regions (10s before to 10s after boundaries), source cues must survive identically.
   - Rewrites, retimes, splits, and merges may reference only cues intersecting a shared repair region.
+  - Repaired, split, merged, and recovered dialogue must stay in natural English, resolve cross-boundary polarity and dropped subjects cleanly, and preserve culturally specific terms without domesticating them.
+  - Splits repeat an existing source speaker prefix on each split cue, same-speaker merges keep one leading prefix, and recovered cues (`sourceIds: []`) stay unlabeled rather than guessing names from voice timbre.
   - Merges must reference contiguous source IDs in script order, but may skip intermediate pure-editorial cues.
   - Recovered cues must have empty lineage (`sourceIds: []`), contain spoken dialogue, have no brackets, and fit inside a repair region.
   - Pure editorial cues must be preserved identically.
@@ -552,7 +558,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - Tool: Google Search + optional URL Context.
    - Output: Plain text with two sections:
      - `PARTICIPANTS AND SPEAKERS`: canonical English public names, aliases, and roles for the people who speak in the video, each entry on its own line starting with the canonical name or stable role followed by a colon.
-       Keep the format `Canonical Name: aliases, role, cited evidence`, with role details after the colon so name extraction keeps bare names.
+       Keep the format `Canonical Name: source-language name/aliases, canonical order/hyphenation, role, cited evidence`, with role and alias details after the colon so name extraction keeps bare names.
        State whether each speaker's role in the video is unique (`1:1`) or shared across multiple participants, and cite the evidence.
        State when the evidence does not establish role uniqueness.
        When a speaker performs in character under an established recurring stage or character persona, use the active persona name as the canonical English speaker name.
@@ -560,7 +566,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
        List any performer legal or real name as an alias.
        Emit entries only for verified named speakers or a single concrete recurring role, such as `Host:`, `Presenter:`, or `Narrator:`.
        Omit catch-all and negative summaries for incidental or unidentified speakers.
-     - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
+     - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling (paired with source-language term) of recurring proper nouns, program or series titles, organization names, product names, named dishes/foods, recurring culturally specific terms, and locations referenced in the source title, context URLs, or grounded coverage of the video and its identified participants.
    - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
    - Grounding verification: The research stream must contain search queries or grounded sources, and every URL Context input must be retrieved successfully.
 2. **Direct YouTube video request:**
@@ -571,6 +577,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    - For participants already attributed by that evidence, output includes timestamped scene-level role continuity.
      Each range states whether one attributed participant holds a role `1:1` or multiple speakers share it.
      The analysis states when continuity is uncertain.
+   - Output also records canonical English spellings and source-language terms for recurring proper nouns, brands, products, named dishes/foods, culturally specific terms, locations, and program, channel, or segment titles visibly shown or explicitly named in the video, with timestamps and evidence.
    - Never identify speakers from appearance or voice alone.
      Leave unintroduced incidental speakers, cameos, and off-camera crew unnamed.
    - Transient server and rate limit errors retry automatically through the SDK `HttpRetryOptions` configured on every client.
@@ -601,7 +608,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
     These runs use the supplied text-refinement model for Pass 0.
 5. Tasks:
    1. Conservative proofreader and minimal patch contract: assumes cues need no change by default and preserves intelligible, grammatical dialogue without stylistic rewriting, synonym replacement, or embellishment.
-   2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
+   2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit script-established pronoun mismatches (including first/second/third-person turn contradictions), and incomprehensible literal idioms, mimetics, or social formulas.
       With audio, correct phonetic mishearings when audio and grounded names or terminology clearly establish the spoken content.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
       An existing single-person role or kinship label, such as `Presenter:`, `Narrator:`, `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Father:`, or `Daughter:`, may become a canonical name under the evidence hierarchy.
@@ -617,8 +624,9 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
       Preserve collective labels such as `Audience:` and `Fans:`.
       Do not name unintroduced incidental speakers or cameos such as `Officer:` and `Passerby:`, or unverified crew such as `Producer:`, `PD:`, `Staff:`, and `Interviewer:`.
       Identity research and video analysis can resolve existing labels only; they never authorize labels on unlabeled dialogue.
-   4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, and location names.
-      Change proper-name romanization only when Pass 0 identity or terminology context establishes the canonical spelling under the evidence hierarchy, or when needed to correct an inconsistency clearly established within the script.
+   4. Terminology consistency: use the grounded terminology context for canonical spelling of proper nouns, series and program titles, organizations, named dishes, culturally specific terms, and location names.
+      Preserve culturally specific foods, customs, and relational terms rather than domesticating or flattening them, while replacing unexplained romaji/romanization on ordinary everyday words (`convenience store` rather than `konbini`) and leaked raw source-script characters.
+      Change proper-name romanization, name order, or hyphenation only when Pass 0 identity or terminology context establishes the canonical styling under the evidence hierarchy, or when needed to correct an inconsistency clearly established within the script.
    5. Mixed-cue and visual integrity: mixed cues containing bracketed on-screen text and spoken dialogue must preserve both parts and never collapse into dialogue-only or graphic-only; editorial cues preserve bracketed fragments.
       Keep bracketed variety reactions, echo captions, punctuation graphics such as `[?????]`, and inline `[...]` markers intact rather than stripping them for reading speed.
    6. Forbids retiming, merging, splitting, and adding cues.

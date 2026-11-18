@@ -169,12 +169,12 @@ TRANSLATION
 7. Translate all spoken dialogue and meaningful on-screen text from the source language into natural English. Never return a source-language transcription instead of an English translation.
 8. Prefer faithful, clear English over punchy paraphrases.
 9. Preserve every meaningful question, answer, joke, reaction, and product detail. Do not summarize or omit meaningful content.
-10. Do not infer missing dialogue or invent facts, product claims, jokes, or cultural explanations.
-11. Preserve established names, brands, foods, products, titles, and recurring terms consistently.
-12. Preserve useful source-language cultural terms when they express a relationship or concept that English cannot express as precisely.
-13. Do not replace understandable English with unexplained romanized source-language terms.
+10. Do not infer missing dialogue or invent facts, product claims, jokes, or cultural explanations. Recover omitted subjects or objects and resolve topic-comment framing into natural English pronouns (I, you, we, he, she, they, it) strictly from who is speaking, who is addressed, and what happens in the clip; avoid subjectless calques or mechanical "As for..." phrasings. When a speaker addresses an on-scene interlocutor directly by name, kinship term, or title instead of a second-person pronoun, render it as direct second-person English ("you", with optional vocative) rather than third-person "he" or "she".
+11. Preserve established names, brands, named dishes, foods, drinks, products, titles, and recurring terms consistently. Never domesticate or Westernize culturally specific foods, drinks, garments, holidays, or customs into Western substitutes or generic labels that erase distinctions (for example, keep established loanwords or standard romanizations such as onigiri, ramen, mentaiko, kimchi, makguksu, naengmyeon, milmyeon, samgyetang, and soju rather than substituting Western foods or flattening distinct items into one generic phrase).
+12. Preserve useful source-language kinship, relational, or cultural terms (such as hyung, unni, oppa, sunbae, senpai) when they express a relationship or concept that English cannot express as precisely. When speakers explicitly define, compare, or pun on source-language words, regional names, or speech levels, weave the romanized source terms naturally into the English line without parenthetical glosses. Never leave raw source-script characters in English subtitles.
+13. For ordinary everyday nouns, venues, and expressions that have clear standard English equivalents (such as "convenience store" rather than "konbini"), use natural English rather than unexplained romanized source-language terms. Never insert ungrounded parenthetical definitions or currency conversions.
 14. Transliterate uncertain proper nouns conservatively instead of inventing a nickname, joke, or English equivalent.
-15. Preserve wordplay naturally in English whenever possible. Do not silently replace a pun with unrelated dialogue.
+15. Preserve wordplay naturally in English whenever possible. Do not silently replace a pun with unrelated dialogue. When a spoken phrase is a homophone between a proper noun, title, or pun and literal slang or profanity, use scene context, speaker self-reference, and on-screen text to disambiguate rather than defaulting to an insult that contradicts the tone. Translate spoken idioms, figurative slang, and mimetic or onomatopoeic adverbs into accurate, natural English manner and meaning. Convey sentence-final particles, clause-final polite softeners, and register through natural English tone rather than attaching mechanical "right?" or "you know?" tags to every line or turning non-contrastive softeners into hanging "but..." clauses, and translate routine social formulas by situational function rather than literal root gloss.
 
 SPEAKER LABELS
 
@@ -184,14 +184,14 @@ SPEAKER LABELS
 19. Leave dialogue unlabeled when neither a name nor a stable role can be distinguished.
 20. Do not use generic numbered labels such as "Speaker 1:".
 21. Use the exact format "Name: Dialogue". Keep one consistent name or role prefix for each attributed speaker throughout the entire clip. Do not switch the same speaker between different role labels such as "Referee:" and "Host:". When a single attributed speaker's turn spans consecutive cues, repeat that speaker's name or role prefix on each cue. Do not switch between repeated labels and unlabeled continuations within the chunk.
-22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line.
+22. When multiple identifiable speakers share a cue, place each attributed turn on a separate line. When two unlabeled speakers share a cue for a rapid under-500-millisecond exchange or backchannel, place each speaker's turn on its own line prefixed with "- " rather than inventing speaker labels.
 23. Do not assign speaker labels to on-screen text.
 
 ON-SCREEN TEXT
 
 24. Include meaningful on-screen editorial text when it contributes information, context, humor, branding, or narrative meaning. Preserve bracketed variety reactions, echo captions, punctuation graphics such as [?????], and bracketed ellipsis or silence graphics such as [...] intact when they appear on screen. Do not drop them to lower reading speed. Never use [...] as a placeholder for spoken dialogue.
 25. Ignore decorative text, logos, persistent watermarks, repeated UI, and text unrelated to understanding the video.
-26. Keep on-screen text distinct from spoken dialogue.
+26. Keep on-screen text distinct from spoken dialogue, and do not attribute silent reaction or inner-thought captions to a speaker when no speech is audible.
 27. Render on-screen text in square brackets, without mechanical prefixes such as "On-screen text:".
 28. When spoken dialogue and meaningful on-screen text occur simultaneously and cannot be sequenced without dropping speech or converting captions into dialogue, use a two-line mixed cue: "[Editorial text]" on the first line and "Speaker: Dialogue" on the second. Preserve bracketed variety reactions, echo captions, punctuation graphics such as [?????], and bracketed ellipsis or silence graphics such as [...] in the editorial line when they appear on screen; never strip them for reading speed. Keep the editorial and dialogue lines separate. Otherwise keep unrelated content separate.
 29. Do not describe visible actions such as "(walks)", "(rings bell)", or "(sprays product)" unless corresponding written editorial text actually appears in the video.
@@ -202,7 +202,7 @@ FORMATTING
 
 32. Use sequential integer IDs starting at 0.
 33. Follow standard subtitle readability rules: no more than 42 characters per line and no more than two lines per caption.
-34. Split long speech into readable, natural phrases without changing meaning.
+34. Use natural English clause order within each cue's audible speech span. Split long speech into readable, natural phrases without changing meaning, breaking cues and lines at grammatical phrase boundaries rather than mid-word, mid-contraction, or stranding a bare article, preposition, or auxiliary, and never emit punctuation-only cues.
 35. Do not use markdown or include explanations outside subtitle captions.
 36. Return only a valid JSON object matching the required schema with a "captions" array.
 """
@@ -374,11 +374,11 @@ Canonical English public names, aliases, and roles for the people who speak in t
 When a speaker performs in character under an established recurring stage or character persona rather than appearing as themselves, use the active persona name as the canonical English speaker name.
 List any performer legal or real name as an alias.
 Begin each entry on its own line with the canonical English public name or the stable role, followed by a colon, then give the aliases, the role, and the cited evidence.
-Keep the format "Canonical Name: aliases, role, cited evidence"; put role details after the colon, not in the name.
+Keep the format "Canonical Name: source-language name/aliases, canonical order/hyphenation, role, cited evidence"; put role and alias details after the colon, not in the name.
 State whether each speaker's role in this video is unique (1:1) or shared across multiple participants, and cite the evidence. If the evidence does not establish this, state that it is uncertain.
 
 {_TERMINOLOGY_RESEARCH_SECTION}:
-Canonical English spelling of the recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or the context URLs.
+Canonical English spelling (paired with source-language term) of the recurring proper nouns, program or series titles, organization names, product names, named dishes/foods, recurring culturally specific terms, and locations referenced in the source title, the context URLs, or grounded coverage of this video and its identified participants.
 Give one canonical spelling per line with the cited source.
 {title_block}{url_block}{youtube_block}REQUIREMENTS
 
@@ -464,8 +464,9 @@ Return concise plain text with:
 - Each attributed participant's name in official English styling and their role.
 - Timestamped speaker-identification observations: when a visible label, title card, or spoken introduction establishes attribution, give the video timestamp and the evidence.
 - Timestamped scene-level role continuity for participants already attributed by visible labels, title cards, or spoken introductions. Give each timestamp range and state whether one attributed participant holds a role 1:1 in that range or multiple speakers share it. State when continuity is uncertain.
+- Canonical English spellings and source-language terms for recurring proper nouns, brands, products, named dishes/foods, culturally specific terms, locations, and program, channel, or segment titles visibly shown or explicitly named in the video, with timestamps and evidence.
 
-These observations may establish speaker identity and canonical proper-name spelling only.
+These observations may establish speaker identity, recurring proper-noun, dish, and cultural-term spelling, title spelling, and canonical proper-name spelling only.
 They must never infer or change dialogue content, meaning, or events.
 Never identify speakers from appearance or voice alone; leave unintroduced incidental speakers, cameos, and off-camera crew unnamed.
 {title_block}Return plain text only, with no markdown formatting.
@@ -507,9 +508,9 @@ def _build_refinement_prompt(
             f"{terminology_context}\n"
             "The terminology context above was researched with grounded web "
             "evidence. It establishes canonical spelling of proper nouns, "
-            "series and program titles, organizations, products, and "
-            "locations only. It must never change dialogue meaning, events, "
-            "or facts.\n"
+            "series and program titles, organizations, products, named dishes, "
+            "culturally specific terms, and locations only. It must never change "
+            "dialogue meaning, events, or facts.\n"
         )
     youtube_block = ""
     if youtube_context:
@@ -519,7 +520,8 @@ def _build_refinement_prompt(
             "The analysis above was produced by a separate pass that watched "
             "the source video content. It ranks below explicit script evidence, "
             "including introductions and title cards, but overrides conflicting "
-            "GROUNDED IDENTITY CONTEXT. It may establish speaker identity "
+            "GROUNDED IDENTITY CONTEXT. It may establish speaker identity, "
+            "recurring proper-noun, dish, cultural-term, and title spelling, "
             "and canonical proper-name spelling only. It must never change "
             "dialogue meaning, events, or facts.\n"
         )
@@ -577,8 +579,8 @@ Change text only for:
 1. Existing speaker labels that have incorrect spelling, casing, or identity established by script evidence or the Pass 0 identity context under the evidence hierarchy above. This includes resolving an existing single-person role or kinship label to the speaker's canonical name only under the unambiguous 1:1 correspondence required by Rule 32. Never add a label to an unlabeled line.
 2. Inconsistent character names, brands, foods, products, program titles, or recurring terms.
 3. Objective grammar, spelling, punctuation, or OCR errors.
-4. Literal translations of source-language idioms, slang, or editorial captions that are incomprehensible in English.
-5. Clear pronoun errors only when the referent and correction are explicitly established in the script. Do not infer pronouns from a person's name, role, or identity research.
+4. Literal translations of source-language idioms, slang, mimetics/onomatopoeia, situational social formulas, or editorial captions that are incomprehensible in English.
+5. Clear pronoun errors only when the referent and correction are explicitly established in the script, including first/second/third-person contradictions across turn-taking (such as referring to an addressed responder in the third person mid-exchange or flipping person within the same speaker's anecdote). Do not infer pronouns from a person's name, role, or identity research.
 6. Clear continuity errors or contradictions that can be resolved confidently from the script.
 
 If a proposed correction is uncertain, subjective, or merely stylistic, leave the line unchanged.
@@ -601,12 +603,12 @@ SEMANTIC AND TEXT PRESERVATION
 
 TERMINOLOGY AND LOCALIZATION
 
-20. Preserve established names, brands, foods, products, program titles, and recurring terminology consistently.
-21. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organization names, and location names.
-22. Change proper-name romanization only when Pass 0 identity or terminology context establishes the canonical spelling under the evidence hierarchy above, or when needed to correct an inconsistency clearly established within the script.
-23. Do not replace understandable English with unexplained romanized source-language terms.
-24. Preserve useful source-language cultural terms when they communicate a relationship or concept that ordinary English does not express as precisely.
-25. Localize source-language idioms and editorial-caption metaphors into understandable English without inventing new meaning.
+20. Preserve established names, brands, named dishes, foods, drinks, products, program titles, and recurring culturally specific terminology consistently without domesticating them into Western substitutes or generic labels that erase distinctions.
+21. Use the grounded terminology context to ensure consistent, canonical spelling of proper nouns, series and program titles, organizations, named dishes, culturally specific terms, and location names.
+22. Change proper-name romanization, name order, or hyphenation only when Pass 0 identity or terminology context establishes the canonical styling under the evidence hierarchy above, or when needed to correct an inconsistency clearly established within the script.
+23. For ordinary everyday nouns and expressions that have clear standard English equivalents (such as "convenience store" rather than "konbini"), use natural English rather than unexplained romanized source-language terms, and fix any leaked raw source-language script characters under Rule 3.
+24. Preserve useful source-language cultural, kinship, and relational terms (such as hyung, unni, oppa, senpai, onigiri, makguksu, naengmyeon, milmyeon, soju) when they communicate a specific food, custom, or relationship that ordinary English does not express as precisely.
+25. Localize source-language idioms, literal mimetic/onomatopoeia calques, situational social formulas, and editorial-caption metaphors into understandable English without inventing new meaning.
 26. Preserve visible footnote markers such as "*".
 27. Preserve meaningful vocalizations when they carry humor or characterization.
 
@@ -1239,12 +1241,12 @@ SCRIPT
 
 REPAIR RULES
 
-1. Fix dialogue that disagrees with what the audio says: add missing spoken dialogue, delete duplicated or hallucinated dialogue, merge split turns, split merged turns, rewrite mistranslations, and retime cues to the audible syllables.
+1. Fix dialogue that disagrees with what the audio says: add missing spoken dialogue, delete duplicated or hallucinated dialogue, merge split turns, split merged turns, rewrite mistranslations, and retime cues to the audible syllables. Ensure all rewritten, split, merged, or recovered dialogue is in natural English (never source-language transcription), resolves cross-boundary clause-final negation, question polarity, and dropped subjects or objects cleanly, and preserves culturally specific terms without domesticating them.
 2. Preserve silent gaps. Start dialogue at the first audible syllable and end it at the last audible syllable. Retiming source cues must not create new timestamp overlaps with other source-lineage cues, including unchanged cues. Existing source overlaps may remain. Recovered dialogue is exempt from this retime restriction.
 3. Keep visual content untouched. The audio cannot establish what appears on screen. Preserve every [bracketed] visual fragment exactly as it appears, attached to its original cue lineage. Pure editorial cues must remain byte-for-byte identical in text and timing.
 4. A mixed cue may change timing when its dialogue is repaired, but every bracketed fragment must be preserved exactly once within that lineage.
 5. Do not add bracketed text to a recovered cue.
-6. Keep speaker labels and their turn structure. Do not guess identities from the audio.
+6. Keep speaker labels and their turn structure. Do not guess identities from the audio. When splitting an already-labeled source cue, repeat its existing speaker prefix on each split cue; when merging cues from the same labeled speaker, keep one leading prefix rather than duplicating it mid-line; and leave newly recovered (empty sourceIds) dialogue cues unlabeled rather than guessing names from voice timbre.
 7. Do not describe sounds, music, or actions unless the script already does.
 8. Every output cue must contain text.
 9. Apply readability guidance only to cues already being modified or recovered. Preserve existing line breaks on retimed dialogue when readable. Wrap rewritten, split, merged, or recovered spoken dialogue to no more than 42 characters per line and two lines per cue; keep mixed cues to two lines total. Never emit patch cues solely to re-wrap unchanged cues. Never alter whitespace or line breaks inside [bracketed] visual fragments.
