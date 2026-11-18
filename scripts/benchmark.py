@@ -183,7 +183,10 @@ def run_chunk_generation(
     started = time.perf_counter()
     cached = all(
         gemini.load_cached_captions(
-            work_dir / f"subtitle_chunk_{chunk['idx']:03d}.json", chunk["duration"]
+            work_dir / f"subtitle_chunk_{chunk['idx']:03d}.json",
+            chunk["duration"],
+            offset_sec=chunk["start"],
+            next_start=chunk.get("next_start"),
         )
         is not None
         for chunk in chunks

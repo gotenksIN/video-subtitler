@@ -83,7 +83,7 @@ def assert_wire_config(request):
 
 
 def test_stitch_clamps_rounded_boundaries_before_editorial_merging(
-    tmp_path, media_files
+    tmp_path, media_files, monkeypatch
 ):
     rows = []
     for index, (start, end) in enumerate(
@@ -123,6 +123,30 @@ def test_stitch_clamps_rounded_boundaries_before_editorial_merging(
     with pytest.raises(ValueError, match="non-positive stitched interval"):
         pipeline.stitch(tmp_path, output)
     assert output.read_bytes() == previous
+
+    client = ScriptedGeminiClient(
+        [
+            StreamCall(
+                "chunk",
+                ['{"captions":[{"id":0,"start":"1.000","end":"1.001","text":"Late"}]}'],
+            ),
+            chunk_call("Host: Regenerated."),
+        ]
+    )
+    use_client(monkeypatch, client)
+    assert not pipeline.process_chunks(
+        "test-key",
+        "https://gemini.invalid/proxy",
+        tmp_path,
+        media.list_chunks(tmp_path),
+        1,
+        "generation-model",
+        "video/mp4",
+        "high",
+    )
+    assert [request.kind for request in client.requests] == ["chunk", "chunk"]
+    pipeline.stitch(tmp_path, output)
+    assert "Host: Regenerated." in [cue.raw_text for cue in io.read_plain_vtt(output)]
 
 
 def test_four_pass_pipeline_overlaps_preflight_media_and_chunks_and_publishes(

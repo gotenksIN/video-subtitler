@@ -377,6 +377,7 @@ Output timestamps always use `HH:MM:SS.mmm` rounded to the nearest millisecond.
 - Rejects duplicate IDs and non-positive intervals (`end <= start` or `start < 0`).
 - Clamps end overruns up to 0.5s beyond chunk duration.
 - Rejects cues that collapse to non-positive intervals after rounding.
+- For chunk generation and cache reuse, also rejects cues that collapse after applying the segment offset, clamping the end to the next segment start, and rounding to milliseconds.
 - Rejects empty text, blank lines, reserved `-->` separators, and unmatched square brackets.
 - Removes one trailing newline and rejects additional trailing blank lines.
 - Rejects more than two lines unless the cue contains more than two complete outer bracketed visual fragments.

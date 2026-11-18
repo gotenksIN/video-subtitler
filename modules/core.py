@@ -169,7 +169,7 @@ def _validate_caption_text(text):
     return text
 
 
-def validate_captions(captions, chunk_duration):
+def validate_captions(captions, chunk_duration, *, offset_sec=0, next_start=None):
     validated = []
 
     seen_ids = set()
@@ -204,10 +204,22 @@ def validate_captions(captions, chunk_duration):
 
         canonical_start = format_time(start)
         canonical_end = format_time(end)
-        if parse_time(canonical_end) <= parse_time(canonical_start):
+        relative_start = parse_time(canonical_start)
+        relative_end = parse_time(canonical_end)
+        if relative_end <= relative_start:
             raise ValueError(
                 f"Caption timing rounds to a non-positive interval for id={cap.id}: "
                 f"{cap.start} --> {cap.end}"
+            )
+
+        abs_start = offset_sec + relative_start
+        abs_end = offset_sec + relative_end
+        if next_start is not None:
+            abs_end = min(abs_end, next_start)
+        if round(abs_end * 1000) <= round(abs_start * 1000):
+            raise ValueError(
+                f"Caption timing rounds to a non-positive stitched interval "
+                f"for id={cap.id}: {cap.start} --> {cap.end}"
             )
 
         text = _validate_caption_text(cap.text)

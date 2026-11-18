@@ -315,6 +315,8 @@ def list_chunks(chunk_dir):
                 or (chunks and start <= chunks[-1]["start"])
             ):
                 return []
+            if chunks:
+                chunks[-1]["next_start"] = start
             chunks.append(
                 {
                     "idx": len(chunks),

@@ -203,13 +203,15 @@ FORMATTING
 """
 
 
-def load_cached_captions(out_json, chunk_duration):
+def load_cached_captions(out_json, chunk_duration, *, offset_sec=0, next_start=None):
     """Load and validate cached captions from a chunk JSON file."""
     if not os.path.exists(out_json):
         return None
     try:
         captions = _CAPTIONS_ADAPTER.validate_json(Path(out_json).read_bytes())
-        return core.validate_captions(captions, chunk_duration)
+        return core.validate_captions(
+            captions, chunk_duration, offset_sec=offset_sec, next_start=next_start
+        )
     except Exception as e:  # noqa: BLE001 - Invalid cache data must be regenerated.
         io.log(f"Ignoring invalid cached output {out_json}: {e}")
         os.remove(out_json)
@@ -231,10 +233,14 @@ def process_chunk(
     chunk_idx = chunk["idx"]
     chunk_name = chunk["name"]
     chunk_duration = chunk["duration"]
+    offset_sec = chunk["start"]
+    next_start = chunk.get("next_start")
     out_json = os.path.join(chunk_dir, f"subtitle_chunk_{chunk_idx:03d}.json")
     chunk_path = os.path.join(chunk_dir, chunk_name)
 
-    cached = load_cached_captions(out_json, chunk_duration)
+    cached = load_cached_captions(
+        out_json, chunk_duration, offset_sec=offset_sec, next_start=next_start
+    )
     if cached is not None:
         io.log(f"Skipping {chunk_name} - already processed.")
         return True
@@ -270,7 +276,10 @@ def process_chunk(
                         full_json_text
                     )
                     validated = core.validate_captions(
-                        parsed_response.captions, chunk_duration
+                        parsed_response.captions,
+                        chunk_duration,
+                        offset_sec=offset_sec,
+                        next_start=next_start,
                     )
                 except ValueError as error:
                     if attempt == _STREAM_REQUEST_ATTEMPTS - 1:

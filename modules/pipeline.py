@@ -3,7 +3,6 @@
 import concurrent.futures
 import fcntl
 import hashlib
-import itertools
 import json
 import os
 import shutil
@@ -175,9 +174,6 @@ def stitch(chunk_dir, output_vtt):
     chunks = media.list_chunks(chunk_dir)
     boundary_starts = [chunk["start"] for chunk in chunks[1:]]
     chunk_by_index = {chunk["idx"]: chunk for chunk in chunks}
-    next_start_by_index = {
-        left["idx"]: right["start"] for left, right in itertools.pairwise(chunks)
-    }
 
     json_files = sorted(
         [
@@ -206,6 +202,7 @@ def stitch(chunk_dir, output_vtt):
         chunk_idx = int(json_name.removeprefix("subtitle_chunk_").removesuffix(".json"))
         chunk = chunk_by_index[chunk_idx]
         offset_sec = chunk["start"]
+        next_start = chunk.get("next_start")
         captions = gemini.load_cached_captions(
             os.path.join(chunk_dir, json_name), chunk["duration"]
         )
@@ -215,8 +212,8 @@ def stitch(chunk_dir, output_vtt):
         for cap in captions:
             abs_start = offset_sec + core.parse_time(cap["start"])
             abs_end = offset_sec + core.parse_time(cap["end"])
-            if chunk_idx in next_start_by_index:
-                abs_end = min(abs_end, next_start_by_index[chunk_idx])
+            if next_start is not None:
+                abs_end = min(abs_end, next_start)
             abs_start = core.parse_time(core.format_time(abs_start))
             abs_end = core.parse_time(core.format_time(abs_end))
             if abs_end <= abs_start:
