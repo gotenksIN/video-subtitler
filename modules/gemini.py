@@ -134,15 +134,20 @@ def _build_generation_prompt(chunk_duration, source_title=None, candidate_names=
             "introduction) establishes attribution in this clip. Never assign candidate "
             "identities from appearance alone. When candidate-name attribution is "
             "uncertain, use a clear functional or relational role per Rule 18, "
-            "such as Coach:, Chef:, Judge:, Prosecutor:, Referee:, Interviewer:, "
-            "Father:, Daughter:, Shop Owner:, or Producer:. Prefer a concrete "
-            "single-person role over Cast Member:, Participant:, or Person: when "
-            "the speaker's role is clear. Keep consistent role or kinship prefixes "
-            "across turns when speakers address each other by role; do not fall "
-            "back to unlabeled dialogue. Reserve Host: for an actual "
+            "such as Presenter:, Narrator:, Coach:, Chef:, Judge:, Prosecutor:, "
+            "Referee:, Interviewer:, Father:, Daughter:, Shop Owner:, or Producer:. "
+            "Prefer a concrete single-person role over Cast Member:, Participant:, "
+            "or Person: when the speaker's role is clear. Keep consistent role or "
+            "kinship prefixes across turns when speakers address each other by role; "
+            "do not fall back to unlabeled dialogue. Reserve Host: for an actual "
             "program host or studio MC, not an instructor, specialist, or activity "
-            "leader. Leave dialogue unlabeled only when neither a "
-            "candidate name nor a clear descriptive role can be distinguished.\n\n"
+            "leader. Use Presenter: when one sole primary camera-facing speaker "
+            "leads or addresses the audience directly without in-clip name "
+            "attribution, and Narrator: for off-screen voiceover narration; never "
+            "apply Presenter: or Narrator: to an instructor, specialist, clerk, "
+            "interviewee, or off-camera crew member. Leave dialogue unlabeled only "
+            "when neither a candidate name nor a clear descriptive role can be "
+            "distinguished.\n\n"
         )
     return f"""You are an expert subtitle generator and translator.
 
@@ -175,7 +180,7 @@ SPEAKER LABELS
 
 16. Use a person's name only when the clip itself establishes attribution: a visible name label or title card, a spoken introduction, or other direct in-clip evidence.
 17. Never identify a speaker from appearance alone.
-18. When a name cannot be established, prefer a specific, stable functional or relational role that is clear from the clip, such as "Coach:", "Chef:", "Judge:", "Prosecutor:", "Referee:", "Interviewer:", "Father:", "Daughter:", "Shop Owner:", or "Producer:". Prefer a concrete single-person role over vague umbrella labels such as "Cast Member:", "Participant:", or "Person:" when the speaker's role is clear. Reserve "Host:" for an actual program host or studio MC, not an instructor, specialist, or activity leader. Keep consistent role or kinship prefixes across turns when speakers address each other by role rather than falling back to unlabeled dialogue.
+18. When a name cannot be established, prefer a specific, stable functional or relational role that is clear from the clip, such as "Presenter:", "Narrator:", "Coach:", "Chef:", "Judge:", "Prosecutor:", "Referee:", "Interviewer:", "Father:", "Daughter:", "Shop Owner:", or "Producer:". Prefer a concrete single-person role over vague umbrella labels such as "Cast Member:", "Participant:", or "Person:" when the speaker's role is clear. Reserve "Host:" for an actual program host or studio MC, not an instructor, specialist, or activity leader. Use "Presenter:" when one sole primary camera-facing speaker leads or addresses the audience directly without in-clip name attribution, and "Narrator:" for off-screen voiceover narration; never apply "Presenter:" or "Narrator:" to an instructor, specialist, clerk, interviewee, or off-camera crew member. Keep consistent role or kinship prefixes across turns when speakers address each other by role rather than falling back to unlabeled dialogue.
 19. Leave dialogue unlabeled when neither a name nor a stable role can be distinguished.
 20. Do not use generic numbered labels such as "Speaker 1:".
 21. Use the exact format "Name: Dialogue". Keep one consistent name or role prefix for each attributed speaker throughout the entire clip. Do not switch the same speaker between different role labels such as "Referee:" and "Host:". When a single attributed speaker's turn spans consecutive cues, repeat that speaker's name or role prefix on each cue. Do not switch between repeated labels and unlabeled continuations within the chunk.
@@ -381,7 +386,7 @@ Give one canonical spelling per line with the cited source.
 2. Cite the source for each attribution so the evidence can be reviewed.
 3. Rank evidence: reputable grounded web evidence first, the source title last.
 4. Grounded research establishes canonical spelling and verified entities only. It must never infer, invent, or alter spoken dialogue content, meaning, or events.
-5. In the identity section, emit colon-prefixed entries only for verified named speakers or a single concrete recurring role such as Host when that role is clear. Omit catch-all or negative summary lines for incidental or unidentified speakers; do not emit entries such as "Other incidental speakers:" or "Unknown:".
+5. In the identity section, emit colon-prefixed entries only for verified named speakers or a single concrete recurring role such as Host, Presenter, or Narrator when that role is clear. Omit catch-all or negative summary lines for incidental or unidentified speakers; do not emit entries such as "Other incidental speakers:" or "Unknown:".
 6. Return plain text only, with no markdown formatting.
 """
 
@@ -611,7 +616,7 @@ SPEAKER LABELS
 29. An unlabeled line remains unlabeled, even when adjacent lines, timestamps, speaker turns, the source title, identity research, or video analysis suggest a possible speaker.
 30. Do not propagate a speaker label from one cue to another, even when you rename a role label such as "Host:" on one cue and the next cue continues that same speaker's sentence or turn without a label.
 31. Do not assign a researched participant to an unlabeled cue. Identity research and video analysis may validate or resolve existing labels only under Rule 32, never create labels or serve as an attribution map for unlabeled dialogue.
-32. Correct an existing label only when its spelling, casing, or identity is clearly established under the evidence hierarchy above. Resolve an existing single-person role or kinship label (Coach:, Chef:, Judge:, Prosecutor:, Father:, Daughter:) to its canonical named speaker when DIRECT VIDEO IDENTITY ANALYSIS, unambiguous GROUNDED IDENTITY CONTEXT, or script continuity establishes an unambiguous 1:1 correspondence globally or within that timestamped scene. Unify isolated chunk-level roles (Host:, Referee:), alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same 1:1 correspondence; a chunk boundary alone does not justify retaining an inconsistent label. Never resolve a role label such as Host: to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange. When the named host is already active in that scene, require script and turn continuity to resolve Host:, not Pass 0's Host title alone. When an isolated chunk misapplies a generic fallback such as Host: to another speaker even though the program's actual host is already attributed by name in that scene, unify it only if cross-boundary turn continuity and neighboring chunks unambiguously establish that same named speaker rather than an off-camera Producer: or Staff:. Never replace shared or ambiguous multi-person roles (Guest: with multiple guests, Cast Member:, Panelist:, Student:, Member:), collective labels (Audience:, Fans:), unintroduced incidental speakers or cameos (Officer:, Passerby:), or unverified crew (Producer:, PD:, Staff:, Interviewer:) with personal names. Keep unlabeled lines unlabeled.
+32. Correct an existing label only when its spelling, casing, or identity is clearly established under the evidence hierarchy above. Resolve an existing single-person role or kinship label (Presenter:, Narrator:, Coach:, Chef:, Judge:, Prosecutor:, Father:, Daughter:) to its canonical named speaker when DIRECT VIDEO IDENTITY ANALYSIS, unambiguous GROUNDED IDENTITY CONTEXT, or script continuity establishes an unambiguous 1:1 correspondence globally or within that timestamped scene. Unify isolated chunk-level roles (Host:, Presenter:, Narrator:, Referee:), alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same 1:1 correspondence; a chunk boundary alone does not justify retaining an inconsistent label. Never resolve a role label such as Host:, Presenter:, or Narrator: to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange. When the named primary speaker or host is already active in that scene, require script and turn continuity to resolve Host:, Presenter:, or Narrator:, not Pass 0's title alone. When an isolated chunk misapplies a generic fallback such as Host:, Presenter:, or Narrator: to another speaker even though the program's actual host or primary speaker is already attributed by name in that scene, unify it only if cross-boundary turn continuity and neighboring chunks unambiguously establish that same named speaker rather than an off-camera Producer: or Staff:. Never replace shared or ambiguous multi-person roles (Guest: with multiple guests, Cast Member:, Panelist:, Student:, Member:), collective labels (Audience:, Fans:), unintroduced incidental speakers or cameos (Officer:, Passerby:), or unverified crew (Producer:, PD:, Staff:, Interviewer:) with personal names. Keep unlabeled lines unlabeled.
 33. Never remove an existing speaker label from a retained cue, even when that cue continues a sentence mid-phrase from the preceding cue with the same speaker label repeated. Correct existing labels only as authorized by Rules 1 and 32. Preserve label placement and turn boundaries. Preserve line breaks except when an authorized label or text correction pushes a single-turn dialogue line past 42 characters: re-wrap that speaker's dialogue across at most two lines of no more than 42 characters each without changing words. Also apply Rule 13's required re-wrap exception to every source cue with more than two lines, preserving [bracketed] fragments and separate speaker turns. Do not add or remove labels for formatting convenience.
 34. Keep spoken dialogue text faithful to the spoken audio. Never alter spoken names, nicknames, titles, or address terms inside dialogue text merely to match a speaker label prefix.
 35. Never add speaker labels to on-screen text.

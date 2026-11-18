@@ -245,9 +245,10 @@ Each chunk prompt carries optional context blocks before the timing rules.
 The roster permits a candidate's canonical English name only when direct in-clip evidence, such as a visible name banner, lower-third, title card, or spoken introduction, establishes attribution in the clip.
 It never assigns identities from appearance alone.
 When candidate-name attribution is uncertain, generation prefers a specific, stable role that reflects the speaker's function in the scene.
-Examples include `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Referee:`, `Interviewer:`, `Father:`, `Daughter:`, `Shop Owner:`, and `Producer:`.
+Examples include `Presenter:`, `Narrator:`, `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Referee:`, `Interviewer:`, `Father:`, `Daughter:`, `Shop Owner:`, and `Producer:`.
 When an individual speaker's role is clear, generation prefers a concrete single-person role over vague umbrella labels such as `Cast Member:`, `Participant:`, and `Person:`.
 Generation reserves `Host:` for an actual program host or studio MC, not an instructor, specialist, or activity leader.
+Generation uses `Presenter:` when one sole primary camera-facing speaker leads or addresses the audience directly without in-clip name attribution, and `Narrator:` for off-screen voiceover narration, excluding instructors, specialists, clerks, interviewees, and off-camera crew.
 It keeps one consistent name or role prefix for each attributed speaker throughout the entire clip.
 It does not switch the same speaker between role labels such as `Referee:` and `Host:`.
 When speakers address each other by role, generation keeps consistent role or kinship prefixes across turns instead of reverting to unlabeled dialogue.
@@ -557,7 +558,7 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
        When a speaker performs in character under an established recurring stage or character persona, use the active persona name as the canonical English speaker name.
        This rule applies when the speaker does not appear as themselves.
        List any performer legal or real name as an alias.
-       Emit entries only for verified named speakers or a single concrete recurring role, such as `Host:`.
+       Emit entries only for verified named speakers or a single concrete recurring role, such as `Host:`, `Presenter:`, or `Narrator:`.
        Omit catch-all and negative summaries for incidental or unidentified speakers.
      - `TOPIC TERMINOLOGY AND PROPER NOUNS`: canonical English spelling of recurring proper nouns, program or series titles, organization names, product names, and locations referenced in the source title or context URLs.
    - Grounded research establishes canonical spelling and verified entities only; it never infers, invents, or alters spoken dialogue content, meaning, or events.
@@ -603,13 +604,13 @@ The pass uses the generation model (`config.model`) with thinking level `high`.
    2. Objective corrections only: typos, grammar, broken OCR, inconsistent character names and proper nouns, explicit pronoun mismatches, and incomprehensible literal idioms.
       With audio, correct phonetic mishearings when audio and grounded names or terminology clearly establish the spoken content.
    3. Speaker label rules: never adds speaker labels to unlabeled lines; corrects only the spelling, casing, or established identity of existing labels.
-      An existing single-person role or kinship label, such as `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Father:`, or `Daughter:`, may become a canonical name under the evidence hierarchy.
+      An existing single-person role or kinship label, such as `Presenter:`, `Narrator:`, `Coach:`, `Chef:`, `Judge:`, `Prosecutor:`, `Father:`, or `Daughter:`, may become a canonical name under the evidence hierarchy.
       Direct Video Identity Analysis, unambiguous Grounded Identity Context, or script continuity must establish an unambiguous `1:1` correspondence globally or within that timestamped scene.
       Unify isolated chunk-level roles, alternate titles, and abbreviations when neighboring chunks, the broader script, or that Pass 0 evidence establish the same `1:1` correspondence.
       A chunk boundary alone does not justify retaining an inconsistent label.
-      Never resolve a role label such as `Host:` to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange.
-      When the named host is already active in that scene, require script and turn continuity to resolve `Host:`, not Pass 0's `Host` title alone.
-      An isolated chunk can misapply a generic fallback such as `Host:` to another speaker while the script already names the actual program host in that scene.
+      Never resolve a role label such as `Host:`, `Presenter:`, or `Narrator:` to a participant who already appears under their canonical name as a distinct speaker or interlocutor in the same scene or exchange.
+      When the named primary speaker or host is already active in that scene, require script and turn continuity to resolve `Host:`, `Presenter:`, or `Narrator:`, not Pass 0's title alone.
+      An isolated chunk can misapply a generic fallback such as `Host:`, `Presenter:`, or `Narrator:` to another speaker while the script already names the actual program host or primary speaker in that scene.
       Unify that fallback only when cross-boundary turn continuity and neighboring chunks unambiguously establish the same named speaker, not an off-camera `Producer:` or `Staff:`.
       Shared or ambiguous multi-person roles must not become personal names.
       Examples include `Guest:` with multiple guests, `Cast Member:`, `Panelist:`, `Student:`, and `Member:`.
