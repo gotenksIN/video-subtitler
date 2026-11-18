@@ -231,8 +231,9 @@ ffmpeg -y -i <video_file> -map 0:v:0 -map 0:a? -sn -c copy \
 
 Stream copy cuts at keyframes.
 `segments.csv` is the source of truth for chunk start and end times.
-Each row contains `chunk_NNN.<ext>,start,end`.
-When any nonblank row is malformed or has invalid timestamps, the split is regenerated.
+Each nonblank row has exactly three fields: `chunk_NNN.<ext>,start,end`.
+Chunk filenames must follow index order starting at `chunk_000`.
+The host regenerates the split if it cannot read the index as UTF-8 or if any nonblank row is malformed or has invalid timestamps.
 Blank rows do not consume chunk indices, and chunk starts must increase strictly.
 A reusable index must match stored `chunk_NNN` files exactly.
 

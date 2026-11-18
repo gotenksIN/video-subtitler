@@ -283,48 +283,44 @@ def split_video(video_file, chunk_dir, chunk_dur_sec, manifest):
 
 def list_chunks(chunk_dir):
     """Read segments.csv and return validated chunk metadata list."""
-    csv_path = os.path.join(chunk_dir, "segments.csv")
-    if not os.path.exists(csv_path):
+    try:
+        rows = Path(chunk_dir, "segments.csv").read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError:
         return []
 
     chunks = []
-    seen_names = set()
-    with open(csv_path, "r", encoding="utf-8") as f:
-        for line in f:
-            row = line.strip()
-            if not row:
-                continue
-            parts = row.split(",")
-            name = parts[0]
-            if (
-                len(parts) < 3
-                or not re.fullmatch(r"chunk_\d+\.(mp4|webm)", name)
-                or name in seen_names
-            ):
-                return []
-            try:
-                start = float(parts[1])
-                end = float(parts[2])
-            except ValueError:
-                return []
-            if (
-                not math.isfinite(start)
-                or not math.isfinite(end)
-                or start < 0
-                or end <= start
-                or (chunks and start <= chunks[-1]["start"])
-            ):
-                return []
-            if chunks:
-                chunks[-1]["next_start"] = start
-            chunks.append(
-                {
-                    "idx": len(chunks),
-                    "name": name,
-                    "start": start,
-                    "end": end,
-                    "duration": end - start,
-                }
-            )
-            seen_names.add(name)
+    for line in rows.split("\n"):
+        row = line.strip()
+        if not row:
+            continue
+        parts = row.split(",")
+        name = parts[0]
+        if len(parts) != 3 or not re.fullmatch(
+            rf"chunk_{len(chunks):03d}\.(mp4|webm)", name
+        ):
+            return []
+        try:
+            start = float(parts[1])
+            end = float(parts[2])
+        except ValueError:
+            return []
+        if (
+            not math.isfinite(start)
+            or not math.isfinite(end)
+            or start < 0
+            or end <= start
+            or (chunks and start <= chunks[-1]["start"])
+        ):
+            return []
+        if chunks:
+            chunks[-1]["next_start"] = start
+        chunks.append(
+            {
+                "idx": len(chunks),
+                "name": name,
+                "start": start,
+                "end": end,
+                "duration": end - start,
+            }
+        )
     return chunks

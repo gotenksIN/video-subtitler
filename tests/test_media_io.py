@@ -105,22 +105,31 @@ def test_complete_opus_audio_is_reused_and_corruption_is_regenerated(
     assert not Path(f"{path}.tmp").exists()
 
 
-@pytest.mark.parametrize(
-    "damage", ["empty-chunk", "malformed-index", "truncated-index"]
-)
+@pytest.mark.parametrize("damage", ["empty-chunk", "damaged-index"])
 def test_split_cache_damage_regenerates_real_media(media_files, tmp_path, damage):
     source = str(media_files["h264"])
     manifest = {"chunk_ext": ".mp4"}
     media.split_video(source, tmp_path, 1, manifest)
     chunks = media.list_chunks(tmp_path)
+    index = tmp_path / "segments.csv"
+    original = index.read_bytes()
     if damage == "empty-chunk":
         (tmp_path / chunks[0]["name"]).write_bytes(b"")
+        media.split_video(source, tmp_path, 1, manifest)
     else:
-        (tmp_path / "segments.csv").write_text(
-            "broken\n" if damage == "malformed-index" else f"{chunks[0]['name']},0,1\n",
-            encoding="ascii",
-        )
-    media.split_video(source, tmp_path, 1, manifest)
+        first, second = original.splitlines()
+        first_name, first_times = first.split(b",", 1)
+        second_name, second_times = second.split(b",", 1)
+        for damaged in (
+            b"broken\n",
+            first + b"\n",
+            first + b",unexpected\n" + second + b"\n",
+            b"%s,%s\n%s,%s\n" % (second_name, first_times, first_name, second_times),
+            original + b"\xff",
+        ):
+            index.write_bytes(damaged)
+            media.split_video(source, tmp_path, 1, manifest)
+            assert index.read_bytes() == original
     rebuilt = media.list_chunks(tmp_path)
     assert len(rebuilt) == 2
     for chunk in rebuilt:
