@@ -520,7 +520,9 @@ Only a validated response reaches the cache or output file.
    Dialogue overruns greater than 0.5 seconds fail validation.
    Visual cues past the source-video end fail validation; recovered and changed cues still obey the audio end with the existing 0.5-second clamp.
    Cached patches are revalidated with the supplied source-video duration without changing cache identity or contract version.
-4. Host publishes through `io.atomic_save_vtt()`, which reads back the temporary file and verifies cue equality before `os.replace()`.
+4. Host caches the validated response before publishing through `io.atomic_save_vtt()`.
+   Publication reads back the temporary VTT and verifies cue equality before `os.replace()`.
+   A VTT validation failure discards the cache, but a filesystem publication error keeps it for retry.
 
 ## Global text refinement
 

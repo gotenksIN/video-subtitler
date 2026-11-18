@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -668,7 +669,28 @@ def test_text_failure_retains_preflight_chunk_and_audio_caches_for_resume(
     config, monkeypatch
 ):
     config.output_path.write_text("previous", encoding="ascii")
-    scenario = calls(text=False) + [
+    real_replace = os.replace
+
+    def fail_audio_publication(source, target):
+        if Path(target).name == "audio_refined.vtt":
+            raise OSError("audio VTT publication failed")
+        return real_replace(source, target)
+
+    with monkeypatch.context() as publication:
+        publication.setattr(os, "replace", fail_audio_publication)
+        client = ScriptedGeminiClient(calls(text=False))
+        use_client(publication, client)
+        with pytest.raises(OSError, match="audio VTT publication failed"):
+            pipeline.run_generation(config)
+        assert not client.pending
+
+    work = workdirs()[0]
+    assert (work / "audio_refinement.json").is_file()
+    assert (work / "audio_refinement.meta.json").is_file()
+    assert not (work / "audio_refined.vtt").exists()
+    assert config.output_path.read_text() == "previous"
+
+    scenario = [
         StreamCall(
             "text", [stream_chunk('{"changes":[]}', finish_reason="MAX_TOKENS")]
         ),
@@ -677,7 +699,7 @@ def test_text_failure_retains_preflight_chunk_and_audio_caches_for_resume(
     use_client(monkeypatch, client)
     with pytest.raises(RuntimeError, match="MAX_TOKENS"):
         pipeline.run_generation(config)
-    work = workdirs()[0]
+    assert [request.kind for request in client.requests] == ["text"]
     assert (work / "audio_refinement.json").is_file()
     assert (work / "preflight_context.json").is_file()
     assert config.output_path.read_text() == "previous"
