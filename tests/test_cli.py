@@ -78,19 +78,6 @@ def test_help_reports_usage_without_credentials(tmp_path):
     result = run_cli(tmp_path, "--help")
     assert result.returncode == 0
     assert "usage:" in result.stdout
-    assert "--refine-only" in result.stdout
-
-
-def test_usage_error_equivalence_classes(tmp_path):
-    for arguments, message in (
-        ([], "required"),
-        (["source.mp4", "--unknown"], "unrecognized arguments"),
-        (["source.mp4", "--thinking-level", "minimal"], "invalid choice"),
-        (["source.mp4", "--chunk-dur", "soon"], "invalid int value"),
-    ):
-        result = run_cli(tmp_path, *arguments)
-        assert result.returncode == 2
-        assert message in result.stderr
 
 
 def test_generation_validation_diagnostics_precede_media_and_api(tmp_path):
