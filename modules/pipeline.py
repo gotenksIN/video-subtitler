@@ -263,7 +263,7 @@ def validate_generation_config(
         raise ValueError("--workers must be greater than 0")
 
     if config.chunk_thinking_level not in gemini.THINKING_LEVELS:
-        raise ValueError("--thinking-level must be low, medium, high, or xhigh")
+        raise ValueError("--thinking-level must be low, medium, or high")
 
     if not config.video_path.exists():
         raise RuntimeError(f"Video file not found: {config.video_path}")

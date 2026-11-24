@@ -83,9 +83,7 @@ def main():
         "--thinking-level",
         choices=gemini.THINKING_LEVELS,
         default=None,
-        help=(
-            "Gemini thinking level for chunk video requests (low, medium, high, xhigh)."
-        ),
+        help=("Gemini thinking level for chunk video requests (low, medium, high)."),
     )
     parser.add_argument(
         "--context-url",

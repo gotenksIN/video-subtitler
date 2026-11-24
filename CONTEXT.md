@@ -18,8 +18,8 @@ The codebase keeps an acyclic module layout: `modules/core.py` and `modules/io.p
 
 ### Models, thinking levels, and Gemini API
 
-- **Default `gemini-4-hydrogen` with `high` thinking instead of `xhigh`:** Chunk generation accepts `--thinking-level xhigh` as an explicit opt-in on `gemini-4-hydrogen`.
-  Default chunk generation and fixed Passes 0, 2, and 3 stay on `high` because `xhigh` is substantially more expensive.
+- **Default `gemini-4-hydrogen` with `high` thinking (no `xhigh`):** Chunk generation accepts `--thinking-level` values `low`, `medium`, and `high` (default `high`), while Passes 0, 2, and 3 always use `high`.
+  `xhigh` support is omitted because it is too token-heavy.
 - **Static video over `MediaProcessing.AGENTIC` for whole-timeline passes:** Pass 0 YouTube analysis and Pass 1 chunk generation use static video input.
   In cold-cache A/B benchmarking on `gemini-4-hydrogen` (commit `618d123`), agentic Pass 0 produces 2.8x latency with 10.9x more thought and output tokens for only 2.5% fewer total tokens.
 - **`generateContent` over Interactions API:** The pipeline uses `client.models.generate_content_stream` with automatic function calling disabled through `_build_content_config()`.

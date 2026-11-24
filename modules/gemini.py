@@ -17,7 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 from modules import core, io, media
 
 _INLINE_VIDEO_WARNING_BYTES = 50 * 1024 * 1024
-THINKING_LEVELS = ("low", "medium", "high", "xhigh")
+THINKING_LEVELS = ("low", "medium", "high")
 DEFAULT_CHUNK_MODEL = "gemini-4-hydrogen"
 DEFAULT_REFINE_MODEL = "gemini-4-hydrogen"
 DEFAULT_CHUNK_THINKING_LEVEL = "high"

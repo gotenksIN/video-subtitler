@@ -181,8 +181,7 @@ Single-chunk runs follow the audio-disabled rows regardless of `--disable-audio-
 - `--refine-only`: Skip video processing and run global text refinement on an input WebVTT file.
 - `--chunk-dur`: Video chunk duration in seconds (default: `60`).
 - `--workers`: Maximum concurrent API workers (default: `7`).
-- `--thinking-level`: Gemini thinking level for chunk video requests: `low`, `medium`, `high`, or `xhigh` (default: `high`).
-  `xhigh` applies to `gemini-4-hydrogen`.
+- `--thinking-level`: Gemini thinking level for chunk video requests: `low`, `medium`, or `high` (default: `high`).
   Audio and text refinement passes always use `high`.
 - `--api-key`: Override `GEMINI_API_KEY` from `.env` or the environment.
 - `--base-url`: Override `GEMINI_API_BASE` for a custom Gemini-compatible proxy.
