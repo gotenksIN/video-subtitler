@@ -212,9 +212,9 @@ Single-chunk runs follow the audio-disabled rows regardless of `--disable-audio-
 ## Development
 
 Production modules live under `modules/`, orchestrated by `modules/pipeline.py` and dispatched by `gemini_subs.py`.
-`CONTEXT.md` is the authoritative architectural and domain specification.
-`AGENTS.md` defines agent workflow and coding instructions, and `tests/README.md` documents the test contract matrix.
-Tests under `tests/` cover end-to-end pipeline flows and capability contracts (`tests/test_e2e_pipeline.py`, `tests/test_cli.py`, `tests/test_media_io.py`, `tests/test_audio_patch.py`, and `tests/test_text_contracts.py`).
+`CONTEXT.md` documents the project's architectural choices and design decisions.
+`AGENTS.md` defines project-specific agent workflow and coding instructions, and `tests/README.md` documents the test contract matrix.
+Tests under `tests/` cover end-to-end pipeline flows and capability contracts.
 
 Run code quality checks and tests:
 

@@ -37,9 +37,9 @@ Keep the suite compact (45 to 70 collected items) so `uv run pytest` finishes qu
 4. **Equivalence classes over item proliferation:** Fold related valid or invalid inputs into table assertions by equivalence class instead of creating separate pytest items for each extension, URL variant, `argparse` error, or dictionary key.
    Extend an existing scenario instead of adding single-assertion micro-tests.
 
-## Review-only specifications
+## Review-only details
 
-The following details remain specified in `CONTEXT.md` or `AGENTS.md` and are not frozen by automated tests:
+The following details are intentionally not frozen by automated tests:
 
 - Prompt prose and required prompt instructions.
 - Manifest JSON representation and SHA-256 truncation details beyond observable work-directory isolation.

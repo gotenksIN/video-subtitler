@@ -2,10 +2,9 @@
 
 ## Domain documentation
 
-`CONTEXT.md` is the authoritative technical and architectural specification for this repository.
-It describes the pipeline, schemas, authority rules, caching, and domain model from first principles.
+`CONTEXT.md` documents the project's architectural choices, domain rules, and design decisions.
 Read `CONTEXT.md` before changing code, tests, scripts, or documentation.
-Always keep `CONTEXT.md` up-to-date whenever architecture, schemas, pipeline flow, or domain concepts change.
+Keep `CONTEXT.md` up-to-date whenever architectural choices, domain rules, or design decisions change.
 Use terms defined in `CONTEXT.md` rather than introducing synonyms.
 
 ## Development rules
@@ -34,13 +33,8 @@ Keep the five modules in `modules/` on an acyclic dependency graph:
 
 ## Testing principles
 
+`tests/README.md` defines the test file layout, automated contract matrix, and anti-bloat boundaries.
 Keep the test suite small, fast, and pipeline-oriented (target 45 to 70 collected items across `tests/`).
-Organize tests by capability rather than mirroring `modules/` one-for-one:
-- `tests/test_e2e_pipeline.py` covers `pipeline.run_generation` and `scripts/benchmark.py` end-to-end across Passes 0 through 3.
-- `tests/test_cli.py` covers `gemini_subs.py` subprocess dispatch, environment precedence, diagnostics, and `--refine-only`.
-- `tests/test_media_io.py` covers FFmpeg probing, splitting, audio extraction, cache recovery, and atomic JSON/VTT I/O.
-- `tests/test_audio_patch.py` covers combinatorial `sparse-patch-v1` authority, lineage, visual preservation, and duration clamping rules.
-- `tests/test_text_contracts.py` covers Pass 3 structural-edit guards, speaker-label casing, caption validation, timestamps, source titles, and context URLs.
 
 Default to end-to-end pipeline scenarios using tiny session-scoped real FFmpeg fixtures and `ScriptedGeminiClient` wrapping real `google.genai.Client` instances with `httpx2.MockTransport`.
 Never replace FFmpeg with fake command runners, never bypass `google.genai.Client` with a hand-rolled fake client, and never monkeypatch internal project functions (`media.*`, `gemini.*` stages, or `pipeline.*` helpers) to isolate pipeline stages.
